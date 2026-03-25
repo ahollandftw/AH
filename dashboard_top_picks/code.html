@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>AnalyticHustle | MLB Home Run Projections</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Lexend:wght@400;700;900&amp;family=Inter:wght@400;600;800&amp;family=Space+Grotesk:wght@400;500;700&amp;family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              "background": "#041329",
+              "on-primary": "#003907",
+              "error": "#ffb4ab",
+              "secondary-fixed-dim": "#adc8f5",
+              "tertiary-fixed": "#72ff70",
+              "on-tertiary-fixed-variant": "#00530e",
+              "on-secondary-fixed-variant": "#2d486d",
+              "inverse-on-surface": "#233148",
+              "on-secondary": "#133155",
+              "tertiary-fixed-dim": "#00e639",
+              "surface-bright": "#2c3951",
+              "on-tertiary": "#003907",
+              "surface-container-low": "#0d1c32",
+              "surface-tint": "#00e639",
+              "on-tertiary-fixed": "#002203",
+              "on-surface-variant": "#c5c6cd",
+              "tertiary-container": "#001f02",
+              "surface-container-highest": "#27354c",
+              "primary": "#00e639",
+              "secondary": "#adc8f5",
+              "surface": "#041329",
+              "outline-variant": "#44474d",
+              "on-secondary-container": "#9fbae6",
+              "on-primary-fixed": "#002203",
+              "on-primary-fixed-variant": "#00530e",
+              "inverse-primary": "#006e16",
+              "primary-container": "#001f02",
+              "outline": "#8f9097",
+              "on-error": "#690005",
+              "tertiary": "#00e639",
+              "on-secondary-fixed": "#001c3b",
+              "secondary-container": "#2f4a70",
+              "surface-variant": "#27354c",
+              "surface-dim": "#041329",
+              "on-surface": "#d6e3ff",
+              "surface-container-lowest": "#010e24",
+              "surface-container": "#112036",
+              "surface-container-high": "#1c2a41",
+              "on-error-container": "#ffdad6",
+              "on-primary-container": "#009722",
+              "on-tertiary-container": "#009722",
+              "error-container": "#93000a",
+              "inverse-surface": "#d6e3ff",
+              "primary-fixed": "#72ff70",
+              "secondary-fixed": "#d5e3ff",
+              "primary-fixed-dim": "#00e639",
+              "on-background": "#d6e3ff"
+            },
+            fontFamily: {
+              "headline": ["Lexend"],
+              "body": ["Inter"],
+              "label": ["Space Grotesk"]
+            },
+            borderRadius: {"DEFAULT": "0.125rem", "lg": "0.25rem", "xl": "0.5rem", "full": "0.75rem"},
+          },
+        },
+      }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .glass-card {
+            background: rgba(39, 53, 76, 0.6);
+            backdrop-filter: blur(20px);
+        }
+        .gradient-text {
+            background: linear-gradient(135deg, #00e639 0%, #009722 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+          }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-background text-on-surface font-body selection:bg-primary/30 min-h-screen pb-32">
+<!-- TopAppBar -->
+<header class="bg-[#041329] flex justify-between items-center px-6 h-16 w-full docked full-width top-0 z-50 fixed">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded-full bg-surface-container-highest overflow-hidden border border-outline-variant/20">
+<img alt="MLB Team Logo" class="w-full h-full object-cover" data-alt="Official MLB logo with sleek metallic finish" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCMG44C-nhnGPjX8Sd_gCLNt2vYbwkaOLKBT8YS9x4B8tU0gJPMDiNJT4IHS4vq8y-B7DGwVO9XZ1g9t5JueurO3wRPNiKB6f2JU72-H50Zm0fr-nQUOYfSOrQgqriY8oxfQhiWFb_NvjygMcjMOXYuyqzmoIvcmMrZqpUw0NEqU0_Yi1ziQcui0hp5XIOaxiWiWOrVRFy1_WcPJDpnJkAvM7i3nzyKOye2quW0eUiyqRmEctlPEuVq_glwf6L1S6IEasEeGUzYJAw"/>
+</div>
+<h1 class="text-xl font-black text-[#00e639] tracking-widest font-['Lexend'] uppercase">KINETIC PRECISION</h1>
+</div>
+<div class="flex items-center gap-4">
+<button class="p-2 text-[#adc8f5] hover:bg-[#27354c]/50 transition-colors rounded-lg active:scale-95 duration-150">
+<span class="material-symbols-outlined">search</span>
+</button>
+</div>
+</header>
+<main class="pt-20 px-4 md:px-8 max-w-7xl mx-auto space-y-8">
+<!-- Hero Section: Top HR Picks Carousel -->
+<section class="relative">
+<div class="flex items-end justify-between mb-4">
+<h2 class="font-headline text-2xl font-bold tracking-tight uppercase text-primary italic">TOP HR PICKS <span class="text-secondary opacity-50 not-italic font-label ml-2 text-sm tracking-widest">/ TODAY</span></h2>
+<div class="flex gap-2">
+<button class="w-8 h-8 rounded-full bg-surface-container-high flex items-center justify-center text-primary">
+<span class="material-symbols-outlined text-sm">chevron_left</span>
+</button>
+<button class="w-8 h-8 rounded-full bg-surface-container-high flex items-center justify-center text-primary">
+<span class="material-symbols-outlined text-sm">chevron_right</span>
+</button>
+</div>
+</div>
+<div class="flex gap-4 overflow-x-auto pb-4 no-scrollbar scroll-smooth">
+<!-- Player Card 1 -->
+<div class="flex-none w-72 h-[420px] relative group overflow-hidden rounded-xl bg-surface-container-low border border-outline-variant/10">
+<img alt="Aaron Judge" class="absolute inset-0 w-full h-full object-cover grayscale group-hover:grayscale-0 transition-all duration-700 opacity-60" data-alt="Aaron Judge swinging a baseball bat in high contrast" src="https://lh3.googleusercontent.com/aida-public/AB6AXuClrAx3sZsQNDRBeWk1OpUsetxDhgPlzT-CkgVCdhkhWWpkXDzAm9XpWLS4YqCe6dxDssXYeftYGsUAUDxMQ7em5sysfFyGWNJNqgokOrcACRb2kGU8jR-v0kHVWKx6LYKM_ID8y0nJJMaFb8TJFk6Sk_uVzuopJRiv6uTGmcNFQccsLJPU7P-nqelIoXe5doPVW9Qps9aALfctUqgA3ec_5X_zwPpJBEwu9nS3mJ68LGhT5KLH3JsgvFsw4dNlC8NNG2P8vasQPzU"/>
+<div class="absolute inset-0 bg-gradient-to-t from-background via-background/40 to-transparent"></div>
+<div class="absolute top-4 left-4">
+<span class="bg-primary/20 text-primary border border-primary/30 px-3 py-1 rounded-full text-[10px] font-label font-bold tracking-widest uppercase">ELITE PROJECTED</span>
+</div>
+<div class="absolute bottom-0 left-0 w-full p-6 space-y-3">
+<div>
+<p class="font-label text-primary text-xs font-bold tracking-tighter uppercase mb-1">NYY • OUTFIELD</p>
+<h3 class="font-headline text-3xl font-black text-white leading-none tracking-tighter uppercase">AARON JUDGE</h3>
+</div>
+<div class="flex items-center justify-between border-t border-outline-variant/20 pt-3">
+<div>
+<p class="text-[10px] font-label text-secondary uppercase opacity-60">HR Prob</p>
+<p class="text-2xl font-headline font-black text-primary italic">34.2%</p>
+</div>
+<div class="text-right">
+<p class="text-[10px] font-label text-secondary uppercase opacity-60">Best Odds</p>
+<p class="text-xl font-headline font-bold text-white">+245</p>
+</div>
+</div>
+</div>
+</div>
+<!-- Player Card 2 -->
+<div class="flex-none w-72 h-[420px] relative group overflow-hidden rounded-xl bg-surface-container-low border border-outline-variant/10">
+<img alt="Shohei Ohtani" class="absolute inset-0 w-full h-full object-cover grayscale group-hover:grayscale-0 transition-all duration-700 opacity-60" data-alt="Pro baseball player preparing for a swing" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCQ6WO8-s2e6kzZbh6PIaSJjg3RXjgwcdYQKfv7MLhvy_YqHnRE7G8J3JkqrGQSOWkWi4muEk6BxJItgqycUX4WlK93mDZJIplNwrmGjO8DtfwI_AkFNFOYVLEgdKWfYBuAk_mVv5MOIj6DVfaZMe1mz_k19BEmkfOpIiOSMeHqzOUqZ2EIoEICbVIYmDWq2hNZOTbjDW7EN14XCBeod3vfkFSHSiTqtidDaAjfJjjz3Z6yKAuC4oq5vDP13fPd19NZagl9PUMe5z0"/>
+<div class="absolute inset-0 bg-gradient-to-t from-background via-background/40 to-transparent"></div>
+<div class="absolute top-4 left-4">
+<span class="bg-primary/20 text-primary border border-primary/30 px-3 py-1 rounded-full text-[10px] font-label font-bold tracking-widest uppercase">STADIUM BOOST</span>
+</div>
+<div class="absolute bottom-0 left-0 w-full p-6 space-y-3">
+<div>
+<p class="font-label text-primary text-xs font-bold tracking-tighter uppercase mb-1">LAD • DH</p>
+<h3 class="font-headline text-3xl font-black text-white leading-none tracking-tighter uppercase">SHOHEI OHTANI</h3>
+</div>
+<div class="flex items-center justify-between border-t border-outline-variant/20 pt-3">
+<div>
+<p class="text-[10px] font-label text-secondary uppercase opacity-60">HR Prob</p>
+<p class="text-2xl font-headline font-black text-primary italic">29.8%</p>
+</div>
+<div class="text-right">
+<p class="text-[10px] font-label text-secondary uppercase opacity-60">Best Odds</p>
+<p class="text-xl font-headline font-bold text-white">+280</p>
+</div>
+</div>
+</div>
+</div>
+<!-- Player Card 3 -->
+<div class="flex-none w-72 h-[420px] relative group overflow-hidden rounded-xl bg-surface-container-low border border-outline-variant/10">
+<img alt="Juan Soto" class="absolute inset-0 w-full h-full object-cover grayscale group-hover:grayscale-0 transition-all duration-700 opacity-60" data-alt="Dynamic action shot of a professional hitter" src="https://lh3.googleusercontent.com/aida-public/AB6AXuCXyogTcvRbW8IjNb-06FU8gM2gYUgmUgBlrOwygaFWL3LYMaB2ChbvX1KWKjZMknsK7jpgwBz4OE8mxJwoxrfj3Ck1htGEG0ZVc7mRIDD-LOlAYbiY-umrlmppeUBwMapfn37CV_z_X2Xn_Zxq-sjMJMZCnwgH9D3KNVi8S5jhvRc_QzcPGAvxiIUzL68KNOecMRdRbiEn7cX2mgxVWce4Aq00EF8Glfel20hAbtusQSf8EPXANYcazYiMvGRZnHOjO_E9LPm7c4w"/>
+<div class="absolute inset-0 bg-gradient-to-t from-background via-background/40 to-transparent"></div>
+<div class="absolute top-4 left-4">
+<span class="bg-primary/20 text-primary border border-primary/30 px-3 py-1 rounded-full text-[10px] font-label font-bold tracking-widest uppercase">HOT STREAK</span>
+</div>
+<div class="absolute bottom-0 left-0 w-full p-6 space-y-3">
+<div>
+<p class="font-label text-primary text-xs font-bold tracking-tighter uppercase mb-1">NYY • OUTFIELD</p>
+<h3 class="font-headline text-3xl font-black text-white leading-none tracking-tighter uppercase">JUAN SOTO</h3>
+</div>
+<div class="flex items-center justify-between border-t border-outline-variant/20 pt-3">
+<div>
+<p class="text-[10px] font-label text-secondary uppercase opacity-60">HR Prob</p>
+<p class="text-2xl font-headline font-black text-primary italic">25.4%</p>
+</div>
+<div class="text-right">
+<p class="text-[10px] font-label text-secondary uppercase opacity-60">Best Odds</p>
+<p class="text-xl font-headline font-bold text-white">+310</p>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Main Layout: Grid -->
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+<!-- Trending Players (Left Rail) -->
+<div class="lg:col-span-1 space-y-6">
+<div class="bg-surface-container-low p-6 rounded-xl border border-outline-variant/10">
+<div class="flex items-center gap-2 mb-6">
+<span class="material-symbols-outlined text-primary" style="font-variation-settings: 'FILL' 1;">trending_up</span>
+<h3 class="font-headline font-bold text-sm tracking-widest uppercase">TRENDING STREAKS</h3>
+</div>
+<div class="space-y-4">
+<!-- Player Row 1 -->
+<div class="flex items-center justify-between p-3 rounded-lg hover:bg-surface-container-high transition-colors">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded bg-surface-container-highest flex items-center justify-center font-headline font-black text-xs">YA</div>
+<div>
+<p class="font-headline font-bold text-sm uppercase">Yordan Alvarez</p>
+<p class="text-[10px] font-label text-primary uppercase font-bold">3 HR in 4 Games</p>
+</div>
+</div>
+<div class="text-right">
+<p class="text-[10px] font-label opacity-50 uppercase">Form</p>
+<div class="flex gap-0.5 mt-1">
+<div class="w-1 h-3 bg-primary rounded-full"></div>
+<div class="w-1 h-3 bg-primary rounded-full"></div>
+<div class="w-1 h-3 bg-outline-variant rounded-full"></div>
+<div class="w-1 h-3 bg-primary rounded-full"></div>
+</div>
+</div>
+</div>
+<!-- Player Row 2 -->
+<div class="flex items-center justify-between p-3 rounded-lg hover:bg-surface-container-high transition-colors">
+<div class="flex items-center gap-3">
+<div class="w-10 h-10 rounded bg-surface-container-highest flex items-center justify-center font-headline font-black text-xs">MH</div>
+<div>
+<p class="font-headline font-bold text-sm uppercase">Matt Olson</p>
+<p class="text-[10px] font-label text-primary uppercase font-bold">2 HR in 2 Games</p>
+</div>
+</div>
+<div class="text-right">
+<p class="text-[10px] font-label opacity-50 uppercase">Form</p>
+<div class="flex gap-0.5 mt-1">
+<div class="w-1 h-3 bg-outline-variant rounded-full"></div>
+<div class="w-1 h-3 bg-outline-variant rounded-full"></div>
+<div class="w-1 h-3 bg-primary rounded-full"></div>
+<div class="w-1 h-3 bg-primary rounded-full"></div>
+</div>
+</div>
+</div>
+</div>
+<button class="w-full mt-6 py-3 bg-surface-container-highest text-primary font-label font-bold text-[10px] tracking-widest uppercase rounded hover:bg-surface-bright transition-all">VIEW FULL LEADERBOARD</button>
+</div>
+</div>
+<!-- Weather & Ballpark (Right Main) -->
+<div class="lg:col-span-2 space-y-6">
+<div class="bg-surface-container-low rounded-xl border border-outline-variant/10 overflow-hidden">
+<div class="p-6 border-b border-outline-variant/10 flex items-center justify-between bg-surface-container-highest/30">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-primary">analytics</span>
+<h3 class="font-headline font-bold text-sm tracking-widest uppercase">BALLPARK METRICS &amp; WEATHER</h3>
+</div>
+<span class="text-[10px] font-label text-secondary opacity-50 uppercase tracking-widest">Live Updates</span>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-px bg-outline-variant/10">
+<!-- Yankee Stadium -->
+<div class="bg-surface-container-low p-6 space-y-4">
+<div class="flex justify-between items-start">
+<div>
+<h4 class="font-headline font-bold text-lg uppercase leading-none">YANKEE STADIUM</h4>
+<p class="text-[10px] font-label text-primary font-bold uppercase tracking-wider mt-1">Hitter Friendly (1.14 HR Index)</p>
+</div>
+<div class="bg-surface-container-highest p-2 rounded">
+<span class="material-symbols-outlined text-secondary">cloud</span>
+</div>
+</div>
+<div class="grid grid-cols-3 gap-2">
+<div class="bg-surface-container-highest/40 p-3 rounded-lg text-center">
+<p class="text-[10px] font-label opacity-50 uppercase mb-1">Wind</p>
+<p class="font-label font-bold text-sm">12mph OUT</p>
+</div>
+<div class="bg-surface-container-highest/40 p-3 rounded-lg text-center">
+<p class="text-[10px] font-label opacity-50 uppercase mb-1">Temp</p>
+<p class="font-label font-bold text-sm">74°F</p>
+</div>
+<div class="bg-surface-container-highest/40 p-3 rounded-lg text-center">
+<p class="text-[10px] font-label opacity-50 uppercase mb-1">Humid</p>
+<p class="font-label font-bold text-sm">42%</p>
+</div>
+</div>
+<div class="pt-2">
+<p class="text-[10px] font-label uppercase opacity-50 mb-2">Impact Analytics</p>
+<div class="h-1.5 w-full bg-surface-container-highest rounded-full overflow-hidden">
+<div class="h-full bg-primary" style="width: 85%"></div>
+</div>
+<div class="flex justify-between mt-1">
+<span class="text-[9px] font-label font-bold text-primary uppercase">Extreme Launch Potential</span>
+<span class="text-[9px] font-label opacity-50">+12.5%</span>
+</div>
+</div>
+</div>
+<!-- Coors Field -->
+<div class="bg-surface-container-low p-6 space-y-4">
+<div class="flex justify-between items-start">
+<div>
+<h4 class="font-headline font-bold text-lg uppercase leading-none">COORS FIELD</h4>
+<p class="text-[10px] font-label text-primary font-bold uppercase tracking-wider mt-1">Elite Altitude (1.28 HR Index)</p>
+</div>
+<div class="bg-surface-container-highest p-2 rounded">
+<span class="material-symbols-outlined text-secondary">sunny</span>
+</div>
+</div>
+<div class="grid grid-cols-3 gap-2">
+<div class="bg-surface-container-highest/40 p-3 rounded-lg text-center">
+<p class="text-[10px] font-label opacity-50 uppercase mb-1">Wind</p>
+<p class="font-label font-bold text-sm">4mph L-to-R</p>
+</div>
+<div class="bg-surface-container-highest/40 p-3 rounded-lg text-center">
+<p class="text-[10px] font-label opacity-50 uppercase mb-1">Temp</p>
+<p class="font-label font-bold text-sm">88°F</p>
+</div>
+<div class="bg-surface-container-highest/40 p-3 rounded-lg text-center">
+<p class="text-[10px] font-label opacity-50 uppercase mb-1">Humid</p>
+<p class="font-label font-bold text-sm">15%</p>
+</div>
+</div>
+<div class="pt-2">
+<p class="text-[10px] font-label uppercase opacity-50 mb-2">Impact Analytics</p>
+<div class="h-1.5 w-full bg-surface-container-highest rounded-full overflow-hidden">
+<div class="h-full bg-primary" style="width: 94%"></div>
+</div>
+<div class="flex justify-between mt-1">
+<span class="text-[9px] font-label font-bold text-primary uppercase">Apex Carry Conditions</span>
+<span class="text-[9px] font-label opacity-50">+18.2%</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Launch Lab Aesthetic: Secondary Projection Module -->
+<div class="bg-surface-container-highest rounded-xl p-8 border border-primary/20 relative overflow-hidden group">
+<div class="absolute top-0 right-0 w-64 h-64 bg-primary/10 blur-[100px] rounded-full -mr-20 -mt-20"></div>
+<div class="relative z-10 flex flex-col md:flex-row items-center gap-8">
+<div class="w-32 h-32 md:w-40 md:h-40 rounded-full border-2 border-primary border-dashed flex items-center justify-center p-2">
+<div class="w-full h-full bg-surface-container-lowest rounded-full flex flex-col items-center justify-center">
+<p class="text-[10px] font-label opacity-50 uppercase">Global</p>
+<p class="text-3xl font-headline font-black text-primary italic">412'</p>
+<p class="text-[9px] font-label font-bold tracking-tighter opacity-70">AVG DIST</p>
+</div>
+</div>
+<div class="flex-1 space-y-4 text-center md:text-left">
+<h3 class="font-headline text-2xl font-black text-white uppercase tracking-tighter">LAUNCH LAB <span class="text-primary italic">PRO-AI</span></h3>
+<p class="text-secondary/70 text-sm leading-relaxed max-w-md">Our neural network has processed 40k+ pitches. Today's cumulative model indicates a high-probability power cycle for elite left-handed hitters in the AL East.</p>
+<div class="flex flex-wrap gap-3 justify-center md:justify-start">
+<div class="px-4 py-2 rounded bg-surface-container-lowest border border-outline-variant/30 flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-primary"></span>
+<span class="text-[10px] font-label font-bold uppercase tracking-widest text-secondary">Optimum Angle: 28-32°</span>
+</div>
+<div class="px-4 py-2 rounded bg-surface-container-lowest border border-outline-variant/30 flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-secondary"></span>
+<span class="text-[10px] font-label font-bold uppercase tracking-widest text-secondary">Exit Velo Req: 104+</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</main>
+<!-- BottomNavBar -->
+<nav class="fixed bottom-0 left-0 w-full flex justify-around items-center h-20 px-4 pb-safe bg-[#041329]/90 backdrop-blur-xl z-50 border-t border-[#44474d]/15 shadow-[0_-10px_40px_rgba(0,0,0,0.4)]">
+<a class="flex flex-col items-center justify-center text-[#00e639] bg-[#009722]/10 rounded-xl px-3 py-1 active:scale-90 transition-transform" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">dashboard</span>
+<span class="font-['Inter'] text-[10px] font-bold uppercase tracking-widest mt-1">Dugout</span>
+</a>
+<a class="flex flex-col items-center justify-center text-[#adc8f5] opacity-60 hover:text-[#00e639] transition-all active:scale-90 transition-transform" href="#">
+<span class="material-symbols-outlined">analytics</span>
+<span class="font-['Inter'] text-[10px] font-bold uppercase tracking-widest mt-1">Projections</span>
+</a>
+<a class="flex flex-col items-center justify-center text-[#adc8f5] opacity-60 hover:text-[#00e639] transition-all active:scale-90 transition-transform" href="#">
+<span class="material-symbols-outlined">biotech</span>
+<span class="font-['Inter'] text-[10px] font-bold uppercase tracking-widest mt-1">Launch Lab</span>
+</a>
+<a class="flex flex-col items-center justify-center text-[#adc8f5] opacity-60 hover:text-[#00e639] transition-all active:scale-90 transition-transform" href="#">
+<span class="material-symbols-outlined">notifications</span>
+<span class="font-['Inter'] text-[10px] font-bold uppercase tracking-widest mt-1">Watchlist</span>
+</a>
+</nav>
+<!-- Floating Action Button: Contextual for Home -->
+<div class="fixed bottom-24 right-6 z-40">
+<button class="w-14 h-14 rounded-full bg-gradient-to-br from-primary to-[#009722] shadow-lg shadow-primary/20 flex items-center justify-center text-on-primary active:scale-90 transition-transform group">
+<span class="material-symbols-outlined text-2xl group-hover:rotate-12 transition-transform">bolt</span>
+</button>
+</div>
+</body></html>

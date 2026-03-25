@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>AnalyticHustle | Home Run Projections</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Lexend:wght@400;700;800;900&amp;family=Inter:wght@400;500;600;700&amp;family=Space+Grotesk:wght@400;500;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              "background": "#041329",
+              "on-primary": "#003907",
+              "error": "#ffb4ab",
+              "secondary-fixed-dim": "#adc8f5",
+              "tertiary-fixed": "#72ff70",
+              "on-tertiary-fixed-variant": "#00530e",
+              "on-secondary-fixed-variant": "#2d486d",
+              "inverse-on-surface": "#233148",
+              "on-secondary": "#133155",
+              "tertiary-fixed-dim": "#00e639",
+              "surface-bright": "#2c3951",
+              "on-tertiary": "#003907",
+              "surface-container-low": "#0d1c32",
+              "surface-tint": "#00e639",
+              "on-tertiary-fixed": "#002203",
+              "on-surface-variant": "#c5c6cd",
+              "tertiary-container": "#001f02",
+              "surface-container-highest": "#27354c",
+              "primary": "#00e639",
+              "secondary": "#adc8f5",
+              "surface": "#041329",
+              "outline-variant": "#44474d",
+              "on-secondary-container": "#9fbae6",
+              "on-primary-fixed": "#002203",
+              "on-primary-fixed-variant": "#00530e",
+              "inverse-primary": "#006e16",
+              "primary-container": "#001f02",
+              "outline": "#8f9097",
+              "on-error": "#690005",
+              "tertiary": "#00e639",
+              "on-secondary-fixed": "#001c3b",
+              "secondary-container": "#2f4a70",
+              "surface-variant": "#27354c",
+              "surface-dim": "#041329",
+              "on-surface": "#d6e3ff",
+              "surface-container-lowest": "#010e24",
+              "surface-container": "#112036",
+              "surface-container-high": "#1c2a41",
+              "on-error-container": "#ffdad6",
+              "on-primary-container": "#009722",
+              "on-tertiary-container": "#009722",
+              "error-container": "#93000a",
+              "inverse-surface": "#d6e3ff",
+              "primary-fixed": "#72ff70",
+              "secondary-fixed": "#d5e3ff",
+              "primary-fixed-dim": "#00e639",
+              "on-background": "#d6e3ff"
+            },
+            fontFamily: {
+              "headline": ["Lexend"],
+              "body": ["Inter"],
+              "label": ["Space Grotesk"]
+            },
+            borderRadius: {"DEFAULT": "0.125rem", "lg": "0.25rem", "xl": "0.5rem", "full": "0.75rem"},
+          },
+        },
+      }
+    </script>
+<style>
+      .material-symbols-outlined {
+        font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+      }
+      body {
+        background-color: #041329;
+        color: #d6e3ff;
+      }
+      .custom-scrollbar::-webkit-scrollbar {
+        width: 4px;
+      }
+      .custom-scrollbar::-webkit-scrollbar-track {
+        background: #010e24;
+      }
+      .custom-scrollbar::-webkit-scrollbar-thumb {
+        background: #27354c;
+        border-radius: 10px;
+      }
+      .hexagon-clip {
+        clip-path: polygon(50% 0%, 95% 25%, 95% 75%, 50% 100%, 5% 75%, 5% 25%);
+      }
+      .hexagon-border {
+        clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+      }
+    </style>
+</head>
+<body class="font-body selection:bg-primary/30 selection:text-primary">
+<header class="bg-[#041329] flex justify-between items-center px-6 h-16 w-full docked full-width top-0 z-50 fixed">
+<div class="flex items-center gap-4">
+<div class="w-10 h-10 rounded-full bg-surface-container-high flex items-center justify-center overflow-hidden border border-outline-variant/20">
+<img alt="MLB Team Logo" class="w-6 h-6" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBm60A5zujQ1S1eAomyEAKuHJ1HzujejenOa3iuia0G895JGRwYyi9jfrer7QVd91VwuP_i_Y42JL6FCJPzBzh19izeAwwjDeTAsxzWNlnTslL7I-jSKVbr3HImEt1Bo6g7bCojLeTZ7iUyh001ynidTCIbtu_oM8-U99Gayh_WwJCSZyXAqHn3VgHmS6BFLTHEoe47fyztssLM5FLjyMursL4h0OsRD3oRo_7kvEXGE8VUsubCA_szy198VCVf_4x8-ELJy6ZLjlw"/>
+</div>
+<h1 class="font-['Lexend'] font-bold tracking-tighter uppercase text-xl font-black text-[#00e639] tracking-widest">KINETIC PRECISION</h1>
+</div>
+<div class="flex items-center gap-4">
+<button class="text-[#adc8f5] hover:bg-[#27354c]/50 transition-colors p-2 rounded-lg active:scale-95 duration-150">
+<span class="material-symbols-outlined">search</span>
+</button>
+</div>
+</header>
+<main class="pt-20 pb-32 min-h-screen max-w-7xl mx-auto px-4 md:px-6">
+<!-- Hero Header Section -->
+<section class="mb-8 relative overflow-hidden rounded-xl p-8 bg-surface-container-low">
+<div class="relative z-10 flex flex-col md:flex-row justify-between items-end gap-6">
+<div>
+<div class="flex items-center gap-2 mb-2">
+<span class="inline-block w-2 h-2 rounded-full bg-primary animate-pulse"></span>
+<span class="font-label text-xs uppercase tracking-[0.2em] text-secondary">Live Model Update: 14:02 ET</span>
+</div>
+<h2 class="font-headline text-4xl md:text-5xl font-black text-on-surface uppercase tracking-tighter mb-4 leading-none">
+                    Daily <span class="text-primary">Launch</span> Projections
+                </h2>
+<p class="max-w-xl text-on-surface-variant leading-relaxed font-body">
+                    Advanced algorithmic mapping for MLB Home Run probabilities. Data derived from exit velocity trends and atmospheric conditions.
+                </p>
+</div>
+<div class="flex gap-4 w-full md:w-auto">
+<div class="flex-1 md:flex-none p-4 bg-surface-container-highest rounded-xl border border-outline-variant/10">
+<span class="block font-label text-[10px] uppercase text-secondary mb-1">Avg. Probability</span>
+<span class="block font-headline text-2xl font-bold text-primary">12.4%</span>
+</div>
+<div class="flex-1 md:flex-none p-4 bg-surface-container-highest rounded-xl border border-outline-variant/10">
+<span class="block font-label text-[10px] uppercase text-secondary mb-1">Hot Streaks</span>
+<span class="block font-headline text-2xl font-bold text-on-surface">18 Players</span>
+</div>
+</div>
+</div>
+<div class="absolute -right-20 -top-20 w-80 h-80 bg-primary/5 rounded-full blur-[100px]"></div>
+</section>
+<!-- Filters & Search -->
+<div class="mb-8 flex flex-col lg:flex-row gap-4 items-center">
+<div class="relative w-full lg:flex-1">
+<span class="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-outline">search</span>
+<input class="w-full bg-surface-container-lowest border-none focus:ring-1 focus:ring-primary rounded-xl py-4 pl-12 pr-4 text-on-surface font-body transition-all" placeholder="Search Player, Team, or Pitcher..." type="text"/>
+</div>
+<div class="flex gap-3 w-full lg:w-auto overflow-x-auto pb-2 lg:pb-0 custom-scrollbar">
+<button class="whitespace-nowrap px-5 py-3 rounded-full bg-primary text-on-primary font-label text-xs font-bold uppercase tracking-wider flex items-center gap-2">
+<span class="material-symbols-outlined text-sm">tune</span>
+                All Players
+            </button>
+<button class="whitespace-nowrap px-5 py-3 rounded-full bg-surface-container-highest text-on-surface-variant hover:text-primary font-label text-xs font-bold uppercase tracking-wider transition-colors">
+                Hot Streaks
+            </button>
+<button class="whitespace-nowrap px-5 py-3 rounded-full bg-surface-container-highest text-on-surface-variant hover:text-primary font-label text-xs font-bold uppercase tracking-wider transition-colors">
+                Power Hitters
+            </button>
+</div>
+</div>
+<!-- Tier List Container -->
+<div class="space-y-6">
+<!-- S TIER -->
+<div class="rounded-2xl border-l-4 border-l-[#ffdf00] bg-surface-container-low/50 overflow-hidden">
+<div class="bg-gradient-to-r from-[#ffdf00]/20 to-transparent px-6 py-3 flex items-center justify-between">
+<h3 class="font-headline font-black text-[#ffdf00] tracking-widest text-lg italic">S TIER</h3>
+<span class="text-[10px] font-label text-[#ffdf00]/70 uppercase tracking-[0.2em]">Highest Probability</span>
+</div>
+<div class="p-6 flex flex-wrap gap-8 justify-start">
+<!-- Player Card -->
+<div class="flex flex-col items-center gap-3 w-28 group">
+<div class="relative w-24 h-24 hexagon-border bg-[#ffdf00] p-1 shadow-[0_0_20px_rgba(255,223,0,0.15)] group-hover:scale-105 transition-transform">
+<div class="w-full h-full hexagon-clip bg-surface-container-lowest overflow-hidden">
+<img alt="Aaron Judge" class="w-full h-full object-cover grayscale group-hover:grayscale-0 transition-all" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBxL-V-_WhTwuOps0igVR4kNJHwt-RC0gUo3Uwbb_-1Im5UoEpW5i5eTxcKn2e7mE3wCnQ8aUrhFcelQPnGymAspXaccJ4CsWggUIJombXI5pzHloeYYT-5GdsV9R8ZaClnKeDpKbGiACBi4L9jNVSlRpFsdCzKoF-yTrmGWiowIsnOEV51yYYwZAAxScsYgeWP3_zNFYmWdkytknfKZTCyc2KVZmDZdxCEk-LQ4jLdkLpuTYXlixWn7lMfBEtHJrfqwDl3u35ouB0"/>
+</div>
+<div class="absolute -bottom-1 -right-1 bg-[#ffdf00] text-on-primary px-1.5 py-0.5 text-[10px] font-black rounded-md font-label">34%</div>
+</div>
+<div class="text-center">
+<p class="font-headline text-xs font-bold text-on-surface truncate w-full">JUDGE</p>
+<p class="font-label text-[9px] text-secondary tracking-tighter">NYY • CF</p>
+</div>
+</div>
+<!-- Ohtani -->
+<div class="flex flex-col items-center gap-3 w-28 group">
+<div class="relative w-24 h-24 hexagon-border bg-[#ffdf00] p-1 shadow-[0_0_20px_rgba(255,223,0,0.15)] group-hover:scale-105 transition-transform">
+<div class="w-full h-full hexagon-clip bg-surface-container-lowest overflow-hidden">
+<img alt="Shohei Ohtani" class="w-full h-full object-cover grayscale group-hover:grayscale-0 transition-all" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBdT8k7FoAEN5jg8aMFxSQt3IUxmNt7XqeoBA4-7PfIzcCB692jjYyp60Th-3PL5G4-ydGazNV4zc1RGghZfORVi40DfBZ6gAPQf7XGcI48DefnbHZfOYbglKR2eK7hvZXjDKRVtnEgpOqvsCV8-jfpb_rAFEV6eLH21XEMAlN1WoSOzrECDOPxqhUt2me-w3gFkl0alDttzbDHVe0xwf2ZsRU9hH87716gYczS7Gh3vPXD4KQcfoLd9l3AQLXWPZRHY-WPVz3mnU8"/>
+</div>
+<div class="absolute -bottom-1 -right-1 bg-[#ffdf00] text-on-primary px-1.5 py-0.5 text-[10px] font-black rounded-md font-label">28%</div>
+</div>
+<div class="text-center">
+<p class="font-headline text-xs font-bold text-on-surface truncate w-full">OHTANI</p>
+<p class="font-label text-[9px] text-secondary tracking-tighter">LAD • DH</p>
+</div>
+</div>
+</div>
+</div>
+<!-- A TIER -->
+<div class="rounded-2xl border-l-4 border-l-[#00e639] bg-surface-container-low/50 overflow-hidden">
+<div class="bg-gradient-to-r from-[#00e639]/10 to-transparent px-6 py-3 flex items-center justify-between">
+<h3 class="font-headline font-black text-[#00e639] tracking-widest text-lg italic">A TIER</h3>
+<span class="text-[10px] font-label text-[#00e639]/70 uppercase tracking-[0.2em]">High Performance</span>
+</div>
+<div class="p-6 flex flex-wrap gap-8 justify-start">
+<div class="flex flex-col items-center gap-3 w-28 group">
+<div class="relative w-24 h-24 hexagon-border bg-[#00e639] p-0.5 group-hover:scale-105 transition-transform">
+<div class="w-full h-full hexagon-clip bg-surface-container-lowest overflow-hidden">
+<img alt="Yordan Alvarez" class="w-full h-full object-cover grayscale group-hover:grayscale-0 transition-all" src="https://lh3.googleusercontent.com/aida-public/AB6AXuB-cpJAJIJYX11-mDuDr9jL1c9_vUfllCFbEdLf7Z5UYD5ZFM9my3qMPRUaS4H4qRyrO4iJDKQlCPhGIl6JIiX3uOik6vwjuR_HyDJ6AIfLHB-YnldtzAw1ReMldafEa2MGwnDfrgZ0ZSm0bIWWtCO7sND8_WKGXrlvQNxmrU1jIXtt9XrmJsVe2FC-Sn3h-DEkEcFypJWbxdVBEUnHVANugfEQjruHrzEJljY1rzqwKIqtopYshWmOJBFcGaBefMjmD5mvGqMisJ8"/>
+</div>
+<div class="absolute -bottom-1 -right-1 bg-[#00e639] text-on-primary px-1.5 py-0.5 text-[10px] font-black rounded-md font-label">22%</div>
+</div>
+<div class="text-center">
+<p class="font-headline text-xs font-bold text-on-surface truncate w-full">ALVAREZ</p>
+<p class="font-label text-[9px] text-secondary tracking-tighter">HOU • LF</p>
+</div>
+</div>
+</div>
+</div>
+<!-- B TIER -->
+<div class="rounded-2xl border-l-4 border-l-[#adc8f5] bg-surface-container-low/50 overflow-hidden">
+<div class="bg-gradient-to-r from-[#adc8f5]/10 to-transparent px-6 py-3 flex items-center justify-between">
+<h3 class="font-headline font-black text-[#adc8f5] tracking-widest text-lg italic">B TIER</h3>
+<span class="text-[10px] font-label text-[#adc8f5]/70 uppercase tracking-[0.2em]">Moderate Baseline</span>
+</div>
+<div class="p-6 flex flex-wrap gap-8 justify-start">
+<div class="flex flex-col items-center gap-3 w-28 group">
+<div class="relative w-24 h-24 hexagon-border bg-[#adc8f5] p-0.5 group-hover:scale-105 transition-transform">
+<div class="w-full h-full hexagon-clip bg-surface-container-lowest overflow-hidden">
+<img alt="Pete Alonso" class="w-full h-full object-cover grayscale group-hover:grayscale-0 transition-all" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBEYWFQJd3nbiFkPI7fc05962mlnL6tGQnTi3woL8hkd10qBSm3uG_9ezmiQAgoFqLLBekHxEdowrBmnt_wgVQCCUP9CNyqWdpxipcrJoBdaN3b8bsedbzNxK7Lepm2sonvU3Qt-hbBvBGtRbWklG4TSQOaAz2qMtOo0lXYcs0U0J52jmK6AjbgPGeNrtuUa6GDOk-YNIqUijw142sbNjxGVPxayuODv8XnSvJr2pm-t3TX2eXq8NDh_nn3Ym4oGFBpxmezOXIgN-0"/>
+</div>
+<div class="absolute -bottom-1 -right-1 bg-[#adc8f5] text-[#001c3b] px-1.5 py-0.5 text-[10px] font-black rounded-md font-label">15%</div>
+</div>
+<div class="text-center">
+<p class="font-headline text-xs font-bold text-on-surface truncate w-full">ALONSO</p>
+<p class="font-label text-[9px] text-secondary tracking-tighter">NYM • 1B</p>
+</div>
+</div>
+</div>
+</div>
+<!-- C TIER -->
+<div class="rounded-2xl border-l-4 border-l-outline-variant bg-surface-container-low/50 overflow-hidden">
+<div class="bg-gradient-to-r from-outline-variant/10 to-transparent px-6 py-3 flex items-center justify-between">
+<h3 class="font-headline font-black text-outline-variant tracking-widest text-lg italic">C TIER</h3>
+<span class="text-[10px] font-label text-outline-variant/70 uppercase tracking-[0.2em]">Lower Yield</span>
+</div>
+<div class="p-6 flex flex-wrap gap-8 justify-start opacity-60 grayscale">
+<div class="w-24 h-24 hexagon-border bg-outline-variant/30 p-0.5">
+<div class="w-full h-full hexagon-clip bg-surface-container-lowest/50 flex items-center justify-center">
+<span class="material-symbols-outlined text-outline-variant" data-icon="person">person</span>
+</div>
+</div>
+<div class="w-24 h-24 hexagon-border bg-outline-variant/30 p-0.5">
+<div class="w-full h-full hexagon-clip bg-surface-container-lowest/50 flex items-center justify-center">
+<span class="material-symbols-outlined text-outline-variant" data-icon="person">person</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Load More Section -->
+<div class="mt-12 flex justify-center">
+<button class="px-8 py-4 bg-surface-container-high hover:bg-surface-container-highest border border-outline-variant/10 rounded-xl font-label text-xs font-bold uppercase tracking-widest text-on-surface transition-all active:scale-95">
+            View All Model Rankings
+        </button>
+</div>
+</main>
+<nav class="fixed bottom-0 left-0 w-full flex justify-around items-center h-20 px-4 pb-safe bg-[#041329]/90 backdrop-blur-xl border-t border-[#44474d]/15 shadow-[0_-10px_40px_rgba(0,0,0,0.4)] z-50">
+<a class="flex flex-col items-center justify-center text-[#adc8f5] opacity-60 hover:text-[#00e639] transition-all active:scale-90 duration-150" href="#">
+<span class="material-symbols-outlined">dashboard</span>
+<span class="font-['Inter'] text-[10px] font-bold uppercase tracking-widest mt-1">Dugout</span>
+</a>
+<a class="flex flex-col items-center justify-center text-[#00e639] bg-[#009722]/10 rounded-xl px-3 py-1 active:scale-90 transition-transform duration-150" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">analytics</span>
+<span class="font-['Inter'] text-[10px] font-bold uppercase tracking-widest mt-1">Projections</span>
+</a>
+<a class="flex flex-col items-center justify-center text-[#adc8f5] opacity-60 hover:text-[#00e639] transition-all active:scale-90 duration-150" href="#">
+<span class="material-symbols-outlined">biotech</span>
+<span class="font-['Inter'] text-[10px] font-bold uppercase tracking-widest mt-1">Launch Lab</span>
+</a>
+<a class="flex flex-col items-center justify-center text-[#adc8f5] opacity-60 hover:text-[#00e639] transition-all active:scale-90 duration-150" href="#">
+<span class="material-symbols-outlined">notifications</span>
+<span class="font-['Inter'] text-[10px] font-bold uppercase tracking-widest mt-1">Watchlist</span>
+</a>
+</nav>
+</body></html>

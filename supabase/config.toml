@@ -1,0 +1,5 @@
+# Supabase CLI (https://supabase.com/docs/guides/cli)
+# Used when deploying Edge Functions.
+
+[functions.send-expo-push]
+verify_jwt = false

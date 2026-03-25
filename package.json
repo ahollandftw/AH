@@ -1,0 +1,23 @@
+{
+  "name": "stitch_player_detail_launch_lab",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "npm run web --workspace=mobile",
+    "dev:mobile": "npm run start --workspace=mobile",
+    "build:web": "npm run build --workspace=web",
+    "dev:vite": "npm run dev --workspace=web",
+    "import:stats": "node scripts/import-stat-csv.mjs",
+    "dev:api": "npm run dev --workspace=@kinetic/api",
+    "aggregate": "npm run aggregate --workspace=@kinetic/api",
+    "ingest:statcast": "python scripts/statcast/ingest_statcast.py"
+  },
+  "devDependencies": {
+    "@supabase/supabase-js": "^2.49.8",
+    "csv-parse": "^5.6.0",
+    "dotenv": "^16.4.7"
+  }
+}
