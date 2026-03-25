@@ -118,7 +118,7 @@ export default function AccountPage() {
     setBusy(false)
   }
 
-  async function startCheckout() {
+  async function startCheckout(plan: 'monthly' | 'season') {
     if (!session) return
     setLoading(true)
     setMsg('')
@@ -130,6 +130,7 @@ export default function AccountPage() {
         body: JSON.stringify({
           userId: session.user.id,
           email: session.user.email,
+          plan,
         }),
       })
       if (!res.ok) {
@@ -223,9 +224,22 @@ export default function AccountPage() {
               <button
                 type="button"
                 className="pg-clearBtn"
-                onClick={startCheckout}
+                disabled={loading}
+                onClick={() => {
+                  void startCheckout('monthly')
+                }}
               >
-                {hasSubscription ? 'Manage / renew subscription' : 'Start subscription'}
+                {loading ? 'Loading...' : 'Monthly plan'}
+              </button>
+              <button
+                type="button"
+                className="pg-clearBtn"
+                disabled={loading}
+                onClick={() => {
+                  void startCheckout('season')
+                }}
+              >
+                {loading ? 'Loading...' : 'Season plan'}
               </button>
               <button type="button" className="pg-clearBtn" onClick={() => void refreshSubscription()}>
                 Refresh status

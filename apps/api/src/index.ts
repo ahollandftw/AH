@@ -8,7 +8,8 @@ import { registerLeaderboardRoutes } from './routes/leaderboards.js'
 config.supabaseUrl()
 config.supabaseServiceRoleKey()
 config.stripeSecretKey()
-config.stripePriceLookupKey()
+config.stripeMonthlyPriceLookupKey()
+config.stripeSeasonPriceLookupKey()
 
 const stripe = new Stripe(config.stripeSecretKey())
 
@@ -26,13 +27,18 @@ app.post('/billing/create-checkout-session', async (req, res) => {
   try {
     const userId = String(req.body?.userId ?? '').trim()
     const email = String(req.body?.email ?? '').trim()
+    const planRaw = String(req.body?.plan ?? 'monthly').trim().toLowerCase()
+    const plan = planRaw === 'season' ? 'season' : 'monthly'
     if (!userId || !email) {
       res.status(400).json({ error: 'Missing userId or email' })
       return
     }
 
+    const lookupKey =
+      plan === 'season' ? config.stripeSeasonPriceLookupKey() : config.stripeMonthlyPriceLookupKey()
+
     const prices = await stripe.prices.list({
-      lookup_keys: [config.stripePriceLookupKey()],
+      lookup_keys: [lookupKey],
       expand: ['data.product'],
       active: true,
       limit: 1,
@@ -51,7 +57,7 @@ app.post('/billing/create-checkout-session', async (req, res) => {
       line_items: [{ price: price.id, quantity: 1 }],
       success_url: `${baseUrl}/account?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${baseUrl}/account?checkout=canceled`,
-      metadata: { user_id: userId, source: 'analytichustle-web' },
+      metadata: { user_id: userId, source: 'analytichustle-web', plan },
       allow_promotion_codes: true,
     })
 
