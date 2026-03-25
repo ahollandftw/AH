@@ -6,3 +6,4 @@ dist
 .DS_Store
 apps/*/.env
 packages/*/.env
+apps/mobile/
