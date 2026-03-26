@@ -58,6 +58,7 @@ export default function AccountPage() {
   const [savingProfile, setSavingProfile] = useState(false)
   const [defaultSportsbook, setDefaultSportsbook] = useState('draftkings')
   const [hrNotifications, setHrNotifications] = useState(true)
+  const [hrLeagueNotifications, setHrLeagueNotifications] = useState(false)
   const [todayPickDate, setTodayPickDate] = useState(new Date().toISOString().slice(0, 10))
   const [pickQuery, setPickQuery] = useState('')
   const [pickResults, setPickResults] = useState<PlayerOption[]>([])
@@ -85,7 +86,7 @@ export default function AccountPage() {
     }
     void supabase
       .from('user_settings')
-      .select('display_name,avatar_url,profile_visibility,default_sportsbook,hr_notifications')
+      .select('display_name,avatar_url,profile_visibility,default_sportsbook,hr_notifications,hr_notifications_league')
       .eq('user_id', session.user.id)
       .maybeSingle()
       .then(({ data }) => {
@@ -95,6 +96,7 @@ export default function AccountPage() {
         setVisibility(raw === 'public' || raw === 'friends' ? raw : 'private')
         setDefaultSportsbook(String(data?.default_sportsbook ?? 'draftkings'))
         setHrNotifications(data?.hr_notifications !== false)
+        setHrLeagueNotifications(data?.hr_notifications_league === true)
       })
   }, [session?.user.id, supabase])
 
@@ -265,6 +267,7 @@ export default function AccountPage() {
         profile_visibility: visibility,
         default_sportsbook: defaultSportsbook,
         hr_notifications: hrNotifications,
+        hr_notifications_league: hrLeagueNotifications,
       },
       { onConflict: 'user_id' },
     )
@@ -462,16 +465,35 @@ export default function AccountPage() {
                 <option value="betmgm">BetMGM</option>
                 <option value="fanatics">Fanatics</option>
               </select>
-              <label className="pg-label acc-toggleLabel">
-                <input
-                  type="checkbox"
-                  checked={hrNotifications}
-                  onChange={(e) => setHrNotifications(e.target.checked)}
-                />
-                HR notifications (push alerts when your picks hit)
+              <label className="pg-label acc-switchRow">
+                <span>Pick HR notifications</span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={hrNotifications}
+                  className={`acc-iosSwitch ${hrNotifications ? 'is-on' : ''}`}
+                  onClick={() => setHrNotifications((v) => !v)}
+                >
+                  <span className="acc-iosKnob" />
+                </button>
+              </label>
+              <label className="pg-label acc-switchRow">
+                <span>All-league HR notifications</span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={hrLeagueNotifications}
+                  className={`acc-iosSwitch ${hrLeagueNotifications ? 'is-on' : ''}`}
+                  onClick={() => setHrLeagueNotifications((v) => !v)}
+                >
+                  <span className="acc-iosKnob" />
+                </button>
               </label>
               <button type="button" className="pg-clearBtn" disabled={savingProfile} onClick={saveProfileSettings}>
                 {savingProfile ? 'Saving...' : 'Save profile'}
+              </button>
+              <button type="button" className="wl-rmBtn" onClick={() => void signOut()}>
+                Log out
               </button>
             </div>
             <div className="acc-teamRow">
@@ -495,59 +517,60 @@ export default function AccountPage() {
                 ))}
               </select>
             </div>
-            <div className="acc-planStack">
-              <div className="acc-planCard">
-                <div className="acc-planHead">
-                  <h4 className="acc-planTitle">Basic</h4>
-                  <span className="acc-planPrice">$5 / month</span>
+            {!hasSubscription ? (
+              <div className="acc-planStack">
+                <div className="acc-planCard">
+                  <div className="acc-planHead">
+                    <h4 className="acc-planTitle">Basic</h4>
+                    <span className="acc-planPrice">$5 / month</span>
+                  </div>
+                  <details className="acc-planDetails">
+                    <summary>View features</summary>
+                    <ul className="acc-planList">
+                      <li>Core app access</li>
+                      <li>Daily HR calls (max 3 picks/day)</li>
+                      <li>Public leaderboard participation (if profile is public)</li>
+                    </ul>
+                  </details>
+                  <button
+                    type="button"
+                    className="wl-addBtn acc-planBtn"
+                    disabled={loading}
+                    onClick={() => void startCheckout('basic')}
+                  >
+                    {loading ? 'Loading...' : 'Choose Basic'}
+                  </button>
                 </div>
-                <details className="acc-planDetails">
-                  <summary>View features</summary>
-                  <ul className="acc-planList">
-                    <li>Core app access</li>
-                    <li>Daily HR calls (max 3 picks/day)</li>
-                    <li>Public leaderboard participation (if profile is public)</li>
-                  </ul>
-                </details>
-                <button
-                  type="button"
-                  className="wl-addBtn acc-planBtn"
-                  disabled={loading}
-                  onClick={() => void startCheckout('basic')}
-                >
-                  {loading ? 'Loading...' : 'Choose Basic'}
-                </button>
-              </div>
 
-              <div className="acc-planCard">
-                <div className="acc-planHead">
-                  <h4 className="acc-planTitle">AH+</h4>
-                  <span className="acc-planPrice">$8 / month</span>
+                <div className="acc-planCard">
+                  <div className="acc-planHead">
+                    <h4 className="acc-planTitle">AH+</h4>
+                    <span className="acc-planPrice">$8 / month</span>
+                  </div>
+                  <details className="acc-planDetails">
+                    <summary>View features</summary>
+                    <ul className="acc-planList">
+                      <li>Everything in Basic</li>
+                      <li>Personal hit-rate tracking and history</li>
+                      <li>Advanced account performance insights</li>
+                    </ul>
+                  </details>
+                  <button
+                    type="button"
+                    className="wl-addBtn acc-planBtn"
+                    disabled={loading}
+                    onClick={() => void startCheckout('plus')}
+                  >
+                    {loading ? 'Loading...' : 'Choose AH+'}
+                  </button>
                 </div>
-                <details className="acc-planDetails">
-                  <summary>View features</summary>
-                  <ul className="acc-planList">
-                    <li>Everything in Basic</li>
-                    <li>Personal hit-rate tracking and history</li>
-                    <li>Advanced account performance insights</li>
-                  </ul>
-                </details>
-                <button
-                  type="button"
-                  className="wl-addBtn acc-planBtn"
-                  disabled={loading}
-                  onClick={() => void startCheckout('plus')}
-                >
-                  {loading ? 'Loading...' : 'Choose AH+'}
-                </button>
               </div>
-            </div>
+            ) : (
+              <p className="pg-sub">Your subscription is active. Plan options are hidden.</p>
+            )}
             <div className="acc-actions">
               <button type="button" className="pg-clearBtn" onClick={() => void refreshSubscription()}>
                 Refresh status
-              </button>
-              <button type="button" className="pg-clearBtn" onClick={() => void signOut()}>
-                Sign out
               </button>
             </div>
             {msg ? <p className="pg-sub">{msg}</p> : null}

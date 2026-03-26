@@ -25,6 +25,15 @@ const Ctx = createContext<AuthCtx | null>(null)
 const url = import.meta.env.VITE_SUPABASE_URL
 const key = import.meta.env.VITE_SUPABASE_ANON_KEY
 
+function randomDisplayName(): string {
+  const a = ['Clutch', 'Moonshot', 'Heat', 'Prime', 'Fastball', 'Launch', 'Barrel', 'Rally']
+  const b = ['Slugger', 'Hitter', 'Hustler', 'Captain', 'Scout', 'Hammer', 'Ace', 'MVP']
+  const left = a[Math.floor(Math.random() * a.length)]
+  const right = b[Math.floor(Math.random() * b.length)]
+  const n = Math.floor(100 + Math.random() * 900)
+  return `${left}${right}${n}`
+}
+
 function makeSingleton() {
   if (!url || !key) return null
   return createSupabaseClient(url, key)
@@ -122,6 +131,34 @@ export function WebAuthProvider({ children }: { children: React.ReactNode }) {
         setFavoriteTeamState(team)
         if (team) localStorage.setItem('kp_favorite_team', team)
       })
+  }, [session?.user.id, supabase])
+
+  useEffect(() => {
+    if (!supabase || !session?.user.id) return
+    const userId = session.user.id
+    void (async () => {
+      const { data } = await supabase
+        .from('user_settings')
+        .select('display_name')
+        .eq('user_id', userId)
+        .maybeSingle()
+      const current = String(data?.display_name ?? '').trim()
+      if (current) return
+
+      let candidate = randomDisplayName()
+      for (let i = 0; i < 5; i += 1) {
+        const { count } = await supabase
+          .from('user_settings')
+          .select('user_id', { count: 'exact', head: true })
+          .eq('display_name', candidate)
+        if (!count) break
+        candidate = randomDisplayName()
+      }
+
+      await supabase
+        .from('user_settings')
+        .upsert({ user_id: userId, display_name: candidate }, { onConflict: 'user_id' })
+    })()
   }, [session?.user.id, supabase])
 
   const palette = useMemo(() => paletteForTeam(favoriteTeam), [favoriteTeam])

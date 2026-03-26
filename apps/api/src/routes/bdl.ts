@@ -128,6 +128,91 @@ export function registerBdlRoutes(app: Express) {
 
   /* ── Matchup data for UI ─────────────────────────────────────── */
 
+  app.get('/bdl/matchup-card', async (req, res) => {
+    try {
+      const statPlayerId = String(req.query.player_id ?? '').trim()
+      const opponentTeam = String(req.query.opponent_team ?? '').trim().toUpperCase()
+      if (!statPlayerId || !opponentTeam) {
+        res.status(400).json({ error: 'player_id and opponent_team required' })
+        return
+      }
+
+      const sb = getServiceClient()
+      const { data: batterXref, error: xErr } = await sb
+        .from('bdl_players')
+        .select('bdl_id, full_name')
+        .eq('stat_player_id', statPlayerId)
+        .maybeSingle()
+      if (xErr) throw xErr
+      if (!batterXref?.bdl_id) {
+        res.json({ data: null })
+        return
+      }
+
+      const { data: rows, error } = await sb
+        .from('bdl_matchups')
+        .select(`
+          bdl_player_id,
+          opponent_bdl_player_id,
+          at_bats,
+          hits,
+          home_runs,
+          strikeouts,
+          avg,
+          obp,
+          slg,
+          ops,
+          opponent:opponent_bdl_player_id(full_name, team_abbrev)
+        `)
+        .eq('bdl_player_id', batterXref.bdl_id)
+      if (error) throw error
+
+      const candidates = (rows ?? [])
+        .map((r: any) => {
+          const opp = Array.isArray(r.opponent) ? r.opponent[0] : r.opponent
+          return {
+            pitcher_name: opp?.full_name ?? null,
+            pitcher_team: String(opp?.team_abbrev ?? '').toUpperCase(),
+            at_bats: Number(r.at_bats ?? 0),
+            hits: Number(r.hits ?? 0),
+            home_runs: Number(r.home_runs ?? 0),
+            strikeouts: Number(r.strikeouts ?? 0),
+            avg: r.avg != null ? Number(r.avg) : null,
+            obp: r.obp != null ? Number(r.obp) : null,
+            slg: r.slg != null ? Number(r.slg) : null,
+            ops: r.ops != null ? Number(r.ops) : null,
+          }
+        })
+        .filter((r) => r.pitcher_team === opponentTeam)
+        .sort((a, b) => b.at_bats - a.at_bats)
+
+      const best = candidates[0] ?? null
+      if (!best) {
+        res.json({ data: null })
+        return
+      }
+
+      res.json({
+        data: {
+          batter_name: batterXref.full_name,
+          batter_stat_player_id: statPlayerId,
+          opponent_team: opponentTeam,
+          pitcher_name: best.pitcher_name,
+          sample_ab: best.at_bats,
+          h: best.hits,
+          hr: best.home_runs,
+          k: best.strikeouts,
+          avg: best.avg,
+          obp: best.obp,
+          slg: best.slg,
+          ops: best.ops,
+        },
+      })
+    } catch (e) {
+      res.status(500).json({ error: String(e) })
+    }
+  })
+
   app.get('/bdl/matchup', async (req, res) => {
     try {
       const batterId = Number(req.query.batter_id ?? 0)

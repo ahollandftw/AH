@@ -10,15 +10,19 @@ import {
   type ScheduleGame,
 } from '@kinetic/shared'
 import { useWebAuth } from '../auth/WebAuthProvider.tsx'
+import { paletteForTeam } from '../theme/teamPalette'
 
 export default function DugoutPage() {
-  const { supabase, hasSubscription } = useWebAuth()
+  const { supabase, hasSubscription, session } = useWebAuth()
   const [loading, setLoading] = useState(true)
   const [rows, setRows] = useState<DailyProjection[]>([])
   const [games, setGames] = useState<ScheduleGame[]>([])
   const [availableDates, setAvailableDates] = useState<string[]>([])
   const [displayDate, setDisplayDate] = useState(getAppDisplayDateIso())
   const [expandedGameId, setExpandedGameId] = useState<string | null>(null)
+  const [pickState, setPickState] = useState<Record<string, boolean | null>>({})
+  const [pickBusy, setPickBusy] = useState<string | null>(null)
+  const [pickMsg, setPickMsg] = useState('')
 
   useEffect(() => {
     if (!supabase) return
@@ -78,6 +82,83 @@ export default function DugoutPage() {
     return `${parts[0][0] ?? ''}${parts[1][0] ?? ''}`.toUpperCase()
   }
 
+  async function loadPicks() {
+    if (!supabase || !session?.user.id) {
+      setPickState({})
+      return
+    }
+    const { data } = await supabase
+      .from('user_daily_picks')
+      .select('player_id,hit')
+      .eq('user_id', session.user.id)
+      .eq('pick_date', displayDate)
+    const next: Record<string, boolean | null> = {}
+    for (const r of (data ?? []) as Array<{ player_id: string; hit: boolean | null }>) {
+      next[String(r.player_id)] = r.hit
+    }
+    setPickState(next)
+  }
+
+  useEffect(() => {
+    void loadPicks()
+  }, [displayDate, session?.user.id, supabase])
+
+  useEffect(() => {
+    if (!supabase || !session?.user.id) return
+    const id = setInterval(() => void loadPicks(), 30000)
+    return () => clearInterval(id)
+  }, [displayDate, session?.user.id, supabase])
+
+  function pickStatusLabel(v: boolean | null | undefined): string {
+    if (v === true) return 'HIT'
+    if (v === false) return 'MISS'
+    if (v === null) return 'PENDING'
+    return ''
+  }
+
+  async function togglePick(playerId: string) {
+    if (!supabase || !session?.user.id) {
+      setPickMsg('Sign in to use targets.')
+      return
+    }
+    if (pickBusy) return
+    setPickMsg('')
+    setPickBusy(playerId)
+
+    const currentlyPicked = Object.prototype.hasOwnProperty.call(pickState, playerId)
+    if (currentlyPicked) {
+      const { error } = await supabase
+        .from('user_daily_picks')
+        .delete()
+        .eq('user_id', session.user.id)
+        .eq('pick_date', displayDate)
+        .eq('player_id', playerId)
+      if (error) setPickMsg(error.message)
+      else {
+        const next = { ...pickState }
+        delete next[playerId]
+        setPickState(next)
+      }
+      setPickBusy(null)
+      return
+    }
+
+    if (Object.keys(pickState).length >= 3) {
+      setPickBusy(null)
+      setPickMsg('You can target up to 3 players per day.')
+      return
+    }
+
+    const { error } = await supabase.from('user_daily_picks').insert({
+      user_id: session.user.id,
+      pick_date: displayDate,
+      player_id: playerId,
+    })
+    if (error) setPickMsg(error.message)
+    else setPickState((prev) => ({ ...prev, [playerId]: null }))
+    setPickBusy(null)
+  }
+
   return (
     <div className="pg">
       <h1 className="pg-title">Dugout</h1>
@@ -102,6 +183,11 @@ export default function DugoutPage() {
       {!hasSubscription ? (
         <p className="pg-sub">Free preview: one random game. Subscribe to unlock full slate.</p>
       ) : null}
+      {session ? (
+        <p className="pg-sub">Targets used: {Object.keys(pickState).length}/3 {pickMsg ? `— ${pickMsg}` : ''}</p>
+      ) : (
+        <p className="pg-sub">Sign in to select up to 3 daily targets.</p>
+      )}
       {loading ? (
         <div className="lb-skel">
           {Array.from({ length: 8 }).map((_, i) => (
@@ -121,6 +207,8 @@ export default function DugoutPage() {
                 {visibleGames.map((g) => {
                   const awayTop = topByTeam.get(g.awayTeam)
                   const homeTop = topByTeam.get(g.homeTeam)
+                  const awayPalette = paletteForTeam(awayTop?.team ?? g.awayTeam)
+                  const homePalette = paletteForTeam(homeTop?.team ?? g.homeTeam)
                   const isExpanded = expandedGameId === g.gameId
                   return (
                     <div
@@ -142,36 +230,61 @@ export default function DugoutPage() {
                         <div className="pg-batterRow">
                           <div className="pg-batterCol pg-batterCol--left">
                             <div className="pg-batterTop">
-                              <span className="pg-avatar" aria-hidden="true">
+                              <span
+                                className="pg-avatar"
+                                aria-hidden="true"
+                                style={{
+                                  background: `linear-gradient(140deg, ${awayPalette.primary}, ${awayPalette.secondary})`,
+                                  color: awayPalette.bg,
+                                }}
+                              >
                                 {initials(awayTop?.name)}
                               </span>
                               <Link
                                 className="pg-link pg-teamLink"
                                 to={toProjections({ date: displayDate, team: g.awayTeam })}
+                                style={{ color: awayPalette.primary }}
                               >
                                 {g.awayTeam}
                               </Link>
                             </div>
                             <div>
                               {awayTop ? (
-                                <Link
-                                  className="pg-link pg-playerLink"
-                                  to={toProjections({
-                                    date: displayDate,
-                                    team: g.awayTeam,
-                                    player: awayTop.playerId,
-                                  })}
-                                >
-                                  {awayTop.name}
-                                </Link>
+                                <div className="pg-pickPlayerRow">
+                                  <button
+                                    type="button"
+                                    className={`pg-targetBtn ${Object.prototype.hasOwnProperty.call(pickState, awayTop.playerId) ? 'is-selected' : ''}`}
+                                    disabled={pickBusy === awayTop.playerId}
+                                    onClick={() => void togglePick(awayTop.playerId)}
+                                  >
+                                    🎯
+                                  </button>
+                                  <Link
+                                    className="pg-link pg-playerLink"
+                                    to={toProjections({
+                                      date: displayDate,
+                                      team: g.awayTeam,
+                                      player: awayTop.playerId,
+                                    })}
+                                  >
+                                    {awayTop.name}
+                                  </Link>
+                                </div>
                               ) : (
                                 <span className="pg-gamePick--muted">—</span>
                               )}
                             </div>
                             <div className="pg-batterProb">
-                              {awayTop ? formatProbability(awayTop.hrProbability) : '—'}
+                              <span style={{ color: awayPalette.primary }}>
+                                {awayTop ? formatProbability(awayTop.hrProbability) : '—'}
+                              </span>
                               {awayTop?.americanOddsStr ? (
                                 <span className="pg-batterOdds">{awayTop.americanOddsStr}</span>
+                              ) : null}
+                              {awayTop && Object.prototype.hasOwnProperty.call(pickState, awayTop.playerId) ? (
+                                <span className={`pg-pickState ${String(pickState[awayTop.playerId] ?? 'pending')}`}>
+                                  {pickStatusLabel(pickState[awayTop.playerId])}
+                                </span>
                               ) : null}
                             </div>
                           </div>
@@ -180,33 +293,58 @@ export default function DugoutPage() {
                               <Link
                                 className="pg-link pg-teamLink"
                                 to={toProjections({ date: displayDate, team: g.homeTeam })}
+                                style={{ color: homePalette.primary }}
                               >
                                 {g.homeTeam}
                               </Link>
-                              <span className="pg-avatar" aria-hidden="true">
+                              <span
+                                className="pg-avatar"
+                                aria-hidden="true"
+                                style={{
+                                  background: `linear-gradient(140deg, ${homePalette.primary}, ${homePalette.secondary})`,
+                                  color: homePalette.bg,
+                                }}
+                              >
                                 {initials(homeTop?.name)}
                               </span>
                             </div>
                             <div>
                               {homeTop ? (
-                                <Link
-                                  className="pg-link pg-playerLink"
-                                  to={toProjections({
-                                    date: displayDate,
-                                    team: g.homeTeam,
-                                    player: homeTop.playerId,
-                                  })}
-                                >
-                                  {homeTop.name}
-                                </Link>
+                                <div className="pg-pickPlayerRow pg-pickPlayerRow--right">
+                                  <Link
+                                    className="pg-link pg-playerLink"
+                                    to={toProjections({
+                                      date: displayDate,
+                                      team: g.homeTeam,
+                                      player: homeTop.playerId,
+                                    })}
+                                  >
+                                    {homeTop.name}
+                                  </Link>
+                                  <button
+                                    type="button"
+                                    className={`pg-targetBtn ${Object.prototype.hasOwnProperty.call(pickState, homeTop.playerId) ? 'is-selected' : ''}`}
+                                    disabled={pickBusy === homeTop.playerId}
+                                    onClick={() => void togglePick(homeTop.playerId)}
+                                  >
+                                    🎯
+                                  </button>
+                                </div>
                               ) : (
                                 <span className="pg-gamePick--muted">—</span>
                               )}
                             </div>
                             <div className="pg-batterProb">
-                              {homeTop ? formatProbability(homeTop.hrProbability) : '—'}
+                              <span style={{ color: homePalette.primary }}>
+                                {homeTop ? formatProbability(homeTop.hrProbability) : '—'}
+                              </span>
                               {homeTop?.americanOddsStr ? (
                                 <span className="pg-batterOdds">{homeTop.americanOddsStr}</span>
+                              ) : null}
+                              {homeTop && Object.prototype.hasOwnProperty.call(pickState, homeTop.playerId) ? (
+                                <span className={`pg-pickState ${String(pickState[homeTop.playerId] ?? 'pending')}`}>
+                                  {pickStatusLabel(pickState[homeTop.playerId])}
+                                </span>
                               ) : null}
                             </div>
                           </div>

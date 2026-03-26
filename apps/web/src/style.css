@@ -182,7 +182,7 @@ body,
   height: 62px;
   flex-shrink: 0;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   align-items: center;
   background: linear-gradient(
     to top,
@@ -204,7 +204,7 @@ body,
   text-decoration: none;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 800;
   transition: color 0.2s ease;
 }
@@ -889,6 +889,127 @@ body,
   margin-bottom: 8px;
 }
 
+.pg-nameRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pg-playerSelect {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: 800;
+  font-size: 1rem;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pg-playerSelect:hover {
+  color: var(--color-primary);
+}
+
+.pg-targetBtn {
+  border: 1px solid color-mix(in srgb, var(--color-secondary) 32%, transparent);
+  background: color-mix(in srgb, var(--color-surface) 65%, transparent);
+  color: color-mix(in srgb, var(--color-muted) 90%, black);
+  width: 26px;
+  height: 26px;
+  border-radius: 999px;
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.12s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.pg-targetBtn:hover {
+  transform: translateY(-1px);
+}
+
+.pg-targetBtn.is-selected {
+  color: color-mix(in srgb, var(--color-primary) 90%, white);
+  border-color: color-mix(in srgb, var(--color-primary) 75%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-primary) 32%, transparent);
+}
+
+.pg-pickState {
+  display: inline-block;
+  margin-top: 2px;
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.05em;
+}
+
+.pg-pickState.pending {
+  color: color-mix(in srgb, var(--color-secondary) 80%, var(--color-text));
+}
+
+.pg-pickState.true {
+  color: #2fd979;
+}
+
+.pg-pickState.false {
+  color: #ff6e6e;
+}
+
+.pg-pickPlayerRow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.pg-pickPlayerRow--right {
+  justify-content: flex-end;
+}
+
+.pg-modalBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.56);
+  display: grid;
+  place-items: center;
+  z-index: 90;
+}
+
+.pg-modal {
+  width: min(640px, 94vw);
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 38%, transparent);
+  background: color-mix(in srgb, var(--color-surface) 88%, #0c0f16);
+  padding: 14px;
+}
+
+.pg-modalHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.pg-matchupGrid {
+  margin-top: 8px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.pg-matchupName {
+  font-size: 1rem;
+  font-weight: 800;
+}
+
+.pg-matchStat {
+  border: 1px solid color-mix(in srgb, var(--color-secondary) 20%, transparent);
+  border-radius: 8px;
+  padding: 7px;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
 .acc-toggleLabel {
   display: flex;
   align-items: center;
@@ -900,6 +1021,45 @@ body,
   accent-color: var(--color-primary);
   width: 16px;
   height: 16px;
+}
+
+.acc-switchRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.acc-iosSwitch {
+  width: 46px;
+  height: 28px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--color-secondary) 28%, transparent);
+  background: color-mix(in srgb, var(--color-surface) 75%, #0a0f1a);
+  padding: 2px;
+  display: inline-flex;
+  align-items: center;
+  transition: background 0.2s ease, border-color 0.2s ease;
+  cursor: pointer;
+}
+
+.acc-iosSwitch.is-on {
+  background: color-mix(in srgb, var(--color-primary) 72%, #1ed760);
+  border-color: color-mix(in srgb, var(--color-primary) 88%, transparent);
+}
+
+.acc-iosKnob {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.25);
+  transform: translateX(0);
+  transition: transform 0.2s ease;
+}
+
+.acc-iosSwitch.is-on .acc-iosKnob {
+  transform: translateX(18px);
 }
 
 .wl-addRow {

@@ -93,7 +93,8 @@ async function pollGamePlays(bdlGameId: number, lastOrder: number): Promise<numb
 
     // Validate user picks if we have a cross-referenced stat_player_id
     if (statId) {
-      await validatePicksForHr(statId, today)
+      const pickedUsers = await validatePicksForHr(statId, today)
+      await notifyLeagueHr(statId, pickedUsers)
     }
   }
 
@@ -102,7 +103,7 @@ async function pollGamePlays(bdlGameId: number, lastOrder: number): Promise<numb
 
 /* ─── Pick validation ─────────────────────────────────────────────── */
 
-async function validatePicksForHr(statPlayerId: string, dateIso: string) {
+async function validatePicksForHr(statPlayerId: string, dateIso: string): Promise<string[]> {
   const sb = getServiceClient()
 
   // Find all user picks for this player today that haven't been marked yet
@@ -113,7 +114,7 @@ async function validatePicksForHr(statPlayerId: string, dateIso: string) {
     .eq('pick_date', dateIso)
     .is('hit', null)
 
-  if (error || !picks?.length) return
+  if (error || !picks?.length) return []
 
   console.log(`[LIVE] marking ${picks.length} pick(s) as HIT for ${statPlayerId}`)
 
@@ -125,12 +126,17 @@ async function validatePicksForHr(statPlayerId: string, dateIso: string) {
 
   // Send notifications to users who have hr_notifications enabled
   const userIds = [...new Set(picks.map((p: { user_id: string }) => p.user_id))]
-  await sendHrNotifications(userIds, statPlayerId)
+  await sendHrNotifications(userIds, statPlayerId, 'pick')
+  return userIds
 }
 
 /* ─── Notification dispatch ───────────────────────────────────────── */
 
-async function sendHrNotifications(userIds: string[], statPlayerId: string) {
+async function sendHrNotifications(
+  userIds: string[],
+  statPlayerId: string,
+  mode: 'pick' | 'league',
+) {
   const sb = getServiceClient()
 
   // Get player name
@@ -141,12 +147,15 @@ async function sendHrNotifications(userIds: string[], statPlayerId: string) {
     .maybeSingle()
   const playerName = (player as { name: string } | null)?.name ?? 'A player'
 
-  // Filter to users who have notifications enabled
-  const { data: settings } = await sb
+  // Filter to users who have this notification type enabled
+  const settingsQuery = sb
     .from('user_settings')
     .select('user_id')
     .in('user_id', userIds)
-    .eq('hr_notifications', true)
+  const { data: settings } =
+    mode === 'pick'
+      ? await settingsQuery.eq('hr_notifications', true)
+      : await settingsQuery.eq('hr_notifications_league', true)
 
   if (!settings?.length) return
 
@@ -166,7 +175,10 @@ async function sendHrNotifications(userIds: string[], statPlayerId: string) {
   const messages = tokens.map((t: { expo_push_token: string }) => ({
     to: t.expo_push_token,
     title: 'Home Run! ⚾',
-    body: `${playerName} just hit a home run! Your pick was correct.`,
+    body:
+      mode === 'pick'
+        ? `${playerName} just hit a home run! Your pick was correct.`
+        : `${playerName} just hit a home run.`,
     sound: 'default',
   }))
 
@@ -180,6 +192,18 @@ async function sendHrNotifications(userIds: string[], statPlayerId: string) {
   } catch (e) {
     console.error('[LIVE] push send failed:', e)
   }
+}
+
+async function notifyLeagueHr(statPlayerId: string, excludeUserIds: string[]) {
+  const sb = getServiceClient()
+  const { data: settings } = await sb
+    .from('user_settings')
+    .select('user_id')
+    .eq('hr_notifications_league', true)
+  const allLeagueUsers = (settings ?? []).map((s: { user_id: string }) => s.user_id)
+  const leagueOnly = allLeagueUsers.filter((id) => !excludeUserIds.includes(id))
+  if (!leagueOnly.length) return
+  await sendHrNotifications(leagueOnly, statPlayerId, 'league')
 }
 
 /* ─── Mark remaining picks as misses after game ends ──────────────── */

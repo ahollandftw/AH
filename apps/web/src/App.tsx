@@ -7,6 +7,8 @@ import DugoutPage from './pages/DugoutPage.tsx'
 import ProjectionsPage from './pages/ProjectionsPage.tsx'
 import AccountPage from './pages/AccountPage.tsx'
 import CommunityLeaderboardPage from './pages/CommunityLeaderboardPage.tsx'
+import FriendsPage from './pages/FriendsPage.tsx'
+import HelpPage from './pages/HelpPage.tsx'
 import appLogo from '../../../data/logo.svg'
 import './leaderboard.css'
 
@@ -20,6 +22,8 @@ function Layout() {
     ['/projections', 'Projections', '📈'],
     ['/stats', 'Stats', '📊'],
     ['/community', 'Leaderboard', '🏆'],
+    ['/friends', 'Friends', '👥'],
+    ['/help', 'Help', '❓'],
   ] as const
   useEffect(() => {
     if (!supabase || !session?.user.id) {
@@ -106,6 +110,8 @@ export default function App() {
             <Route path="/projections" element={<ProjectionsPage />} />
             <Route path="/stats" element={<LeaderboardPage />} />
             <Route path="/community" element={<CommunityLeaderboardPage />} />
+            <Route path="/friends" element={<FriendsPage />} />
+            <Route path="/help" element={<HelpPage />} />
             <Route path="/account" element={<AccountPage />} />
             <Route path="/watchlist" element={<Navigate to="/account" replace />} />
             <Route path="/leaderboard" element={<Navigate to="/community" replace />} />

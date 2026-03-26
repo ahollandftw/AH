@@ -36,11 +36,17 @@ function tierBadgeBg(k: string): string {
 
 export default function ProjectionsPage() {
   const [searchParams, setSearchParams] = useSearchParams()
-  const { supabase, hasSubscription } = useWebAuth()
+  const { supabase, hasSubscription, session } = useWebAuth()
   const [loading, setLoading] = useState(true)
   const [rows, setRows] = useState<DailyProjection[]>([])
   const [games, setGames] = useState<ScheduleGame[]>([])
   const [availableDates, setAvailableDates] = useState<string[]>([])
+  const [pickState, setPickState] = useState<Record<string, boolean | null>>({})
+  const [pickBusy, setPickBusy] = useState<string | null>(null)
+  const [pickMsg, setPickMsg] = useState('')
+  const [matchupLoading, setMatchupLoading] = useState(false)
+  const [matchupFor, setMatchupFor] = useState<DailyProjection | null>(null)
+  const [matchupData, setMatchupData] = useState<any>(null)
   const [displayDate, setDisplayDate] = useState(
     searchParams.get('date') ?? getAppDisplayDateIso(),
   )
@@ -104,6 +110,116 @@ export default function ProjectionsPage() {
     [filteredRows],
   )
 
+  const selectedCount = useMemo(
+    () => Object.values(pickState).filter((v) => v != null).length,
+    [pickState],
+  )
+
+  function parseOpponentTeam(r: DailyProjection): string | null {
+    const txt = (r.opponent ?? '').trim()
+    if (!txt) return null
+    const m = txt.match(/(?:vs|@)\s+([A-Za-z]{2,4})/i)
+    return m?.[1]?.toUpperCase() ?? null
+  }
+
+  function pickStatusLabel(v: boolean | null | undefined): string {
+    if (v === true) return 'HIT'
+    if (v === false) return 'MISS'
+    if (v === null) return 'PENDING'
+    return ''
+  }
+
+  async function loadPicks() {
+    if (!supabase || !session?.user.id) {
+      setPickState({})
+      return
+    }
+    const { data } = await supabase
+      .from('user_daily_picks')
+      .select('player_id,hit')
+      .eq('user_id', session.user.id)
+      .eq('pick_date', displayDate)
+    const next: Record<string, boolean | null> = {}
+    for (const r of (data ?? []) as Array<{ player_id: string; hit: boolean | null }>) {
+      next[String(r.player_id)] = r.hit
+    }
+    setPickState(next)
+  }
+
+  useEffect(() => {
+    void loadPicks()
+  }, [displayDate, session?.user.id, supabase])
+
+  useEffect(() => {
+    if (!supabase || !session?.user.id) return
+    const id = setInterval(() => void loadPicks(), 30000)
+    return () => clearInterval(id)
+  }, [displayDate, session?.user.id, supabase])
+
+  async function togglePick(playerId: string) {
+    if (!supabase || !session?.user.id) {
+      setPickMsg('Sign in to use targets.')
+      return
+    }
+    if (pickBusy) return
+    setPickMsg('')
+    setPickBusy(playerId)
+
+    const currentlyPicked = Object.prototype.hasOwnProperty.call(pickState, playerId)
+    if (currentlyPicked) {
+      const { error } = await supabase
+        .from('user_daily_picks')
+        .delete()
+        .eq('user_id', session.user.id)
+        .eq('pick_date', displayDate)
+        .eq('player_id', playerId)
+      if (error) setPickMsg(error.message)
+      else {
+        const next = { ...pickState }
+        delete next[playerId]
+        setPickState(next)
+      }
+      setPickBusy(null)
+      return
+    }
+
+    const count = Object.keys(pickState).length
+    if (count >= 3) {
+      setPickBusy(null)
+      setPickMsg('You can target up to 3 players per day.')
+      return
+    }
+
+    const { error } = await supabase.from('user_daily_picks').insert({
+      user_id: session.user.id,
+      pick_date: displayDate,
+      player_id: playerId,
+    })
+    if (error) setPickMsg(error.message)
+    else setPickState((prev) => ({ ...prev, [playerId]: null }))
+    setPickBusy(null)
+  }
+
+  async function openMatchup(r: DailyProjection) {
+    setMatchupFor(r)
+    setMatchupData(null)
+    const opponentTeam = parseOpponentTeam(r)
+    if (!opponentTeam) return
+    setMatchupLoading(true)
+    try {
+      const base = import.meta.env.VITE_API_BASE_URL ?? ''
+      const res = await fetch(
+        `${base}/bdl/matchup-card?player_id=${encodeURIComponent(r.playerId)}&opponent_team=${encodeURIComponent(opponentTeam)}`,
+      )
+      const payload = await res.json()
+      setMatchupData(payload?.data ?? null)
+    } catch {
+      setMatchupData(null)
+    } finally {
+      setMatchupLoading(false)
+    }
+  }
+
   return (
     <div className="pg">
       <h1 className="pg-title">Projections</h1>
@@ -150,6 +266,11 @@ export default function ProjectionsPage() {
       {!hasSubscription ? (
         <p className="pg-sub">Free preview: one random game. Subscribe to unlock full projections.</p>
       ) : null}
+      {session ? (
+        <p className="pg-sub">Targets used: {selectedCount}/3 {pickMsg ? `— ${pickMsg}` : ''}</p>
+      ) : (
+        <p className="pg-sub">Sign in to select up to 3 daily targets.</p>
+      )}
       {(selectedTeam || selectedPlayer) && (
         <div className="pg-focusCard">
           {selectedTeam ? <div className="pg-focusLine">Team filter: {selectedTeam}</div> : null}
@@ -182,7 +303,24 @@ export default function ProjectionsPage() {
               {s.data.map((r) => (
                 <div key={r.playerId} className="pg-card">
                   <div className="pg-info">
-                    <span className="pg-name">{r.name}</span>
+                    <div className="pg-nameRow">
+                      <button
+                        type="button"
+                        className={`pg-targetBtn ${Object.prototype.hasOwnProperty.call(pickState, r.playerId) ? 'is-selected' : ''}`}
+                        title="Toggle target pick"
+                        disabled={pickBusy === r.playerId}
+                        onClick={() => void togglePick(r.playerId)}
+                      >
+                        🎯
+                      </button>
+                      <button
+                        type="button"
+                        className="pg-playerSelect"
+                        onClick={() => void openMatchup(r)}
+                      >
+                        {r.name}
+                      </button>
+                    </div>
                     <span className="pg-meta">
                       {(r.team ?? '—').toUpperCase()} &bull; {(r.position ?? '—').toUpperCase()}
                     </span>
@@ -215,6 +353,11 @@ export default function ProjectionsPage() {
                     {r.l7Hrs != null ? (
                       <span className="pg-small">L7 HRs: {r.l7Hrs}</span>
                     ) : null}
+                    {Object.prototype.hasOwnProperty.call(pickState, r.playerId) ? (
+                      <span className={`pg-pickState ${String(pickState[r.playerId] ?? 'pending')}`}>
+                        {pickStatusLabel(pickState[r.playerId])}
+                      </span>
+                    ) : null}
                   </div>
                 </div>
               ))}
@@ -222,6 +365,41 @@ export default function ProjectionsPage() {
           </div>
         ))
       )}
+      {matchupFor ? (
+        <div className="pg-modalBackdrop" onClick={() => setMatchupFor(null)}>
+          <div className="pg-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="pg-modalHead">
+              <h3>Matchup Comparison</h3>
+              <button type="button" className="pg-clearBtn" onClick={() => setMatchupFor(null)}>Close</button>
+            </div>
+            <p className="pg-sub">{matchupFor.name} {matchupFor.opponent ?? ''}</p>
+            {matchupLoading ? (
+              <p className="pg-sub">Loading matchup...</p>
+            ) : matchupData ? (
+              <div className="pg-matchupGrid">
+                <div>
+                  <div className="pg-label">Pitcher</div>
+                  <div className="pg-matchupName">{matchupData.pitcher_name ?? 'Unknown'}</div>
+                  <div className="pg-small">Team: {matchupData.opponent_team}</div>
+                </div>
+                <div>
+                  <div className="pg-label">Batter</div>
+                  <div className="pg-matchupName">{matchupData.batter_name}</div>
+                  <div className="pg-small">AB: {matchupData.sample_ab ?? 0}</div>
+                </div>
+                <div className="pg-matchStat">AVG: {matchupData.avg ?? '—'}</div>
+                <div className="pg-matchStat">SLG: {matchupData.slg ?? '—'}</div>
+                <div className="pg-matchStat">OPS: {matchupData.ops ?? '—'}</div>
+                <div className="pg-matchStat">HR: {matchupData.hr ?? 0}</div>
+                <div className="pg-matchStat">H: {matchupData.h ?? 0}</div>
+                <div className="pg-matchStat">K: {matchupData.k ?? 0}</div>
+              </div>
+            ) : (
+              <p className="pg-sub">No stored batter-vs-pitcher matchup data yet for this opponent.</p>
+            )}
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

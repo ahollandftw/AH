@@ -103,6 +103,8 @@ alter table public.user_settings
   add column if not exists default_sportsbook text not null default 'draftkings';
 alter table public.user_settings
   add column if not exists hr_notifications boolean not null default true;
+alter table public.user_settings
+  add column if not exists hr_notifications_league boolean not null default false;
 
 -- ─── Add hit tracking to daily picks (safe if table doesn't exist yet) ──
 do $$
