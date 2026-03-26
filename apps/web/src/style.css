@@ -1223,7 +1223,17 @@ body,
   height: 18px;
   object-fit: contain;
   display: block;
-  filter: drop-shadow(0 1px 0 rgba(0, 0, 0, 0.35));
+  filter: brightness(0) invert(1) drop-shadow(0 1px 0 rgba(0, 0, 0, 0.35));
+}
+
+.pg-scoringPlayHrIcon--left {
+  transform: scaleX(-1);
+}
+
+.pg-scoringPlaysTitle {
+  color: #ff4b4b;
+  font-weight: 900;
+  letter-spacing: 0.05em;
 }
 
 .pg-scoringPlayText {
@@ -1238,6 +1248,79 @@ body,
   font-size: 0.7rem;
   font-weight: 600;
   text-transform: uppercase;
+}
+
+/* ── Dugout projected lineups ───────────────────────────── */
+.pg-lineupGrid {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.pg-lineupTeam {
+  flex: 1;
+  min-width: 0;
+}
+
+.pg-lineupTeamTitle {
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.68rem;
+  color: color-mix(in srgb, var(--color-primary) 55%, var(--color-secondary));
+  margin-bottom: 8px;
+}
+
+.pg-lineupRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--color-secondary) 18%, transparent);
+  border-radius: 10px;
+  margin-bottom: 6px;
+}
+
+.pg-lineupOrder {
+  width: 36px;
+  flex-shrink: 0;
+  font-weight: 900;
+  color: var(--color-primary);
+  text-align: left;
+  font-size: 0.78rem;
+}
+
+.pg-lineupPos {
+  width: 52px;
+  flex-shrink: 0;
+  font-weight: 900;
+  font-size: 0.76rem;
+  color: color-mix(in srgb, var(--color-secondary) 65%, var(--color-text));
+  text-transform: uppercase;
+}
+
+.pg-lineupName {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--color-text);
+  font-weight: 800;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pg-lineupProj {
+  width: 80px;
+  flex-shrink: 0;
+  text-align: right;
+  font-weight: 900;
+  color: color-mix(in srgb, var(--color-primary) 65%, var(--color-secondary));
+  font-size: 0.78rem;
 }
 
 .acc-toggleLabel {

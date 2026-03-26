@@ -11,7 +11,8 @@ import {
 } from '@kinetic/shared'
 import { useWebAuth } from '../auth/WebAuthProvider.tsx'
 import { normalizeTeamCode, paletteForTeam } from '../theme/teamPalette'
-import hrIcon from '../../../../data/icons8-home-run-96.png'
+import hrIcon96 from '../../../../data/icons8-home-run-96.png'
+import hrIcon64 from '../../../../data/icons8-home-run-64.png'
 
 export default function DugoutPage() {
   const { supabase, hasSubscription, session } = useWebAuth()
@@ -461,7 +462,7 @@ export default function DugoutPage() {
                                 </div>
                               )
                             })()}
-                            <div className="pg-label" style={{ marginTop: 10 }}>Scoring Plays</div>
+                            <div className="pg-label pg-scoringPlaysTitle" style={{ marginTop: 10 }}>Scoring Plays</div>
                             {(() => {
                               const playsAll = Array.isArray(live?.scoring_summary) ? [...live.scoring_summary].reverse() : []
                               const isHr = (txt: string) => /home run|homer|grand slam/i.test(txt)
@@ -512,10 +513,24 @@ export default function DugoutPage() {
                                         : n
                                           ? toOrdinal(n)
                                           : (inningRaw || periodRaw)
+                                    const lower = txt.toLowerCase()
+                                    const dir =
+                                      /left center|to left|left field|left-only|left-center|left/.test(lower)
+                                        ? 'left'
+                                        : /right center|to right|right field|right-only|right-center|right/.test(lower)
+                                          ? 'right'
+                                          : /center field|to center|center/.test(lower)
+                                            ? 'center'
+                                            : 'center'
+
+                                    const iconSrc = dir === 'center' ? hrIcon64 : hrIcon96
+                                    const iconClass =
+                                      dir === 'left' ? 'pg-scoringPlayHrIcon pg-scoringPlayHrIcon--left' : 'pg-scoringPlayHrIcon'
+
                                     return (
                                       <div key={i} className="pg-scoringPlay pg-scoringPlay--hr">
                                         <span className="pg-scoringPlayIcon" aria-hidden="true">
-                                          <img className="pg-scoringPlayHrIcon" src={hrIcon} alt="" />
+                                          <img className={iconClass} src={iconSrc} alt="" />
                                         </span>
                                         <span className="pg-scoringPlayText">{txt}</span>
                                         <span className="pg-scoringPlayInning">{inningLabel}</span>
@@ -669,21 +684,96 @@ export default function DugoutPage() {
                                 {g.homeTeam}: {awayTop?.opponentPitcher ? `${awayTop.opponentPitcher}${awayTop.opponentPitcherHand ? ` (${awayTop.opponentPitcherHand})` : ''}` : '—'}
                               </span>
                             </div>
-                            {!gameStarted && (awayTop || homeTop) ? (
-                              <>
-                                <div className="pg-gameLine">
-                                  <span className="pg-gameLabel">Top projected</span>
-                                  <span className="pg-gameValue">
-                                    {g.awayTeam}: {awayTop?.name ?? '—'} {awayTop?.hrProbability != null ? `(${formatProbability(awayTop.hrProbability)})` : ''}
-                                  </span>
-                                </div>
-                                <div className="pg-gameLine">
-                                  <span className="pg-gameLabel"></span>
-                                  <span className="pg-gameValue">
-                                    {g.homeTeam}: {homeTop?.name ?? '—'} {homeTop?.hrProbability != null ? `(${formatProbability(homeTop.hrProbability)})` : ''}
-                                  </span>
-                                </div>
-                              </>
+                            {!gameStarted ? (
+                              (() => {
+                                const awayKey = normalizeTeamCode(g.awayTeam) ?? g.awayTeam
+                                const homeKey = normalizeTeamCode(g.homeTeam) ?? g.homeTeam
+                                const toTeamKey = (t: string | null | undefined) => normalizeTeamCode(t ?? '') ?? t ?? ''
+
+                                const awayLineup = rows
+                                  .filter((p) => toTeamKey(p.team) === awayKey)
+                                  .slice()
+                                  .sort((a, b) => (b.hrProbability ?? -1) - (a.hrProbability ?? -1))
+
+                                const homeLineup = rows
+                                  .filter((p) => toTeamKey(p.team) === homeKey)
+                                  .slice()
+                                  .sort((a, b) => (b.hrProbability ?? -1) - (a.hrProbability ?? -1))
+
+                                const ordinal = (n: number) => {
+                                  if (n === 1) return '1st'
+                                  if (n === 2) return '2nd'
+                                  if (n === 3) return '3rd'
+                                  return `${n}th`
+                                }
+
+                                if (!awayLineup.length && !homeLineup.length) {
+                                  return <div className="pg-sub">Projected lineup not available for this game.</div>
+                                }
+
+                                return (
+                                  <>
+                                    <div className="pg-lineupGrid">
+                                      <div className="pg-lineupTeam">
+                                        <div className="pg-lineupTeamTitle">{g.awayTeam}</div>
+                                        {awayLineup.map((p, idx) => {
+                                          const hasPick = Object.prototype.hasOwnProperty.call(pickState, p.playerId)
+                                          return (
+                                            <div key={p.playerId} className="pg-lineupRow">
+                                              <span className="pg-lineupOrder">{ordinal(idx + 1)}</span>
+                                              <span className="pg-lineupPos">{String(p.position ?? '—').toUpperCase()}</span>
+                                              <button
+                                                type="button"
+                                                className="pg-lineupName"
+                                                onClick={() => void openMatchup(p)}
+                                              >
+                                                {p.name}
+                                              </button>
+                                              <span className="pg-lineupProj">{formatProbability(p.hrProbability)}</span>
+                                              <button
+                                                type="button"
+                                                className={`pg-targetBtn ${hasPick ? 'is-selected' : ''}`}
+                                                disabled={pickBusy === p.playerId}
+                                                onClick={() => void togglePick(p.playerId)}
+                                              >
+                                                🎯
+                                              </button>
+                                            </div>
+                                          )
+                                        })}
+                                      </div>
+                                      <div className="pg-lineupTeam">
+                                        <div className="pg-lineupTeamTitle">{g.homeTeam}</div>
+                                        {homeLineup.map((p, idx) => {
+                                          const hasPick = Object.prototype.hasOwnProperty.call(pickState, p.playerId)
+                                          return (
+                                            <div key={p.playerId} className="pg-lineupRow">
+                                              <span className="pg-lineupOrder">{ordinal(idx + 1)}</span>
+                                              <span className="pg-lineupPos">{String(p.position ?? '—').toUpperCase()}</span>
+                                              <button
+                                                type="button"
+                                                className="pg-lineupName"
+                                                onClick={() => void openMatchup(p)}
+                                              >
+                                                {p.name}
+                                              </button>
+                                              <span className="pg-lineupProj">{formatProbability(p.hrProbability)}</span>
+                                              <button
+                                                type="button"
+                                                className={`pg-targetBtn ${hasPick ? 'is-selected' : ''}`}
+                                                disabled={pickBusy === p.playerId}
+                                                onClick={() => void togglePick(p.playerId)}
+                                              >
+                                                🎯
+                                              </button>
+                                            </div>
+                                          )
+                                        })}
+                                      </div>
+                                    </div>
+                                  </>
+                                )
+                              })()
                             ) : null}
                             <div className="pg-gameLine">
                               <span className="pg-gameLabel">Projections</span>
