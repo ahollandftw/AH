@@ -375,29 +375,50 @@ export default function DugoutPage() {
                         </div>
                         {gameStarted ? (
                           <div className="pg-gameRows">
-                            <div className="pg-gameLine">
-                              <span className="pg-gameLabel">Scoreboard (R / H / E)</span>
-                              <span className="pg-gameValue" style={{ textAlign: 'left' }}>
-                                {g.awayTeam}: {live?.away_score ?? 0} / {live?.away_hits ?? 0} / {live?.away_errors ?? 0}
-                                <br />
-                                {g.homeTeam}: {live?.home_score ?? 0} / {live?.home_hits ?? 0} / {live?.home_errors ?? 0}
-                              </span>
-                            </div>
-                            <div className="pg-gameLine">
-                              <span className="pg-gameLabel">Scoring plays</span>
-                              <span className="pg-gameValue" style={{ textAlign: 'left' }}>
-                                {(Array.isArray(live?.scoring_summary) ? live.scoring_summary : []).length === 0
-                                  ? 'No scoring plays listed yet.'
-                                  : (live.scoring_summary as any[])
-                                      .map((p: any) => {
-                                        const txt = String(p?.play ?? '')
-                                        const hr = /home run|homer|grand slam/i.test(txt)
-                                        return `${hr ? '🏠⚾' : '⚾'} ${txt} (${p?.inning ?? ''})`
-                                      })
-                                      .slice(-6)
-                                      .join(' | ')}
-                              </span>
-                            </div>
+                            <table className="pg-scoreboard">
+                              <thead>
+                                <tr>
+                                  <th style={{ textAlign: 'left' }}>Team</th>
+                                  <th>R</th>
+                                  <th>H</th>
+                                  <th>E</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                <tr>
+                                  <td>{g.awayTeam}</td>
+                                  <td>{live?.away_score ?? 0}</td>
+                                  <td>{live?.away_hits ?? 0}</td>
+                                  <td>{live?.away_errors ?? 0}</td>
+                                </tr>
+                                <tr>
+                                  <td>{g.homeTeam}</td>
+                                  <td>{live?.home_score ?? 0}</td>
+                                  <td>{live?.home_hits ?? 0}</td>
+                                  <td>{live?.home_errors ?? 0}</td>
+                                </tr>
+                              </tbody>
+                            </table>
+                            <div className="pg-label" style={{ marginTop: 10 }}>Scoring Plays</div>
+                            {(() => {
+                              const plays = Array.isArray(live?.scoring_summary) ? [...live.scoring_summary].reverse() : []
+                              if (!plays.length) return <div className="pg-sub">No scoring plays yet.</div>
+                              return (
+                                <div className="pg-scoringPlays">
+                                  {plays.map((p: any, i: number) => {
+                                    const txt = String(p?.play ?? '')
+                                    const hr = /home run|homer|grand slam/i.test(txt)
+                                    return (
+                                      <div key={i} className={`pg-scoringPlay ${hr ? 'pg-scoringPlay--hr' : ''}`}>
+                                        <span className="pg-scoringPlayIcon">{hr ? '🏠⚾' : '⚾'}</span>
+                                        <span className="pg-scoringPlayText">{txt}</span>
+                                        <span className="pg-scoringPlayInning">{p?.inning ?? ''}</span>
+                                      </div>
+                                    )
+                                  })}
+                                </div>
+                              )
+                            })()}
                           </div>
                         ) : (
                         <div className="pg-batterRow">
@@ -589,13 +610,13 @@ export default function DugoutPage() {
                 {matchupData?.sample_ab ? (
                   <div style={{ marginTop: 10 }}>
                     <div className="pg-label">Batter vs Pitcher</div>
-                    <div className="pg-matchupGrid">
-                      <div className="pg-matchStat">AB: {matchupData.sample_ab}</div>
-                      <div className="pg-matchStat">H: {matchupData.h ?? 0}</div>
-                      <div className="pg-matchStat">HR: {matchupData.hr ?? 0}</div>
-                      <div className="pg-matchStat">K: {matchupData.k ?? 0}</div>
-                      <div className="pg-matchStat">AVG: {matchupData.avg ?? '—'}</div>
-                      <div className="pg-matchStat">OPS: {matchupData.ops ?? '—'}</div>
+                    <div className="pg-bvpRow">
+                      <span className="pg-bvpStat">AB: {matchupData.sample_ab}</span>
+                      <span className="pg-bvpStat">H: {matchupData.h ?? 0}</span>
+                      <span className="pg-bvpStat">HR: {matchupData.hr ?? 0}</span>
+                      <span className="pg-bvpStat">K: {matchupData.k ?? 0}</span>
+                      <span className="pg-bvpStat">AVG: {matchupData.avg ?? '—'}</span>
+                      <span className="pg-bvpStat">OPS: {matchupData.ops ?? '—'}</span>
                     </div>
                   </div>
                 ) : null}

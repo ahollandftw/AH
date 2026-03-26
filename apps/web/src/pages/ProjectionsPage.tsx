@@ -504,13 +504,13 @@ export default function ProjectionsPage() {
                 {matchupData?.sample_ab ? (
                   <div style={{ marginTop: 10 }}>
                     <div className="pg-label">Batter vs Pitcher</div>
-                    <div className="pg-matchupGrid">
-                      <div className="pg-matchStat">AB: {matchupData.sample_ab}</div>
-                      <div className="pg-matchStat">H: {matchupData.h ?? 0}</div>
-                      <div className="pg-matchStat">HR: {matchupData.hr ?? 0}</div>
-                      <div className="pg-matchStat">K: {matchupData.k ?? 0}</div>
-                      <div className="pg-matchStat">AVG: {matchupData.avg ?? '—'}</div>
-                      <div className="pg-matchStat">OPS: {matchupData.ops ?? '—'}</div>
+                    <div className="pg-bvpRow">
+                      <span className="pg-bvpStat">AB: {matchupData.sample_ab}</span>
+                      <span className="pg-bvpStat">H: {matchupData.h ?? 0}</span>
+                      <span className="pg-bvpStat">HR: {matchupData.hr ?? 0}</span>
+                      <span className="pg-bvpStat">K: {matchupData.k ?? 0}</span>
+                      <span className="pg-bvpStat">AVG: {matchupData.avg ?? '—'}</span>
+                      <span className="pg-bvpStat">OPS: {matchupData.ops ?? '—'}</span>
                     </div>
                   </div>
                 ) : null}
