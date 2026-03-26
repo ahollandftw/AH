@@ -1,5 +1,5 @@
 import { BrowserRouter, Link, Navigate, Outlet, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { WebAuthProvider } from './auth/WebAuthProvider.tsx'
 import { useWebAuth } from './auth/WebAuthProvider.tsx'
 import LeaderboardPage from './pages/LeaderboardPage.tsx'
@@ -19,6 +19,8 @@ function Layout() {
   const { session, supabase, waiverAccepted } = useWebAuth()
   const [profileName, setProfileName] = useState<string | null>(null)
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
+  const [menuOpen, setMenuOpen] = useState(false)
+  const menuRef = useRef<HTMLDivElement>(null)
   const fullLinks = [
     ['/dugout', 'Dugout', '⚾'],
     ['/projections', 'Projections', '📈'],
@@ -66,6 +68,15 @@ function Layout() {
     null
 
   useEffect(() => {
+    if (!menuOpen) return
+    const onClick = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onClick)
+    return () => document.removeEventListener('mousedown', onClick)
+  }, [menuOpen])
+
+  useEffect(() => {
     const el = document.querySelector('.mainScroll') as HTMLElement | null
     if (!el) return
     let startY = 0
@@ -107,19 +118,36 @@ function Layout() {
   return (
     <div className="appRoot">
       <header className="topBanner" role="banner" aria-label="AnalyticHustle header">
-        <div className="topBanner-side">
+        <div className="topBanner-side" ref={menuRef}>
           {!(session && !waiverAccepted) ? (
-            <select
-              className="acc-select"
-              value={pathname}
-              onChange={(e) => navigate(e.target.value)}
-              aria-label="Open app menu"
-              style={{ minWidth: 120, fontSize: '0.74rem', padding: '6px 8px' }}
-            >
-              {menuLinks.map(([to, label]) => (
-                <option key={to} value={to}>{label}</option>
-              ))}
-            </select>
+            <div className="appMenu">
+              <button
+                type="button"
+                className="appMenu-burger"
+                aria-label="Open menu"
+                onClick={() => setMenuOpen((v) => !v)}
+              >
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                  <line x1="3" y1="6" x2="21" y2="6" />
+                  <line x1="3" y1="12" x2="21" y2="12" />
+                  <line x1="3" y1="18" x2="21" y2="18" />
+                </svg>
+              </button>
+              {menuOpen ? (
+                <div className="appMenu-dropdown">
+                  {menuLinks.map(([to, label]) => (
+                    <button
+                      key={to}
+                      type="button"
+                      className={`appMenu-item ${pathname === to ? 'is-active' : ''}`}
+                      onClick={() => { navigate(to); setMenuOpen(false) }}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
           ) : null}
         </div>
         <Link to="/dugout" className="topBanner-logoLink" aria-label="Go to Dugout">

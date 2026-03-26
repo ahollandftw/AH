@@ -108,8 +108,9 @@ export type BdlGame = {
   postseason: boolean
   season_type: string
   date: string
-  home_team_data: { hits: number; runs: number; errors: number } | null
-  away_team_data: { hits: number; runs: number; errors: number } | null
+  home_team_data: { hits: number; runs: number; errors: number; inning_scores?: number[] } | null
+  away_team_data: { hits: number; runs: number; errors: number; inning_scores?: number[] } | null
+  period: number | null
   venue: string
   status: string
   scoring_summary?: {

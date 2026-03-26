@@ -311,8 +311,21 @@ export function registerBdlRoutes(app: Express) {
             .maybeSingle(),
         ]),
       ])
-      const batterHr = (batterStatsRes as any)?.[0]?.data?.hr_total ?? null
-      const batterEv = (batterStatsRes as any)?.[1]?.data ?? null
+      let batterHr = (batterStatsRes as any)?.[0]?.data?.hr_total ?? null
+      let batterEv = (batterStatsRes as any)?.[1]?.data ?? null
+      let usedSeason = season
+
+      if (!batterHr && !batterEv?.avg_hit_speed && season !== 2025) {
+        const [hrFb, evFb] = await Promise.all([
+          sb.from('stats_homeruns').select('hr_total').eq('role', 'batting').eq('type', 'adj_xhr').eq('player_id', statPlayerId).eq('year', 2025).maybeSingle(),
+          sb.from('stats_exit_velocity').select('avg_hit_speed,ev95percent,brl_percent,fbld,attempts').eq('role', 'batting').eq('player_id', statPlayerId).eq('season', 2025).maybeSingle(),
+        ])
+        if (hrFb.data?.hr_total || evFb.data?.avg_hit_speed) {
+          batterHr = hrFb.data?.hr_total ?? null
+          batterEv = evFb.data ?? null
+          usedSeason = 2025
+        }
+      }
 
       res.json({
         data: {
@@ -338,7 +351,7 @@ export function registerBdlRoutes(app: Express) {
           batter_barrel: batterEv?.brl_percent ?? null,
           batter_fbld: batterEv?.fbld ?? null,
           batter_attempts: batterEv?.attempts ?? null,
-          season,
+          season: usedSeason,
         },
       })
     } catch (e) {

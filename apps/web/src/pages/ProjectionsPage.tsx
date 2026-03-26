@@ -283,14 +283,41 @@ export default function ProjectionsPage() {
       ])
       const payload = await matchupRes.json()
       setMatchupData(payload?.data ?? null)
+      let evData = evRes?.data
+      let hrData = hrRes?.data
+      if (!evData?.avg_hit_speed && !hrData?.hr_total && selectedYear !== 2025) {
+        const [evFallback, hrFallback] = await Promise.all([
+          supabase
+            ?.from('stats_exit_velocity')
+            .select('avg_hit_speed,ev95percent,brl_percent,fbld,attempts,season')
+            .eq('role', 'batting')
+            .eq('player_id', r.playerId)
+            .eq('season', 2025)
+            .limit(1)
+            .maybeSingle(),
+          supabase
+            ?.from('stats_homeruns')
+            .select('hr_total,year')
+            .eq('role', 'batting')
+            .eq('type', 'adj_xhr')
+            .eq('player_id', r.playerId)
+            .eq('year', 2025)
+            .limit(1)
+            .maybeSingle(),
+        ])
+        if (evFallback?.data?.avg_hit_speed || hrFallback?.data?.hr_total) {
+          evData = evFallback?.data
+          hrData = hrFallback?.data
+        }
+      }
       setPlayerInputs({
-        avg_hit_speed: evRes?.data?.avg_hit_speed ?? null,
-        ev95percent: evRes?.data?.ev95percent ?? null,
-        brl_percent: evRes?.data?.brl_percent ?? null,
-        fbld: evRes?.data?.fbld ?? null,
-        attempts: evRes?.data?.attempts ?? null,
-        hr_total: hrRes?.data?.hr_total ?? null,
-        season: evRes?.data?.season ?? hrRes?.data?.year ?? null,
+        avg_hit_speed: evData?.avg_hit_speed ?? null,
+        ev95percent: evData?.ev95percent ?? null,
+        brl_percent: evData?.brl_percent ?? null,
+        fbld: evData?.fbld ?? null,
+        attempts: evData?.attempts ?? null,
+        hr_total: hrData?.hr_total ?? null,
+        season: evData?.season ?? hrData?.year ?? null,
       })
     } catch {
       setMatchupData(null)

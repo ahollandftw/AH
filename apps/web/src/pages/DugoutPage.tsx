@@ -47,7 +47,7 @@ export default function DugoutPage() {
       getGamesForDate(supabase, displayDate),
       supabase
         .from('bdl_games')
-        .select('bdl_game_id,start_time_utc,home_team_abbrev,away_team_abbrev,status,home_score,away_score,home_hits,away_hits,home_errors,away_errors,scoring_summary')
+        .select('bdl_game_id,start_time_utc,home_team_abbrev,away_team_abbrev,status,home_score,away_score,home_hits,away_hits,home_errors,away_errors,home_inning_scores,away_inning_scores,current_period,scoring_summary')
         .eq('date', displayDate),
     ])
       .then(([proj, sched, live]) => {
@@ -63,7 +63,7 @@ export default function DugoutPage() {
     const id = setInterval(() => {
       void supabase
         .from('bdl_games')
-        .select('bdl_game_id,start_time_utc,home_team_abbrev,away_team_abbrev,status,home_score,away_score,home_hits,away_hits,home_errors,away_errors,scoring_summary')
+        .select('bdl_game_id,start_time_utc,home_team_abbrev,away_team_abbrev,status,home_score,away_score,home_hits,away_hits,home_errors,away_errors,home_inning_scores,away_inning_scores,current_period,scoring_summary')
         .eq('date', displayDate)
         .then(({ data }) => setLiveGames((data ?? []) as any[]))
     }, 60000)
@@ -109,6 +109,29 @@ export default function DugoutPage() {
     if (params.team) qp.set('team', params.team)
     if (params.player) qp.set('player', params.player)
     return `/projections?${qp.toString()}`
+  }
+
+  function formatGameStatus(live: any): string {
+    if (!live) return ''
+    const raw = String(live.status ?? '').replace(/^STATUS_/i, '').replace(/_/g, ' ')
+    const lower = raw.toLowerCase()
+    if (/final/i.test(lower)) return 'Final'
+    if (/scheduled|pre-game|not started/i.test(lower)) {
+      if (live.start_time_utc) {
+        return new Date(live.start_time_utc).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+      }
+      return 'Scheduled'
+    }
+    const awayInnings = Array.isArray(live.away_inning_scores) ? live.away_inning_scores.length : 0
+    const homeInnings = Array.isArray(live.home_inning_scores) ? live.home_inning_scores.length : 0
+    if (awayInnings > 0 || homeInnings > 0) {
+      const half = awayInnings > homeInnings ? 'Bot' : 'Top'
+      const inn = Math.max(awayInnings, homeInnings)
+      const ord = inn === 1 ? '1st' : inn === 2 ? '2nd' : inn === 3 ? '3rd' : `${inn}th`
+      return `${half} ${ord}`
+    }
+    if (/progress|live|in progress/i.test(lower)) return 'In Progress'
+    return raw.charAt(0).toUpperCase() + raw.slice(1).toLowerCase()
   }
 
   function initials(name: string | null | undefined): string {
@@ -163,14 +186,41 @@ export default function DugoutPage() {
       ])
       const payload = await matchupRes.json()
       setMatchupData(payload?.data ?? null)
+      let evData = evRes?.data
+      let hrData = hrRes?.data
+      if (!evData?.avg_hit_speed && !hrData?.hr_total && selectedYear !== 2025) {
+        const [evFallback, hrFallback] = await Promise.all([
+          supabase
+            ?.from('stats_exit_velocity')
+            .select('avg_hit_speed,ev95percent,brl_percent,fbld,attempts,season')
+            .eq('role', 'batting')
+            .eq('player_id', r.playerId)
+            .eq('season', 2025)
+            .limit(1)
+            .maybeSingle(),
+          supabase
+            ?.from('stats_homeruns')
+            .select('hr_total,year')
+            .eq('role', 'batting')
+            .eq('type', 'adj_xhr')
+            .eq('player_id', r.playerId)
+            .eq('year', 2025)
+            .limit(1)
+            .maybeSingle(),
+        ])
+        if (evFallback?.data?.avg_hit_speed || hrFallback?.data?.hr_total) {
+          evData = evFallback?.data
+          hrData = hrFallback?.data
+        }
+      }
       setPlayerInputs({
-        avg_hit_speed: evRes?.data?.avg_hit_speed ?? null,
-        ev95percent: evRes?.data?.ev95percent ?? null,
-        brl_percent: evRes?.data?.brl_percent ?? null,
-        fbld: evRes?.data?.fbld ?? null,
-        attempts: evRes?.data?.attempts ?? null,
-        hr_total: hrRes?.data?.hr_total ?? null,
-        season: evRes?.data?.season ?? hrRes?.data?.year ?? null,
+        avg_hit_speed: evData?.avg_hit_speed ?? null,
+        ev95percent: evData?.ev95percent ?? null,
+        brl_percent: evData?.brl_percent ?? null,
+        fbld: evData?.fbld ?? null,
+        attempts: evData?.attempts ?? null,
+        hr_total: hrData?.hr_total ?? null,
+        season: evData?.season ?? hrData?.year ?? null,
       })
     } catch {
       setMatchupData(null)
@@ -368,37 +418,46 @@ export default function DugoutPage() {
                             </Link>
                           </div>
                           <div className="pg-weather">
-                            {live?.start_time_utc
-                              ? `${new Date(live.start_time_utc).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} • ${live.status ?? 'Scheduled'}`
-                              : 'Start time: —'}
+                            {formatGameStatus(live) || (live?.start_time_utc ? new Date(live.start_time_utc).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : 'TBD')}
                           </div>
                         </div>
                         {gameStarted ? (
                           <div className="pg-gameRows">
-                            <table className="pg-scoreboard">
-                              <thead>
-                                <tr>
-                                  <th style={{ textAlign: 'left' }}>Team</th>
-                                  <th>R</th>
-                                  <th>H</th>
-                                  <th>E</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                <tr>
-                                  <td>{g.awayTeam}</td>
-                                  <td>{live?.away_score ?? 0}</td>
-                                  <td>{live?.away_hits ?? 0}</td>
-                                  <td>{live?.away_errors ?? 0}</td>
-                                </tr>
-                                <tr>
-                                  <td>{g.homeTeam}</td>
-                                  <td>{live?.home_score ?? 0}</td>
-                                  <td>{live?.home_hits ?? 0}</td>
-                                  <td>{live?.home_errors ?? 0}</td>
-                                </tr>
-                              </tbody>
-                            </table>
+                            {(() => {
+                              const awayInn: number[] = Array.isArray(live?.away_inning_scores) ? live.away_inning_scores : []
+                              const homeInn: number[] = Array.isArray(live?.home_inning_scores) ? live.home_inning_scores : []
+                              const maxInn = Math.max(awayInn.length, homeInn.length, 9)
+                              const cols = Array.from({ length: maxInn }, (_, i) => i)
+                              return (
+                                <table className="pg-scoreboard pg-scoreboard--linescore">
+                                  <thead>
+                                    <tr>
+                                      <th style={{ textAlign: 'left' }}></th>
+                                      {cols.map((i) => <th key={i}>{i + 1}</th>)}
+                                      <th className="pg-scoreboard-totals">R</th>
+                                      <th className="pg-scoreboard-totals">H</th>
+                                      <th className="pg-scoreboard-totals">E</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    <tr>
+                                      <td>{g.awayTeam}</td>
+                                      {cols.map((i) => <td key={i}>{i < awayInn.length ? awayInn[i] : (i < maxInn ? '-' : '')}</td>)}
+                                      <td className="pg-scoreboard-totals">{live?.away_score ?? 0}</td>
+                                      <td className="pg-scoreboard-totals">{live?.away_hits ?? 0}</td>
+                                      <td className="pg-scoreboard-totals">{live?.away_errors ?? 0}</td>
+                                    </tr>
+                                    <tr>
+                                      <td>{g.homeTeam}</td>
+                                      {cols.map((i) => <td key={i}>{i < homeInn.length ? homeInn[i] : (i < maxInn ? '-' : '')}</td>)}
+                                      <td className="pg-scoreboard-totals">{live?.home_score ?? 0}</td>
+                                      <td className="pg-scoreboard-totals">{live?.home_hits ?? 0}</td>
+                                      <td className="pg-scoreboard-totals">{live?.home_errors ?? 0}</td>
+                                    </tr>
+                                  </tbody>
+                                </table>
+                              )
+                            })()}
                             <div className="pg-label" style={{ marginTop: 10 }}>Scoring Plays</div>
                             {(() => {
                               const plays = Array.isArray(live?.scoring_summary) ? [...live.scoring_summary].reverse() : []
@@ -552,19 +611,35 @@ export default function DugoutPage() {
                         <div className="pg-detailWrap">
                           <div className="pg-gameRows">
                             <div className="pg-gameLine">
-                              <span className="pg-gameLabel">Starting pitchers</span>
+                              <span className="pg-gameLabel">Probable pitchers</span>
                               <span className="pg-gameValue">
-                                {g.awayTeam}: {homeTop?.opponentPitcher ?? '—'} &nbsp;|&nbsp; {g.homeTeam}: {awayTop?.opponentPitcher ?? '—'}
+                                {g.awayTeam}: {homeTop?.opponentPitcher ? `${homeTop.opponentPitcher}${homeTop.opponentPitcherHand ? ` (${homeTop.opponentPitcherHand})` : ''}` : '—'}
                               </span>
                             </div>
                             <div className="pg-gameLine">
-                              <span className="pg-gameLabel">Highest edge</span>
+                              <span className="pg-gameLabel"></span>
                               <span className="pg-gameValue">
-                                {g.awayTeam}: — &nbsp;|&nbsp; {g.homeTeam}: —
+                                {g.homeTeam}: {awayTop?.opponentPitcher ? `${awayTop.opponentPitcher}${awayTop.opponentPitcherHand ? ` (${awayTop.opponentPitcherHand})` : ''}` : '—'}
                               </span>
                             </div>
+                            {!gameStarted && (awayTop || homeTop) ? (
+                              <>
+                                <div className="pg-gameLine">
+                                  <span className="pg-gameLabel">Top projected</span>
+                                  <span className="pg-gameValue">
+                                    {g.awayTeam}: {awayTop?.name ?? '—'} {awayTop?.hrProbability != null ? `(${formatProbability(awayTop.hrProbability)})` : ''}
+                                  </span>
+                                </div>
+                                <div className="pg-gameLine">
+                                  <span className="pg-gameLabel"></span>
+                                  <span className="pg-gameValue">
+                                    {g.homeTeam}: {homeTop?.name ?? '—'} {homeTop?.hrProbability != null ? `(${formatProbability(homeTop.hrProbability)})` : ''}
+                                  </span>
+                                </div>
+                              </>
+                            ) : null}
                             <div className="pg-gameLine">
-                              <span className="pg-gameLabel">Open projections</span>
+                              <span className="pg-gameLabel">Projections</span>
                               <span className="pg-gameValue">
                                 <Link className="pg-link pg-teamLink" to={toProjections({ date: displayDate })}>
                                   View full matchup board
