@@ -48,6 +48,7 @@ export default function ProjectionsPage() {
   const [matchupLoading, setMatchupLoading] = useState(false)
   const [matchupFor, setMatchupFor] = useState<DailyProjection | null>(null)
   const [matchupData, setMatchupData] = useState<any>(null)
+  const [playerInputs, setPlayerInputs] = useState<any>(null)
   const [displayDate, setDisplayDate] = useState(
     searchParams.get('date') ?? getAppDisplayDateIso(),
   )
@@ -217,18 +218,48 @@ export default function ProjectionsPage() {
   async function openMatchup(r: DailyProjection) {
     setMatchupFor(r)
     setMatchupData(null)
+    setPlayerInputs(null)
     const opponentTeam = parseOpponentTeam(r)
     if (!opponentTeam) return
     setMatchupLoading(true)
     try {
       const base = import.meta.env.VITE_API_BASE_URL ?? ''
-      const res = await fetch(
-        `${base}/bdl/matchup-card?player_id=${encodeURIComponent(r.playerId)}&opponent_team=${encodeURIComponent(opponentTeam)}${r.opponentPitcher ? `&pitcher_name=${encodeURIComponent(r.opponentPitcher)}` : ''}`,
-      )
-      const payload = await res.json()
+      const [matchupRes, evRes, hrRes] = await Promise.all([
+        fetch(
+          `${base}/bdl/matchup-card?player_id=${encodeURIComponent(r.playerId)}&opponent_team=${encodeURIComponent(opponentTeam)}${r.opponentPitcher ? `&pitcher_name=${encodeURIComponent(r.opponentPitcher)}` : ''}`,
+        ),
+        supabase
+          ?.from('stats_exit_velocity')
+          .select('avg_hit_speed,ev95percent,brl_percent,fbld,attempts,season')
+          .eq('role', 'batting')
+          .eq('player_id', r.playerId)
+          .order('season', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+        supabase
+          ?.from('stats_homeruns')
+          .select('hr_total,year')
+          .eq('role', 'batting')
+          .eq('type', 'adj_xhr')
+          .eq('player_id', r.playerId)
+          .order('year', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+      ])
+      const payload = await matchupRes.json()
       setMatchupData(payload?.data ?? null)
+      setPlayerInputs({
+        avg_hit_speed: evRes?.data?.avg_hit_speed ?? null,
+        ev95percent: evRes?.data?.ev95percent ?? null,
+        brl_percent: evRes?.data?.brl_percent ?? null,
+        fbld: evRes?.data?.fbld ?? null,
+        attempts: evRes?.data?.attempts ?? null,
+        hr_total: hrRes?.data?.hr_total ?? null,
+        season: evRes?.data?.season ?? hrRes?.data?.year ?? null,
+      })
     } catch {
       setMatchupData(null)
+      setPlayerInputs(null)
     } finally {
       setMatchupLoading(false)
     }
@@ -315,7 +346,19 @@ export default function ProjectionsPage() {
             </div>
             <div className="pg-cards">
               {s.data.map((r) => (
-                <div key={r.playerId} className="pg-card">
+                <div
+                  key={r.playerId}
+                  className="pg-card"
+                  onClick={() => void openMatchup(r)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault()
+                      void openMatchup(r)
+                    }
+                  }}
+                >
                   <div className="pg-info">
                     <div className="pg-nameRow">
                       <button
@@ -323,14 +366,20 @@ export default function ProjectionsPage() {
                         className={`pg-targetBtn ${Object.prototype.hasOwnProperty.call(pickState, r.playerId) ? 'is-selected' : ''}`}
                         title="Toggle target pick"
                         disabled={pickBusy === r.playerId}
-                        onClick={() => void togglePick(r.playerId)}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          void togglePick(r.playerId)
+                        }}
                       >
                         🎯
                       </button>
                       <button
                         type="button"
                         className="pg-playerSelect"
-                        onClick={() => void openMatchup(r)}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          void openMatchup(r)
+                        }}
                       >
                         {r.name}
                       </button>
@@ -391,24 +440,37 @@ export default function ProjectionsPage() {
             {matchupLoading ? (
               <p className="pg-sub">Loading matchup...</p>
             ) : matchupData ? (
-              <div className="pg-matchupGrid">
-                <div>
-                  <div className="pg-label">Pitcher (Left)</div>
-                  <div className="pg-matchupName">{matchupData.pitcher_name ?? 'Unknown'}</div>
-                  <div className="pg-small">ERA: {matchupData.pitcher_era ?? '—'} • K: {matchupData.pitcher_k ?? '—'}</div>
+              <>
+                <div className="pg-matchupGrid">
+                  <div>
+                    <div className="pg-label">Pitcher (Left)</div>
+                    <div className="pg-matchupName">{matchupData.pitcher_name ?? 'Unknown'}</div>
+                    <div className="pg-small">ERA: {matchupData.pitcher_era ?? '—'} • K: {matchupData.pitcher_k ?? '—'}</div>
+                  </div>
+                  <div>
+                    <div className="pg-label">Batter (Right)</div>
+                    <div className="pg-matchupName">{matchupData.batter_name}</div>
+                    <div className="pg-small">AVG: {matchupData.batter_avg ?? '—'} • HR: {matchupData.batter_hr ?? '—'}</div>
+                  </div>
+                  <div className="pg-matchStat">BvP AB: {matchupData.sample_ab ?? 0}</div>
+                  <div className="pg-matchStat">BvP H: {matchupData.h ?? 0}</div>
+                  <div className="pg-matchStat">BvP HR: {matchupData.hr ?? 0}</div>
+                  <div className="pg-matchStat">BvP K: {matchupData.k ?? 0}</div>
+                  <div className="pg-matchStat">BvP AVG: {matchupData.avg ?? '—'}</div>
+                  <div className="pg-matchStat">BvP OPS: {matchupData.ops ?? '—'}</div>
                 </div>
-                <div>
-                  <div className="pg-label">Batter (Right)</div>
-                  <div className="pg-matchupName">{matchupData.batter_name}</div>
-                  <div className="pg-small">AVG: {matchupData.batter_avg ?? '—'} • HR: {matchupData.batter_hr ?? '—'}</div>
+                <div style={{ marginTop: 10 }}>
+                  <div className="pg-label">Projection inputs ({playerInputs?.season ?? 'latest'})</div>
+                  <div className="pg-matchupGrid">
+                    <div className="pg-matchStat">Hard Hit / EV95: {playerInputs?.ev95percent ?? '—'}</div>
+                    <div className="pg-matchStat">Barrel %: {playerInputs?.brl_percent ?? '—'}</div>
+                    <div className="pg-matchStat">Avg EV: {playerInputs?.avg_hit_speed ?? '—'}</div>
+                    <div className="pg-matchStat">FB/LD: {playerInputs?.fbld ?? '—'}</div>
+                    <div className="pg-matchStat">HR Total: {playerInputs?.hr_total ?? '—'}</div>
+                    <div className="pg-matchStat">Batted Ball Attempts: {playerInputs?.attempts ?? '—'}</div>
+                  </div>
                 </div>
-                <div className="pg-matchStat">BvP AB: {matchupData.sample_ab ?? 0}</div>
-                <div className="pg-matchStat">BvP H: {matchupData.h ?? 0}</div>
-                <div className="pg-matchStat">BvP HR: {matchupData.hr ?? 0}</div>
-                <div className="pg-matchStat">BvP K: {matchupData.k ?? 0}</div>
-                <div className="pg-matchStat">BvP AVG: {matchupData.avg ?? '—'}</div>
-                <div className="pg-matchStat">BvP OPS: {matchupData.ops ?? '—'}</div>
-              </div>
+              </>
             ) : (
               <p className="pg-sub">No stored batter-vs-pitcher matchup data yet for this opponent.</p>
             )}
