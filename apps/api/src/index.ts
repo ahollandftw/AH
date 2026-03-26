@@ -17,7 +17,12 @@ config.stripePlusMonthlyLookupKey()
 const stripe = new Stripe(config.stripeSecretKey())
 
 const app = express()
-app.use(cors())
+app.use(cors({
+  origin: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'stripe-signature'],
+  credentials: true,
+}))
 
 async function applySubscriptionEntitlement(userId: string, plan: string) {
   const supabase = getServiceClient()
@@ -38,6 +43,7 @@ async function applySubscriptionEntitlement(userId: string, plan: string) {
   }
 }
 
+// Stripe webhook needs raw body — must be before express.json()
 app.post('/billing/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
   const secret = config.stripeWebhookSecret()
   if (!secret) {
