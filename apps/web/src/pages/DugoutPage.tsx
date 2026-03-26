@@ -141,6 +141,15 @@ export default function DugoutPage() {
     return () => clearInterval(id)
   }, [displayDate, session?.user.id, supabase])
 
+  useEffect(() => {
+    const onChanged = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ date?: string }>).detail
+      if (!detail?.date || detail.date === displayDate) void loadPicks()
+    }
+    window.addEventListener('ah:picks-changed', onChanged as EventListener)
+    return () => window.removeEventListener('ah:picks-changed', onChanged as EventListener)
+  }, [displayDate])
+
   function pickStatusLabel(v: boolean | null | undefined): string {
     if (v === true) return 'HIT'
     if (v === false) return 'MISS'
@@ -170,6 +179,7 @@ export default function DugoutPage() {
         const next = { ...pickState }
         delete next[playerId]
         setPickState(next)
+        window.dispatchEvent(new CustomEvent('ah:picks-changed', { detail: { date: displayDate } }))
       }
       setPickBusy(null)
       return
@@ -187,7 +197,10 @@ export default function DugoutPage() {
       player_id: playerId,
     })
     if (error) setPickMsg(error.message)
-    else setPickState((prev) => ({ ...prev, [playerId]: null }))
+    else {
+      setPickState((prev) => ({ ...prev, [playerId]: null }))
+      window.dispatchEvent(new CustomEvent('ah:picks-changed', { detail: { date: displayDate } }))
+    }
     setPickBusy(null)
   }
 

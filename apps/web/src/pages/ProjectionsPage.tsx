@@ -112,7 +112,7 @@ export default function ProjectionsPage() {
   )
 
   const selectedCount = useMemo(
-    () => Object.values(pickState).filter((v) => v != null).length,
+    () => Object.keys(pickState).length,
     [pickState],
   )
 
@@ -157,6 +157,15 @@ export default function ProjectionsPage() {
     return () => clearInterval(id)
   }, [displayDate, session?.user.id, supabase])
 
+  useEffect(() => {
+    const onChanged = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ date?: string }>).detail
+      if (!detail?.date || detail.date === displayDate) void loadPicks()
+    }
+    window.addEventListener('ah:picks-changed', onChanged as EventListener)
+    return () => window.removeEventListener('ah:picks-changed', onChanged as EventListener)
+  }, [displayDate])
+
   async function togglePick(playerId: string) {
     if (!supabase || !session?.user.id) {
       setPickMsg('Sign in to use targets.')
@@ -179,6 +188,7 @@ export default function ProjectionsPage() {
         const next = { ...pickState }
         delete next[playerId]
         setPickState(next)
+        window.dispatchEvent(new CustomEvent('ah:picks-changed', { detail: { date: displayDate } }))
       }
       setPickBusy(null)
       return
@@ -197,7 +207,10 @@ export default function ProjectionsPage() {
       player_id: playerId,
     })
     if (error) setPickMsg(error.message)
-    else setPickState((prev) => ({ ...prev, [playerId]: null }))
+    else {
+      setPickState((prev) => ({ ...prev, [playerId]: null }))
+      window.dispatchEvent(new CustomEvent('ah:picks-changed', { detail: { date: displayDate } }))
+    }
     setPickBusy(null)
   }
 

@@ -50,6 +50,45 @@ function Layout() {
     session?.user.email?.split('@')[0] ||
     null
 
+  useEffect(() => {
+    const el = document.querySelector('.mainScroll') as HTMLElement | null
+    if (!el) return
+    let startY = 0
+    let pulling = false
+
+    const onStart = (e: TouchEvent) => {
+      if (el.scrollTop > 0) return
+      startY = e.touches[0]?.clientY ?? 0
+      pulling = true
+    }
+
+    const onMove = (e: TouchEvent) => {
+      if (!pulling) return
+      if (el.scrollTop > 0) {
+        pulling = false
+        return
+      }
+      const y = e.touches[0]?.clientY ?? 0
+      if (y - startY > 78) {
+        pulling = false
+        window.location.reload()
+      }
+    }
+
+    const onEnd = () => {
+      pulling = false
+    }
+
+    el.addEventListener('touchstart', onStart, { passive: true })
+    el.addEventListener('touchmove', onMove, { passive: true })
+    el.addEventListener('touchend', onEnd, { passive: true })
+    return () => {
+      el.removeEventListener('touchstart', onStart)
+      el.removeEventListener('touchmove', onMove)
+      el.removeEventListener('touchend', onEnd)
+    }
+  }, [])
+
   return (
     <div className="appRoot">
       <header className="topBanner" role="banner" aria-label="AnalyticHustle header">
