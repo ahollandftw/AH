@@ -89,7 +89,9 @@ export function registerLeaderboardRoutes(app: Express) {
           return `${y}-${m}-${dd}`
         })()
 
-      const season = Number(req.query.season ?? new Date(`${computedDateIso}T00:00:00Z`).getUTCFullYear()) || 0
+      const seasonPrimary =
+        Number(req.query.season ?? new Date(`${computedDateIso}T00:00:00Z`).getUTCFullYear()) || 0
+      let seasonUsed = seasonPrimary
 
       const now = Date.now()
       const from = new Date(now - days * 24 * 60 * 60 * 1000).toISOString()
@@ -146,13 +148,13 @@ export function registerLeaderboardRoutes(app: Express) {
           .select('player_id,hr_total')
           .eq('role', 'batting')
           .eq('type', 'adj_xhr')
-          .eq('year', season)
+          .eq('year', seasonUsed)
           .in('player_id', statIds),
         supabase
           .from('stats_exit_velocity')
           .select('player_id,attempts,brl_percent,ev95percent,avg_hit_speed,fbld')
           .eq('role', 'batting')
-          .eq('season', season)
+          .eq('season', seasonUsed)
           .in('player_id', statIds),
         supabase
           .from('daily_hr_projections')
@@ -162,8 +164,8 @@ export function registerLeaderboardRoutes(app: Express) {
       ])
 
       const playerMap = new Map((players ?? []).map((p: any) => [String(p.stat_player_id), p]))
-      const hrMap = new Map((yearHrs ?? []).map((r: any) => [String(r.player_id), Number(r.hr_total) || 0]))
-      const batterMap = new Map(
+      let hrMap = new Map((yearHrs ?? []).map((r: any) => [String(r.player_id), Number(r.hr_total) || 0]))
+      let batterMap = new Map(
         (yearAtt ?? []).map((r: any) => [
           String(r.player_id),
           {
@@ -180,6 +182,47 @@ export function registerLeaderboardRoutes(app: Express) {
       // If daily_hr_projections isn't populated, we compute a simplified opponent-adjusted
       // HR probability using our existing stats tables + the opposing pitcher's HR allowed.
 
+      // Automatic 2026 -> 2025 fallback (matches ProjectionsPage behavior).
+      // If the target season's HR totals or AB inputs are missing, use 2025.
+      if (seasonUsed === 2026) {
+        const hasHrTotals = (yearHrs ?? []).some((r: any) => Number(r.hr_total) > 0)
+        const hasAbInputs = (yearAtt ?? []).some((r: any) => Number(r.attempts) > 0)
+        if (!hasHrTotals || !hasAbInputs) {
+          seasonUsed = 2025
+          const [{ data: yearHrsFallback }, { data: yearAttFallback }] = await Promise.all([
+            supabase
+              .from('stats_homeruns')
+              .select('player_id,hr_total')
+              .eq('role', 'batting')
+              .eq('type', 'adj_xhr')
+              .eq('year', seasonUsed)
+              .in('player_id', statIds),
+            supabase
+              .from('stats_exit_velocity')
+              .select('player_id,attempts,brl_percent,ev95percent,avg_hit_speed,fbld')
+              .eq('role', 'batting')
+              .eq('season', seasonUsed)
+              .in('player_id', statIds),
+          ])
+
+          hrMap = new Map(
+            (yearHrsFallback ?? []).map((r: any) => [String(r.player_id), Number(r.hr_total) || 0]),
+          )
+          batterMap = new Map(
+            (yearAttFallback ?? []).map((r: any) => [
+              String(r.player_id),
+              {
+                attempts: Number(r.attempts) || 0,
+                brl_percent: r.brl_percent != null ? Number(r.brl_percent) : 0,
+                ev95percent: r.ev95percent != null ? Number(r.ev95percent) : 0,
+                avg_hit_speed: r.avg_hit_speed != null ? Number(r.avg_hit_speed) : 0,
+                fbld: r.fbld != null ? Number(r.fbld) : 0,
+              },
+            ]),
+          )
+        }
+      }
+
       const pitcherIds = Array.from(
         new Set(
           statIds
@@ -194,7 +237,7 @@ export function registerLeaderboardRoutes(app: Express) {
           const { data: pRows } = await supabase
             .from('bdl_season_stats')
             .select('bdl_player_id,pitching_hr')
-            .eq('season', season)
+            .eq('season', seasonUsed)
             .in('bdl_player_id', pitcherIds)
           for (const pr of pRows ?? []) {
             const key = String(pr.bdl_player_id)
@@ -262,7 +305,7 @@ export function registerLeaderboardRoutes(app: Express) {
       res.json({
         last_updated: new Date().toISOString(),
         date: computedDateIso,
-        season,
+        season: seasonUsed,
         count: rows.length,
         players: rows.slice(0, limit),
       })
