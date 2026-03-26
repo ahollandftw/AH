@@ -331,7 +331,105 @@ export async function syncPlayerProps(
   return { synced: rows.length }
 }
 
-/* ─── 6. Full daily sync (called at 10 AM CT) ────────────────────── */
+/* ─── 6. Bulk BvP sync for today's games ─────────────────────────── */
+
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms))
+}
+
+const TEAM_ABBREV_MAP: Record<string, string> = {
+  TB: 'TBR', TBR: 'TBR',
+  WSH: 'WSN', WSN: 'WSN', WAS: 'WSN',
+  AZ: 'ARI', ARI: 'ARI',
+  KC: 'KCR', KCR: 'KCR',
+  SF: 'SFG', SFG: 'SFG',
+  SD: 'SDP', SDP: 'SDP',
+  OAK: 'ATH', ATH: 'ATH',
+  CWS: 'CHW', CHW: 'CHW',
+}
+
+function canonTeam(abbrev: string): string {
+  const t = abbrev.trim().toUpperCase()
+  return TEAM_ABBREV_MAP[t] ?? t
+}
+
+export async function syncMatchupsForTodayGames(): Promise<{ synced: number }> {
+  const today = todayET()
+  const sb = supabase()
+  console.log(`[BDL] bulk BvP sync for ${today}…`)
+
+  const { data: todayGames } = await sb
+    .from('bdl_games')
+    .select('home_team_abbrev, away_team_abbrev')
+    .eq('date', today)
+  if (!todayGames?.length) {
+    console.log('[BDL] no games today, skipping BvP sync')
+    return { synced: 0 }
+  }
+
+  const teamPairs: Array<{ batterTeam: string; opponentTeam: string }> = []
+  for (const g of todayGames) {
+    teamPairs.push(
+      { batterTeam: canonTeam(g.home_team_abbrev), opponentTeam: canonTeam(g.away_team_abbrev) },
+      { batterTeam: canonTeam(g.away_team_abbrev), opponentTeam: canonTeam(g.home_team_abbrev) },
+    )
+  }
+
+  const allAbbrevs = (abbrev: string): string[] => {
+    const canon = canonTeam(abbrev)
+    const variants = new Set<string>([canon, abbrev.toUpperCase()])
+    for (const [k, v] of Object.entries(TEAM_ABBREV_MAP)) {
+      if (v === canon) variants.add(k)
+    }
+    return [...variants]
+  }
+
+  let totalSynced = 0
+  for (const { batterTeam, opponentTeam } of teamPairs) {
+    const batterAbbrevs = allAbbrevs(batterTeam)
+    const { data: batters } = await sb
+      .from('bdl_players')
+      .select('bdl_id, team_id')
+      .in('team_abbrev', batterAbbrevs)
+      .not('bdl_id', 'is', null)
+      .limit(40)
+
+    if (!batters?.length) {
+      console.log(`[BDL] BvP: no batters found for team ${batterTeam} (tried ${batterAbbrevs.join(',')}), skipping`)
+      continue
+    }
+
+    const oppAbbrevs = allAbbrevs(opponentTeam)
+    const { data: oppTeamRow } = await sb
+      .from('bdl_players')
+      .select('team_id')
+      .in('team_abbrev', oppAbbrevs)
+      .not('team_id', 'is', null)
+      .limit(1)
+      .maybeSingle()
+    const oppTeamId = Number((oppTeamRow as any)?.team_id ?? 0)
+    if (!oppTeamId) {
+      console.log(`[BDL] BvP: no team_id for opponent ${opponentTeam} (tried ${oppAbbrevs.join(',')}), skipping`)
+      continue
+    }
+
+    console.log(`[BDL] BvP: syncing ${batters.length} batters from ${batterTeam} vs team_id=${oppTeamId}`)
+    for (const b of batters as Array<{ bdl_id: number; team_id: number | null }>) {
+      try {
+        const r = await syncMatchup(b.bdl_id, oppTeamId)
+        totalSynced += r.synced
+        await sleep(300)
+      } catch (e) {
+        console.warn(`[BDL] BvP sync error for bdl_id=${b.bdl_id} vs team=${oppTeamId}:`, String(e))
+      }
+    }
+  }
+
+  console.log(`[BDL] bulk BvP sync complete: ${totalSynced} matchup rows`)
+  return { synced: totalSynced }
+}
+
+/* ─── 7. Full daily sync (called at 10 AM CT) ────────────────────── */
 
 export async function runDailySync(): Promise<Record<string, unknown>> {
   const players = await syncActivePlayers()
@@ -351,5 +449,8 @@ export async function runDailySync(): Promise<Record<string, unknown>> {
     propsTotal += r.synced
   }
 
-  return { players, games, seasonStats, propsTotal }
+  // Bulk BvP matchup sync for all today's batters
+  const matchups = await syncMatchupsForTodayGames()
+
+  return { players, games, seasonStats, propsTotal, matchups }
 }

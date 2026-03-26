@@ -5,6 +5,7 @@ import {
   syncGames,
   syncSeasonStats,
   syncMatchup,
+  syncMatchupsForTodayGames,
   syncPlayerProps,
 } from '../bdl/sync.js'
 import { startLiveMonitor, stopLiveMonitor } from '../bdl/liveMonitor.js'
@@ -87,6 +88,15 @@ export function registerBdlRoutes(app: Express) {
         return
       }
       const result = await syncPlayerProps(gameId, req.body?.vendors)
+      res.json({ ok: true, ...result })
+    } catch (e) {
+      res.status(500).json({ error: String(e) })
+    }
+  })
+
+  app.post('/bdl/sync/matchups-today', async (_req, res) => {
+    try {
+      const result = await syncMatchupsForTodayGames()
       res.json({ ok: true, ...result })
     } catch (e) {
       res.status(500).json({ error: String(e) })
