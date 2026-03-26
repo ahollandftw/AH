@@ -460,9 +460,6 @@ export default function ProjectionsPage() {
                     <span className="pg-meta">
                       {(r.team ?? '—').toUpperCase()} &bull; {(r.position ?? '—').toUpperCase()}
                     </span>
-                    {r.opponent ? (
-                      <span className="pg-matchup">{r.opponent}</span>
-                    ) : null}
                     {r.opponentPitcher ? (
                       <span className="pg-matchup">
                         vs {r.opponentPitcher}{' '}
@@ -542,14 +539,60 @@ export default function ProjectionsPage() {
                   </div>
                 ) : null}
                 <div style={{ marginTop: 10 }}>
-                  <div className="pg-label">Statcast / Projection Inputs ({matchupData?.season ?? playerInputs?.season ?? selectedYear})</div>
+                  <div className="pg-label">
+                    Pitcher vs Batter (advantage by stat) ({matchupData?.season ?? playerInputs?.season ?? selectedYear})
+                  </div>
                   <div className="pg-matchupGrid">
-                    <div className="pg-matchStat">Hard Hit / EV95: {matchupData?.batter_ev95 ?? playerInputs?.ev95percent ?? '—'}</div>
-                    <div className="pg-matchStat">Barrel %: {matchupData?.batter_barrel ?? playerInputs?.brl_percent ?? '—'}</div>
-                    <div className="pg-matchStat">Avg EV: {matchupData?.batter_avg_hit_speed ?? playerInputs?.avg_hit_speed ?? '—'}</div>
-                    <div className="pg-matchStat">FB/LD: {matchupData?.batter_fbld ?? playerInputs?.fbld ?? '—'}</div>
-                    <div className="pg-matchStat">HR Total: {matchupData?.batter_hr ?? playerInputs?.hr_total ?? '—'}</div>
-                    <div className="pg-matchStat">Batted Ball Attempts: {matchupData?.batter_attempts ?? playerInputs?.attempts ?? '—'}</div>
+                    <div>
+                      <div className="pg-label" style={{ marginTop: 0 }}>Pitcher</div>
+                      <div className="pg-statStack">
+                        <div className="pg-matchStat">
+                          ERA: {matchupData?.pitcher_era ?? '—'}
+                          <span className="pg-edgeHint">Advantage: Pitcher (lower)</span>
+                        </div>
+                        <div className="pg-matchStat">
+                          K: {matchupData?.pitcher_k ?? '—'}
+                          <span className="pg-edgeHint">Advantage: Pitcher (higher)</span>
+                        </div>
+                        <div className="pg-matchStat">
+                          WHIP: {matchupData?.pitcher_whip ?? '—'}
+                          <span className="pg-edgeHint">Advantage: Pitcher (lower)</span>
+                        </div>
+                        <div className="pg-matchStat">
+                          HR allowed: {matchupData?.pitcher_hr_allowed ?? '—'}
+                          <span className="pg-edgeHint">Advantage: Pitcher (lower)</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div>
+                      <div className="pg-label" style={{ marginTop: 0 }}>Batter</div>
+                      <div className="pg-statStack">
+                        <div className="pg-matchStat">
+                          EV95: {matchupData?.batter_ev95 ?? playerInputs?.ev95percent ?? '—'}
+                          <span className="pg-edgeHint">Advantage: Batter (higher)</span>
+                        </div>
+                        <div className="pg-matchStat">
+                          Barrel %: {matchupData?.batter_barrel ?? playerInputs?.brl_percent ?? '—'}
+                          <span className="pg-edgeHint">Advantage: Batter (higher)</span>
+                        </div>
+                        <div className="pg-matchStat">
+                          Avg EV: {matchupData?.batter_avg_hit_speed ?? playerInputs?.avg_hit_speed ?? '—'}
+                          <span className="pg-edgeHint">Advantage: Batter (higher)</span>
+                        </div>
+                        <div className="pg-matchStat">
+                          FB/LD: {matchupData?.batter_fbld ?? playerInputs?.fbld ?? '—'}
+                          <span className="pg-edgeHint">Advantage: Batter (higher)</span>
+                        </div>
+                        <div className="pg-matchStat">
+                          HR Total: {matchupData?.batter_hr ?? playerInputs?.hr_total ?? '—'}
+                          <span className="pg-edgeHint">Advantage: Batter (higher)</span>
+                        </div>
+                        <div className="pg-matchStat">
+                          Attempts: {matchupData?.batter_attempts ?? playerInputs?.attempts ?? '—'}
+                          <span className="pg-edgeHint">Advantage: Batter (more PAs)</span>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
                 {!matchupData && !playerInputs ? (

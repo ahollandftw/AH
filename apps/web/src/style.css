@@ -1089,6 +1089,22 @@ body,
   color: var(--color-text);
 }
 
+.pg-statStack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pg-edgeHint {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  color: color-mix(in srgb, var(--color-primary) 42%, var(--color-secondary));
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
 .pg-bvpRow {
   display: flex;
   flex-wrap: wrap;

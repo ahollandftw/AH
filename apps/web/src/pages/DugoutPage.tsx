@@ -462,23 +462,58 @@ export default function DugoutPage() {
                             })()}
                             <div className="pg-label" style={{ marginTop: 10 }}>Scoring Plays</div>
                             {(() => {
-                              const plays = Array.isArray(live?.scoring_summary) ? [...live.scoring_summary].reverse() : []
-                              if (!plays.length) return <div className="pg-sub">No scoring plays yet.</div>
+                              const playsAll = Array.isArray(live?.scoring_summary) ? [...live.scoring_summary].reverse() : []
+                              const isHr = (txt: string) => /home run|homer|grand slam/i.test(txt)
+                              const hrPlays = playsAll.filter((p: any) => isHr(String(p?.play ?? '')))
+                              if (!hrPlays.length) return <div className="pg-sub">No home runs yet.</div>
                               return (
                                 <div className="pg-scoringPlays">
-                                  {plays.map((p: any, i: number) => {
+                                  {hrPlays.map((p: any, i: number) => {
                                     const txt = String(p?.play ?? '')
-                                    const hr = /home run|homer|grand slam/i.test(txt)
-                                    const rawInning = String(p?.inning ?? '')
-                                    const period = String(p?.period ?? '')
-                                    let inningLabel = rawInning
-                                    if (period && rawInning) {
-                                      const half = /top/i.test(rawInning) ? 'Top' : /bot/i.test(rawInning) ? 'Bot' : rawInning
-                                      inningLabel = `${half} ${period}`
+                                    // BDL scoring summary has `inning` + `period`, but sometimes the meaning is swapped.
+                                    // We infer half inning from whichever field contains TOP/BOTTOM and inning number from the other.
+                                    const inningRaw = String(p?.inning ?? '').trim()
+                                    const periodRaw = String(p?.period ?? '').trim()
+                                    const inningLower = inningRaw.toLowerCase()
+                                    const periodLower = periodRaw.toLowerCase()
+
+                                    let half: 'Top' | 'Bot' | '' = ''
+                                    let inningNum = ''
+                                    const toOrdinal = (n: number) => {
+                                      if (n === 1) return '1st'
+                                      if (n === 2) return '2nd'
+                                      if (n === 3) return '3rd'
+                                      return `${n}th`
                                     }
+
+                                    if (/top/.test(inningLower)) {
+                                      half = 'Top'
+                                      inningNum = periodRaw
+                                    } else if (/bot/.test(inningLower)) {
+                                      half = 'Bot'
+                                      inningNum = periodRaw
+                                    } else if (/top/.test(periodLower)) {
+                                      half = 'Top'
+                                      inningNum = inningRaw
+                                    } else if (/bot/.test(periodLower)) {
+                                      half = 'Bot'
+                                      inningNum = inningRaw
+                                    } else {
+                                      inningNum = inningRaw || periodRaw
+                                    }
+
+                                    const nStr = String(inningNum).replace(/[^0-9]/g, '')
+                                    const n = nStr ? Number(nStr) : null
+                                    const inningLabel = half && n
+                                      ? `${half} ${toOrdinal(n)}`
+                                      : half
+                                        ? half
+                                        : n
+                                          ? toOrdinal(n)
+                                          : (inningRaw || periodRaw)
                                     return (
-                                      <div key={i} className={`pg-scoringPlay ${hr ? 'pg-scoringPlay--hr' : ''}`}>
-                                        <span className="pg-scoringPlayIcon">{hr ? '🏠⚾' : '⚾'}</span>
+                                      <div key={i} className="pg-scoringPlay pg-scoringPlay--hr">
+                                        <span className="pg-scoringPlayIcon">🏠⚾</span>
                                         <span className="pg-scoringPlayText">{txt}</span>
                                         <span className="pg-scoringPlayInning">{inningLabel}</span>
                                       </div>
@@ -705,14 +740,60 @@ export default function DugoutPage() {
                   </div>
                 ) : null}
                 <div style={{ marginTop: 10 }}>
-                  <div className="pg-label">Statcast / Projection Inputs ({matchupData?.season ?? playerInputs?.season ?? selectedYear})</div>
+                  <div className="pg-label">
+                    Pitcher vs Batter (advantage by stat) ({matchupData?.season ?? playerInputs?.season ?? selectedYear})
+                  </div>
                   <div className="pg-matchupGrid">
-                    <div className="pg-matchStat">Hard Hit / EV95: {matchupData?.batter_ev95 ?? playerInputs?.ev95percent ?? '—'}</div>
-                    <div className="pg-matchStat">Barrel %: {matchupData?.batter_barrel ?? playerInputs?.brl_percent ?? '—'}</div>
-                    <div className="pg-matchStat">Avg EV: {matchupData?.batter_avg_hit_speed ?? playerInputs?.avg_hit_speed ?? '—'}</div>
-                    <div className="pg-matchStat">FB/LD: {matchupData?.batter_fbld ?? playerInputs?.fbld ?? '—'}</div>
-                    <div className="pg-matchStat">HR Total: {matchupData?.batter_hr ?? playerInputs?.hr_total ?? '—'}</div>
-                    <div className="pg-matchStat">Batted Ball Attempts: {matchupData?.batter_attempts ?? playerInputs?.attempts ?? '—'}</div>
+                    <div>
+                      <div className="pg-label" style={{ marginTop: 0 }}>Pitcher</div>
+                      <div className="pg-statStack">
+                        <div className="pg-matchStat">
+                          ERA: {matchupData?.pitcher_era ?? '—'}
+                          <span className="pg-edgeHint">Advantage: Pitcher (lower)</span>
+                        </div>
+                        <div className="pg-matchStat">
+                          K: {matchupData?.pitcher_k ?? '—'}
+                          <span className="pg-edgeHint">Advantage: Pitcher (higher)</span>
+                        </div>
+                        <div className="pg-matchStat">
+                          WHIP: {matchupData?.pitcher_whip ?? '—'}
+                          <span className="pg-edgeHint">Advantage: Pitcher (lower)</span>
+                        </div>
+                        <div className="pg-matchStat">
+                          HR allowed: {matchupData?.pitcher_hr_allowed ?? '—'}
+                          <span className="pg-edgeHint">Advantage: Pitcher (lower)</span>
+                        </div>
+                      </div>
+                    </div>
+                    <div>
+                      <div className="pg-label" style={{ marginTop: 0 }}>Batter</div>
+                      <div className="pg-statStack">
+                        <div className="pg-matchStat">
+                          EV95: {matchupData?.batter_ev95 ?? playerInputs?.ev95percent ?? '—'}
+                          <span className="pg-edgeHint">Advantage: Batter (higher)</span>
+                        </div>
+                        <div className="pg-matchStat">
+                          Barrel %: {matchupData?.batter_barrel ?? playerInputs?.brl_percent ?? '—'}
+                          <span className="pg-edgeHint">Advantage: Batter (higher)</span>
+                        </div>
+                        <div className="pg-matchStat">
+                          Avg EV: {matchupData?.batter_avg_hit_speed ?? playerInputs?.avg_hit_speed ?? '—'}
+                          <span className="pg-edgeHint">Advantage: Batter (higher)</span>
+                        </div>
+                        <div className="pg-matchStat">
+                          FB/LD: {matchupData?.batter_fbld ?? playerInputs?.fbld ?? '—'}
+                          <span className="pg-edgeHint">Advantage: Batter (higher)</span>
+                        </div>
+                        <div className="pg-matchStat">
+                          HR Total: {matchupData?.batter_hr ?? playerInputs?.hr_total ?? '—'}
+                          <span className="pg-edgeHint">Advantage: Batter (higher)</span>
+                        </div>
+                        <div className="pg-matchStat">
+                          Attempts: {matchupData?.batter_attempts ?? playerInputs?.attempts ?? '—'}
+                          <span className="pg-edgeHint">Advantage: Batter (more PAs)</span>
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
                 {!matchupData && !playerInputs ? (
