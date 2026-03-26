@@ -1089,6 +1089,61 @@ body,
   color: var(--color-text);
 }
 
+.pg-matchStat.is-green {
+  border-color: rgba(70, 255, 170, 0.55);
+  background: rgba(30, 255, 165, 0.08);
+  box-shadow: 0 0 0 1px rgba(30, 255, 165, 0.10) inset;
+}
+
+.pg-edgeHint.is-green {
+  color: rgba(70, 255, 170, 0.95);
+}
+
+.pg-pitchTypeGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.pg-pitchTypeRow {
+  border: 1px solid color-mix(in srgb, var(--color-secondary) 18%, transparent);
+  border-radius: 10px;
+  padding: 8px;
+  background: color-mix(in srgb, var(--color-surface) 90%, #0c0f16);
+}
+
+.pg-pitchTypeTop {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: baseline;
+  font-weight: 900;
+}
+
+.pg-pitchTypeMeta {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pg-pill {
+  background: color-mix(in srgb, var(--color-primary) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-primary) 22%, transparent);
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 0.75rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.pg-pill.is-green {
+  border-color: rgba(70, 255, 170, 0.55);
+  background: rgba(30, 255, 165, 0.08);
+  color: rgba(200, 255, 235, 0.98);
+}
+
 .pg-statStack {
   display: flex;
   flex-direction: column;
