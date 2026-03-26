@@ -8,6 +8,7 @@ type AuthCtx = {
   session: Session | null
   ready: boolean
   hasSubscription: boolean
+  hasPlus: boolean
   subscriptionReady: boolean
   favoriteTeam: string | null
   palette: TeamPalette
@@ -34,6 +35,7 @@ export function WebAuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null)
   const [ready, setReady] = useState(false)
   const [hasSubscription, setHasSubscription] = useState(false)
+  const [hasPlus, setHasPlus] = useState(false)
   const [subscriptionReady, setSubscriptionReady] = useState(false)
   const [favoriteTeam, setFavoriteTeamState] = useState<string | null>(null)
 
@@ -53,6 +55,7 @@ export function WebAuthProvider({ children }: { children: React.ReactNode }) {
   const refreshSubscription = useCallback(async () => {
     if (!supabase || !session?.user.id) {
       setHasSubscription(false)
+      setHasPlus(false)
       setSubscriptionReady(true)
       return
     }
@@ -60,21 +63,26 @@ export function WebAuthProvider({ children }: { children: React.ReactNode }) {
     const userId = session.user.id
     const { data, error } = await supabase
       .from('user_subscriptions')
-      .select('has_subscription')
+      .select('*')
       .eq('user_id', userId)
       .maybeSingle()
     if (error) {
       setHasSubscription(false)
+      setHasPlus(false)
       setSubscriptionReady(true)
       return
     }
     if (!data) {
-      await supabase.from('user_subscriptions').upsert({ user_id: userId, has_subscription: false })
+      await supabase
+        .from('user_subscriptions')
+        .upsert({ user_id: userId, has_subscription: false, has_plus: false, plan_tier: 'free' })
       setHasSubscription(false)
+      setHasPlus(false)
       setSubscriptionReady(true)
       return
     }
-    setHasSubscription(Boolean(data.has_subscription))
+    setHasSubscription(Boolean((data as any).has_subscription))
+    setHasPlus(Boolean((data as any).has_plus))
     setSubscriptionReady(true)
   }, [session?.user.id, supabase])
 
@@ -166,6 +174,7 @@ export function WebAuthProvider({ children }: { children: React.ReactNode }) {
     session,
     ready,
     hasSubscription,
+    hasPlus,
     subscriptionReady,
     favoriteTeam,
     palette,

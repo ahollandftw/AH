@@ -19,8 +19,9 @@ export const config = {
   supabaseUrl: () => req('SUPABASE_URL'),
   supabaseServiceRoleKey: () => req('SUPABASE_SERVICE_ROLE_KEY'),
   stripeSecretKey: () => req('STRIPE_SECRET_KEY'),
-  stripeMonthlyPriceLookupKey: () => req('STRIPE_PRICE_LOOKUP_KEY_MONTHLY'),
-  stripeSeasonPriceLookupKey: () => req('STRIPE_PRICE_LOOKUP_KEY_SEASON'),
+  stripeWebhookSecret: () => process.env.STRIPE_WEBHOOK_SECRET?.trim() || '',
+  stripeBasicMonthlyLookupKey: () => req('STRIPE_PRICE_LOOKUP_KEY_BASIC_MONTHLY'),
+  stripePlusMonthlyLookupKey: () => req('STRIPE_PRICE_LOOKUP_KEY_PLUS_MONTHLY'),
   appUrl: () => process.env.PUBLIC_APP_URL?.trim() || 'http://localhost:5173',
   port: Number(process.env.PORT ?? '3001'),
   /** Approximate season start (YYYY-MM-DD). Override with SEASON_START. */

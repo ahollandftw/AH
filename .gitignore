@@ -7,3 +7,4 @@ dist
 apps/*/.env
 packages/*/.env
 apps/mobile/
+data/stripe_backup_code.txt

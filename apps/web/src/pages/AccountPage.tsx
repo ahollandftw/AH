@@ -18,11 +18,24 @@ type PlayerOption = {
   position: string | null
 }
 
+type ProfileVisibility = 'public' | 'friends' | 'private'
+type PlanTier = 'basic' | 'plus'
+
+type DailyPickRow = {
+  player_id: string
+  players?: {
+    stat_player_id: string
+    name: string
+    team: string | null
+  } | null
+}
+
 export default function AccountPage() {
   const {
     supabase,
     session,
     hasSubscription,
+    hasPlus,
     subscriptionReady,
     signInWithGoogle,
     signInWithOtp,
@@ -39,6 +52,15 @@ export default function AccountPage() {
   const [searchResults, setSearchResults] = useState<PlayerOption[]>([])
   const [recommended, setRecommended] = useState<PlayerOption[]>([])
   const [busy, setBusy] = useState(false)
+  const [displayName, setDisplayName] = useState('')
+  const [avatarUrl, setAvatarUrl] = useState('')
+  const [visibility, setVisibility] = useState<ProfileVisibility>('private')
+  const [savingProfile, setSavingProfile] = useState(false)
+  const [todayPickDate, setTodayPickDate] = useState(new Date().toISOString().slice(0, 10))
+  const [pickQuery, setPickQuery] = useState('')
+  const [pickResults, setPickResults] = useState<PlayerOption[]>([])
+  const [dailyPicks, setDailyPicks] = useState<DailyPickRow[]>([])
+  const [trackingSummary, setTrackingSummary] = useState<{ hits: number; total: number; pct: number } | null>(null)
 
   const loadWatchlist = useCallback(() => {
     if (!supabase || !session) {
@@ -51,6 +73,26 @@ export default function AccountPage() {
   useEffect(() => {
     loadWatchlist()
   }, [loadWatchlist])
+
+  useEffect(() => {
+    if (!supabase || !session?.user.id) {
+      setDisplayName('')
+      setAvatarUrl('')
+      setVisibility('private')
+      return
+    }
+    void supabase
+      .from('user_settings')
+      .select('display_name,avatar_url,profile_visibility')
+      .eq('user_id', session.user.id)
+      .maybeSingle()
+      .then(({ data }) => {
+        setDisplayName(String(data?.display_name ?? ''))
+        setAvatarUrl(String(data?.avatar_url ?? ''))
+        const raw = String(data?.profile_visibility ?? 'private').toLowerCase()
+        setVisibility(raw === 'public' || raw === 'friends' ? raw : 'private')
+      })
+  }, [session?.user.id, supabase])
 
   useEffect(() => {
     if (!supabase || !session) {
@@ -108,6 +150,85 @@ export default function AccountPage() {
     })()
   }, [session, supabase])
 
+  const loadDailyPicks = useCallback(() => {
+    if (!supabase || !session?.user.id) {
+      setDailyPicks([])
+      return
+    }
+    void supabase
+      .from('user_daily_picks')
+      .select('player_id, players:player_id (stat_player_id,name,team)')
+      .eq('user_id', session.user.id)
+      .eq('pick_date', todayPickDate)
+      .order('created_at', { ascending: true })
+      .then(({ data }) => {
+        const rows = ((data ?? []) as any[]).map((r) => ({
+          player_id: String(r.player_id),
+          players: Array.isArray(r.players) ? (r.players[0] ?? null) : (r.players ?? null),
+        })) as DailyPickRow[]
+        setDailyPicks(rows)
+      })
+  }, [session?.user.id, supabase, todayPickDate])
+
+  useEffect(() => {
+    loadDailyPicks()
+  }, [loadDailyPicks])
+
+  useEffect(() => {
+    if (!supabase || !session?.user.id || !hasPlus) {
+      setTrackingSummary(null)
+      return
+    }
+    void (async () => {
+      const { data: picks } = await supabase
+        .from('user_daily_picks')
+        .select('pick_date,player_id')
+        .eq('user_id', session.user.id)
+      const pickRows = (picks ?? []) as Array<{ pick_date: string; player_id: string }>
+      if (!pickRows.length) {
+        setTrackingSummary({ hits: 0, total: 0, pct: 0 })
+        return
+      }
+      const { data: statRows } = await supabase
+        .from('player_stats_daily')
+        .select('player_id,date,home_runs')
+      const hitSet = new Set(
+        (statRows ?? [])
+          .filter((r: any) => Number(r.home_runs ?? 0) > 0)
+          .map((r: any) => `${String(r.player_id)}|${String(r.date)}`),
+      )
+      let hits = 0
+      for (const r of pickRows) {
+        if (hitSet.has(`${r.player_id}|${r.pick_date}`)) hits += 1
+      }
+      const total = pickRows.length
+      const pct = total ? Number(((hits / total) * 100).toFixed(2)) : 0
+      setTrackingSummary({ hits, total, pct })
+    })()
+  }, [hasPlus, session?.user.id, supabase, dailyPicks.length])
+
+  useEffect(() => {
+    if (!supabase || !session?.user.id) {
+      setPickResults([])
+      return
+    }
+    const q = pickQuery.trim()
+    if (q.length < 2) {
+      setPickResults([])
+      return
+    }
+    const timer = setTimeout(() => {
+      void supabase
+        .from('players')
+        .select('stat_player_id,name,slug,team,position')
+        .or(`name.ilike.%${q}%,slug.ilike.%${q}%`)
+        .order('name', { ascending: true })
+        .limit(12)
+        .then(({ data }) => setPickResults((data ?? []) as PlayerOption[]))
+    }, 150)
+    return () => clearTimeout(timer)
+  }, [pickQuery, session?.user.id, supabase])
+
   const watchSet = useMemo(() => new Set(players.map((p) => p.playerId)), [players])
 
   async function addPlayer(playerId: string) {
@@ -118,7 +239,65 @@ export default function AccountPage() {
     setBusy(false)
   }
 
-  async function startCheckout(plan: 'monthly' | 'season') {
+  async function onAvatarFile(file: File | null) {
+    if (!file) return
+    const reader = new FileReader()
+    const out = await new Promise<string>((resolve, reject) => {
+      reader.onload = () => resolve(String(reader.result ?? ''))
+      reader.onerror = () => reject(new Error('Failed to read file'))
+      reader.readAsDataURL(file)
+    }).catch(() => '')
+    if (out) setAvatarUrl(out)
+  }
+
+  async function saveProfileSettings() {
+    if (!supabase || !session?.user.id) return
+    setSavingProfile(true)
+    const { error } = await supabase.from('user_settings').upsert(
+      {
+        user_id: session.user.id,
+        display_name: displayName.trim() || null,
+        avatar_url: avatarUrl.trim() || null,
+        profile_visibility: visibility,
+      },
+      { onConflict: 'user_id' },
+    )
+    setSavingProfile(false)
+    setMsg(error ? error.message : 'Profile saved.')
+  }
+
+  async function addDailyPick(playerId: string) {
+    if (!supabase || !session?.user.id) return
+    if (dailyPicks.length >= 3) {
+      setMsg('Max 3 picks per day.')
+      return
+    }
+    const { error } = await supabase.from('user_daily_picks').insert({
+      user_id: session.user.id,
+      pick_date: todayPickDate,
+      player_id: playerId,
+    })
+    if (error) {
+      setMsg(error.message)
+      return
+    }
+    setPickQuery('')
+    setPickResults([])
+    loadDailyPicks()
+  }
+
+  async function removeDailyPick(playerId: string) {
+    if (!supabase || !session?.user.id) return
+    await supabase
+      .from('user_daily_picks')
+      .delete()
+      .eq('user_id', session.user.id)
+      .eq('pick_date', todayPickDate)
+      .eq('player_id', playerId)
+    loadDailyPicks()
+  }
+
+  async function startCheckout(plan: PlanTier) {
     if (!session) return
     setLoading(true)
     setMsg('')
@@ -146,6 +325,19 @@ export default function AccountPage() {
       setLoading(false)
     }
   }
+
+  useEffect(() => {
+    if (!supabase || !session?.user.id) return
+    void supabase.from('user_stat_snapshots').upsert(
+      {
+        user_id: session.user.id,
+        snapshot_date: new Date().toISOString().slice(0, 10),
+        watchlist_count: players.length,
+        favorite_team: favoriteTeam,
+      },
+      { onConflict: 'user_id,snapshot_date' },
+    )
+  }, [favoriteTeam, players.length, session?.user.id, supabase])
 
   return (
     <div className="pg">
@@ -197,8 +389,63 @@ export default function AccountPage() {
             <p className="pg-sub">Signed in as {session.user.email ?? 'user'}</p>
             <p className="pg-sub">
               Subscription:{' '}
-              <strong>{subscriptionReady ? (hasSubscription ? 'Active' : 'Not active') : 'Loading...'}</strong>
+              <strong>
+                {subscriptionReady ? (hasPlus ? 'AH+ Active' : hasSubscription ? 'Basic Active' : 'Not active') : 'Loading...'}
+              </strong>
             </p>
+            <h3 className="pg-sectionTitle">Profile</h3>
+            <div className="acc-profileGrid">
+              <label className="pg-label" htmlFor="display-name">
+                Display name
+              </label>
+              <input
+                id="display-name"
+                className="wl-input"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                placeholder="How your profile appears"
+              />
+              <label className="pg-label" htmlFor="avatar-url">
+                Avatar URL (or upload file)
+              </label>
+              <input
+                id="avatar-url"
+                className="wl-input"
+                value={avatarUrl}
+                onChange={(e) => setAvatarUrl(e.target.value)}
+                placeholder="https://..."
+              />
+              <input
+                className="wl-input"
+                type="file"
+                accept="image/*"
+                onChange={(e) => {
+                  const f = e.target.files?.[0] ?? null
+                  void onAvatarFile(f)
+                }}
+              />
+              <label className="pg-label" htmlFor="profile-visibility">
+                Profile visibility
+              </label>
+              <select
+                id="profile-visibility"
+                className="acc-select"
+                value={visibility}
+                onChange={(e) => setVisibility(e.target.value as ProfileVisibility)}
+              >
+                <option value="public">Public (anyone can view)</option>
+                <option value="friends">Friends only</option>
+                <option value="private">Private</option>
+              </select>
+              {avatarUrl ? (
+                <div className="acc-avatarPreviewWrap">
+                  <img src={avatarUrl} alt="Profile preview" className="acc-avatarPreview" />
+                </div>
+              ) : null}
+              <button type="button" className="pg-clearBtn" disabled={savingProfile} onClick={saveProfileSettings}>
+                {savingProfile ? 'Saving...' : 'Save profile'}
+              </button>
+            </div>
             <div className="acc-teamRow">
               <label className="pg-label" htmlFor="favorite-team">
                 Favorite team theme
@@ -220,27 +467,54 @@ export default function AccountPage() {
                 ))}
               </select>
             </div>
+            <div className="acc-planStack">
+              <div className="acc-planCard">
+                <div className="acc-planHead">
+                  <h4 className="acc-planTitle">Basic</h4>
+                  <span className="acc-planPrice">$5 / month</span>
+                </div>
+                <details className="acc-planDetails">
+                  <summary>View features</summary>
+                  <ul className="acc-planList">
+                    <li>Core app access</li>
+                    <li>Daily HR calls (max 3 picks/day)</li>
+                    <li>Public leaderboard participation (if profile is public)</li>
+                  </ul>
+                </details>
+                <button
+                  type="button"
+                  className="wl-addBtn acc-planBtn"
+                  disabled={loading}
+                  onClick={() => void startCheckout('basic')}
+                >
+                  {loading ? 'Loading...' : 'Choose Basic'}
+                </button>
+              </div>
+
+              <div className="acc-planCard">
+                <div className="acc-planHead">
+                  <h4 className="acc-planTitle">AH+</h4>
+                  <span className="acc-planPrice">$8 / month</span>
+                </div>
+                <details className="acc-planDetails">
+                  <summary>View features</summary>
+                  <ul className="acc-planList">
+                    <li>Everything in Basic</li>
+                    <li>Personal hit-rate tracking and history</li>
+                    <li>Advanced account performance insights</li>
+                  </ul>
+                </details>
+                <button
+                  type="button"
+                  className="wl-addBtn acc-planBtn"
+                  disabled={loading}
+                  onClick={() => void startCheckout('plus')}
+                >
+                  {loading ? 'Loading...' : 'Choose AH+'}
+                </button>
+              </div>
+            </div>
             <div className="acc-actions">
-              <button
-                type="button"
-                className="pg-clearBtn"
-                disabled={loading}
-                onClick={() => {
-                  void startCheckout('monthly')
-                }}
-              >
-                {loading ? 'Loading...' : 'Monthly plan'}
-              </button>
-              <button
-                type="button"
-                className="pg-clearBtn"
-                disabled={loading}
-                onClick={() => {
-                  void startCheckout('season')
-                }}
-              >
-                {loading ? 'Loading...' : 'Season plan'}
-              </button>
               <button type="button" className="pg-clearBtn" onClick={() => void refreshSubscription()}>
                 Refresh status
               </button>
@@ -249,6 +523,78 @@ export default function AccountPage() {
               </button>
             </div>
             {msg ? <p className="pg-sub">{msg}</p> : null}
+          </div>
+
+          <div className="acc-card">
+            <h2 className="pg-sectionTitle">Daily HR Calls (max 3)</h2>
+            <div className="pg-controls">
+              <label className="pg-label" htmlFor="pick-date">
+                Pick date
+              </label>
+              <input
+                id="pick-date"
+                className="pg-date"
+                type="date"
+                value={todayPickDate}
+                onChange={(e) => setTodayPickDate(e.target.value)}
+              />
+            </div>
+            <div className="acc-searchWrap">
+              <input
+                className="wl-input acc-searchInput"
+                value={pickQuery}
+                onChange={(e) => setPickQuery(e.target.value)}
+                placeholder="Search player for daily pick..."
+              />
+            </div>
+            {pickResults.length > 0 ? (
+              <div className="acc-suggestList">
+                {pickResults.map((r) => (
+                  <button
+                    key={r.stat_player_id}
+                    type="button"
+                    className="acc-suggestItem"
+                    disabled={dailyPicks.some((p) => p.player_id === r.stat_player_id) || dailyPicks.length >= 3}
+                    onClick={() => void addDailyPick(r.stat_player_id)}
+                  >
+                    <span className="acc-suggestMain">{r.name}</span>
+                    <span className="acc-suggestMeta">{(r.team ?? '—').toUpperCase()}</span>
+                    <span className="acc-suggestAction">Pick</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            <div className="pg-cards">
+              {dailyPicks.map((p) => (
+                <div key={p.player_id} className="pg-card">
+                  <div className="pg-info">
+                    <span className="pg-name">{p.players?.name ?? p.player_id}</span>
+                    <span className="pg-meta">{(p.players?.team ?? '—').toUpperCase()}</span>
+                  </div>
+                  <button type="button" className="wl-rmBtn" onClick={() => void removeDailyPick(p.player_id)}>
+                    Remove
+                  </button>
+                </div>
+              ))}
+              {dailyPicks.length === 0 ? <p className="pg-empty">No picks yet for this date.</p> : null}
+            </div>
+            <p className="pg-sub" style={{ marginTop: 10, marginBottom: 0 }}>
+              {dailyPicks.length}/3 picks used.
+            </p>
+          </div>
+
+          <div className="acc-card">
+            <h2 className="pg-sectionTitle">My Tracking</h2>
+            {!hasPlus ? (
+              <p className="pg-sub">Personal tracking is an AH+ feature. Upgrade to see your hit percentage and record history.</p>
+            ) : trackingSummary ? (
+              <p className="pg-sub">
+                Lifetime picks: <strong>{trackingSummary.total}</strong> • Hits: <strong>{trackingSummary.hits}</strong> • Hit %:{' '}
+                <strong>{trackingSummary.pct.toFixed(2)}%</strong>
+              </p>
+            ) : (
+              <p className="pg-sub">Loading your tracking stats...</p>
+            )}
           </div>
 
           <div className="acc-card">
