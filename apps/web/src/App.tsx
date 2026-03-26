@@ -14,10 +14,10 @@ import './leaderboard.css'
 
 function Layout() {
   const { pathname } = useLocation()
-  const { session, supabase } = useWebAuth()
+  const { session, supabase, waiverAccepted } = useWebAuth()
   const [profileName, setProfileName] = useState<string | null>(null)
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
-  const links = [
+  const fullLinks = [
     ['/dugout', 'Dugout', '⚾'],
     ['/projections', 'Projections', '📈'],
     ['/stats', 'Stats', '📊'],
@@ -25,6 +25,10 @@ function Layout() {
     ['/friends', 'Friends', '👥'],
     ['/help', 'Help', '❓'],
   ] as const
+  const links =
+    session && !waiverAccepted
+      ? ([['/account', 'Account', '👤']] as const)
+      : fullLinks
   useEffect(() => {
     if (!supabase || !session?.user.id) {
       setProfileName(null)
@@ -118,7 +122,11 @@ function Layout() {
         </div>
       </header>
       <main className="mainScroll" id="main-content">
-        <Outlet />
+        {session && !waiverAccepted && pathname !== '/account' ? (
+          <Navigate to="/account" replace />
+        ) : (
+          <Outlet />
+        )}
       </main>
       <footer className="bottomNav" role="navigation" aria-label="Main">
         {links.map(([to, label, icon]) => (

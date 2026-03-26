@@ -10,12 +10,14 @@ type AuthCtx = {
   hasSubscription: boolean
   hasPlus: boolean
   subscriptionReady: boolean
+  waiverAccepted: boolean
   favoriteTeam: string | null
   palette: TeamPalette
   signInWithOtp: (email: string) => Promise<{ ok: true } | { ok: false; message: string }>
   verifyOtp: (email: string, token: string) => Promise<{ ok: true } | { ok: false; message: string }>
   signInWithGoogle: () => Promise<{ ok: true } | { ok: false; message: string }>
   setFavoriteTeam: (team: string | null) => Promise<void>
+  acceptLiabilityWaiver: () => Promise<void>
   refreshSubscription: () => Promise<void>
   signOut: () => Promise<void>
 }
@@ -46,6 +48,7 @@ export function WebAuthProvider({ children }: { children: React.ReactNode }) {
   const [hasSubscription, setHasSubscription] = useState(false)
   const [hasPlus, setHasPlus] = useState(false)
   const [subscriptionReady, setSubscriptionReady] = useState(false)
+  const [waiverAccepted, setWaiverAccepted] = useState(false)
   const [favoriteTeam, setFavoriteTeamState] = useState<string | null>(null)
 
   useEffect(() => {
@@ -93,6 +96,22 @@ export function WebAuthProvider({ children }: { children: React.ReactNode }) {
     setHasSubscription(Boolean((data as any).has_subscription))
     setHasPlus(Boolean((data as any).has_plus))
     setSubscriptionReady(true)
+  }, [session?.user.id, supabase])
+
+  useEffect(() => {
+    if (!supabase || !session?.user.id) {
+      setWaiverAccepted(true)
+      return
+    }
+    const userId = session.user.id
+    void supabase
+      .from('user_settings')
+      .select('waiver_accepted_at')
+      .eq('user_id', userId)
+      .maybeSingle()
+      .then(({ data }) => {
+        setWaiverAccepted(Boolean((data as any)?.waiver_accepted_at))
+      })
   }, [session?.user.id, supabase])
 
   useEffect(() => {
@@ -206,6 +225,15 @@ export function WebAuthProvider({ children }: { children: React.ReactNode }) {
     await supabase.auth.signOut()
   }, [supabase])
 
+  const acceptLiabilityWaiver = useCallback(async () => {
+    if (!supabase || !session?.user.id) return
+    const userId = session.user.id
+    await supabase
+      .from('user_settings')
+      .upsert({ user_id: userId, waiver_accepted_at: new Date().toISOString() }, { onConflict: 'user_id' })
+    setWaiverAccepted(true)
+  }, [session?.user.id, supabase])
+
   const value: AuthCtx = {
     supabase,
     session,
@@ -213,12 +241,14 @@ export function WebAuthProvider({ children }: { children: React.ReactNode }) {
     hasSubscription,
     hasPlus,
     subscriptionReady,
+    waiverAccepted,
     favoriteTeam,
     palette,
     signInWithOtp,
     verifyOtp,
     signInWithGoogle,
     setFavoriteTeam,
+    acceptLiabilityWaiver,
     refreshSubscription,
     signOut,
   }

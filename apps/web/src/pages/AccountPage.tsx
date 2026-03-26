@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   addToWatchlistByPlayerKey,
   fetchBattingAdjXhrLeaderboard,
@@ -31,15 +32,18 @@ type DailyPickRow = {
 }
 
 export default function AccountPage() {
+  const navigate = useNavigate()
   const {
     supabase,
     session,
     hasSubscription,
     hasPlus,
     subscriptionReady,
+    waiverAccepted,
     signInWithGoogle,
     signInWithOtp,
     signOut,
+    acceptLiabilityWaiver,
     refreshSubscription,
     favoriteTeam,
     setFavoriteTeam,
@@ -391,6 +395,50 @@ export default function AccountPage() {
             </button>
           </div>
           {msg ? <p className="pg-sub">{msg}</p> : null}
+        </div>
+      ) : !waiverAccepted ? (
+        <div className="acc-card">
+          <h2 className="pg-sectionTitle">Liability Waiver Required</h2>
+          <p className="pg-sub">
+            Accept the waiver to unlock Dugout, Projections, Stats, and the rest of the app.
+          </p>
+          <div className="pg-focusCard" style={{ marginTop: 8 }}>
+            <div className="pg-focusLine"><strong>DISCLAIMER OF LIABILITY</strong></div>
+            <div className="pg-focusLine">
+              The home run projections and picks provided through this application are intended solely for informational
+              and entertainment purposes. All projections are based on statistical models and historical data and do not
+              constitute financial, sports betting, or gambling advice.
+            </div>
+            <div className="pg-focusLine">By using this application, you acknowledge and agree that:</div>
+            <div className="pg-focusLine">- No guarantees are made regarding the accuracy or outcome of any projection.</div>
+            <div className="pg-focusLine">
+              - The developer, owner, and affiliates of this application shall not be held liable for any financial loss,
+              damage, or adverse outcome resulting from reliance on the information provided.
+            </div>
+            <div className="pg-focusLine">
+              - Sports betting and gambling may be illegal in your jurisdiction. It is your sole responsibility to ensure
+              compliance with all applicable laws.
+            </div>
+            <div className="pg-focusLine">
+              - You assume full responsibility for any decisions made based on the projections displayed in this app.
+            </div>
+            <div className="pg-focusLine">Use this application at your own risk.</div>
+          </div>
+          <div className="acc-actions" style={{ marginTop: 10 }}>
+            <button type="button" className="wl-addBtn" onClick={() => void acceptLiabilityWaiver()}>
+              I accept the waiver
+            </button>
+            <button
+              type="button"
+              className="wl-rmBtn"
+              onClick={() => {
+                setMsg('Waiver not accepted. Access remains limited to Account only.')
+                navigate('/account')
+              }}
+            >
+              No
+            </button>
+          </div>
         </div>
       ) : (
         <>

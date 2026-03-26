@@ -174,15 +174,37 @@ export function registerBdlRoutes(app: Express) {
           avg,
           obp,
           slg,
-          ops,
-          opponent:opponent_bdl_player_id(full_name, team_abbrev)
+          ops
         `)
         .eq('bdl_player_id', batterXref.bdl_id)
       if (error) throw error
 
+      const oppIds = Array.from(
+        new Set(
+          (rows ?? [])
+            .map((r: any) => Number(r.opponent_bdl_player_id ?? 0))
+            .filter((n: number) => n > 0),
+        ),
+      )
+      const { data: oppPlayers } = oppIds.length
+        ? await sb
+            .from('bdl_players')
+            .select('bdl_id,full_name,team_abbrev')
+            .in('bdl_id', oppIds)
+        : ({ data: [] } as any)
+      const oppMap = new Map<number, { full_name: string | null; team_abbrev: string | null }>(
+        (oppPlayers ?? []).map((p: any) => [
+          Number(p.bdl_id),
+          {
+            full_name: p.full_name ?? null,
+            team_abbrev: p.team_abbrev ?? null,
+          },
+        ]),
+      )
+
       const candidates = (rows ?? [])
         .map((r: any) => {
-          const opp = Array.isArray(r.opponent) ? r.opponent[0] : r.opponent
+          const opp = oppMap.get(Number(r.opponent_bdl_player_id ?? 0))
           return {
             pitcher_bdl_id: Number(r.opponent_bdl_player_id ?? 0) || null,
             pitcher_name: opp?.full_name ?? null,
