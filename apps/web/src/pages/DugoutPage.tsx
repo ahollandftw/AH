@@ -170,6 +170,9 @@ export default function DugoutPage() {
                             </div>
                             <div className="pg-batterProb">
                               {awayTop ? formatProbability(awayTop.hrProbability) : '—'}
+                              {awayTop?.americanOddsStr ? (
+                                <span className="pg-batterOdds">{awayTop.americanOddsStr}</span>
+                              ) : null}
                             </div>
                           </div>
                           <div className="pg-batterCol pg-batterCol--right">
@@ -202,6 +205,9 @@ export default function DugoutPage() {
                             </div>
                             <div className="pg-batterProb">
                               {homeTop ? formatProbability(homeTop.hrProbability) : '—'}
+                              {homeTop?.americanOddsStr ? (
+                                <span className="pg-batterOdds">{homeTop.americanOddsStr}</span>
+                              ) : null}
                             </div>
                           </div>
                         </div>

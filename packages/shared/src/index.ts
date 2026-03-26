@@ -24,6 +24,18 @@ export {
   listDailyHrProjections,
 } from './projections'
 
+export type { HrProbabilityInput, HrProbabilityResult } from './hrProbability'
+export {
+  calculateHrProbability,
+  calcPowerScore,
+  calcPitcherFactor,
+  calcBaseHrRate,
+  calcNormalizedMatchup,
+  formatAmericanOdds,
+  probToAmericanOdds,
+  probToTier,
+} from './hrProbability'
+
 export {
   HOMERUNS_LEADERBOARD_TYPE,
   fetchBattingAdjXhrLeaderboard,

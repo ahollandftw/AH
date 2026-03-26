@@ -56,6 +56,8 @@ export default function AccountPage() {
   const [avatarUrl, setAvatarUrl] = useState('')
   const [visibility, setVisibility] = useState<ProfileVisibility>('private')
   const [savingProfile, setSavingProfile] = useState(false)
+  const [defaultSportsbook, setDefaultSportsbook] = useState('draftkings')
+  const [hrNotifications, setHrNotifications] = useState(true)
   const [todayPickDate, setTodayPickDate] = useState(new Date().toISOString().slice(0, 10))
   const [pickQuery, setPickQuery] = useState('')
   const [pickResults, setPickResults] = useState<PlayerOption[]>([])
@@ -83,7 +85,7 @@ export default function AccountPage() {
     }
     void supabase
       .from('user_settings')
-      .select('display_name,avatar_url,profile_visibility')
+      .select('display_name,avatar_url,profile_visibility,default_sportsbook,hr_notifications')
       .eq('user_id', session.user.id)
       .maybeSingle()
       .then(({ data }) => {
@@ -91,6 +93,8 @@ export default function AccountPage() {
         setAvatarUrl(String(data?.avatar_url ?? ''))
         const raw = String(data?.profile_visibility ?? 'private').toLowerCase()
         setVisibility(raw === 'public' || raw === 'friends' ? raw : 'private')
+        setDefaultSportsbook(String(data?.default_sportsbook ?? 'draftkings'))
+        setHrNotifications(data?.hr_notifications !== false)
       })
   }, [session?.user.id, supabase])
 
@@ -259,6 +263,8 @@ export default function AccountPage() {
         display_name: displayName.trim() || null,
         avatar_url: avatarUrl.trim() || null,
         profile_visibility: visibility,
+        default_sportsbook: defaultSportsbook,
+        hr_notifications: hrNotifications,
       },
       { onConflict: 'user_id' },
     )
@@ -442,6 +448,28 @@ export default function AccountPage() {
                   <img src={avatarUrl} alt="Profile preview" className="acc-avatarPreview" />
                 </div>
               ) : null}
+              <label className="pg-label" htmlFor="default-sportsbook">
+                Default sportsbook (for edge calculation)
+              </label>
+              <select
+                id="default-sportsbook"
+                className="acc-select"
+                value={defaultSportsbook}
+                onChange={(e) => setDefaultSportsbook(e.target.value)}
+              >
+                <option value="draftkings">DraftKings</option>
+                <option value="fanduel">FanDuel</option>
+                <option value="betmgm">BetMGM</option>
+                <option value="fanatics">Fanatics</option>
+              </select>
+              <label className="pg-label acc-toggleLabel">
+                <input
+                  type="checkbox"
+                  checked={hrNotifications}
+                  onChange={(e) => setHrNotifications(e.target.checked)}
+                />
+                HR notifications (push alerts when your picks hit)
+              </label>
               <button type="button" className="pg-clearBtn" disabled={savingProfile} onClick={saveProfileSettings}>
                 {savingProfile ? 'Saving...' : 'Save profile'}
               </button>

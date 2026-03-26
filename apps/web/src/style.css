@@ -838,11 +838,45 @@ body,
   font-size: 0.79rem;
 }
 
+.pg-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+  min-width: 72px;
+}
+
 .pg-prob {
   font-weight: 900;
   font-size: 1rem;
   color: color-mix(in srgb, var(--color-primary) 86%, white);
   text-shadow: 0 0 12px color-mix(in srgb, var(--color-primary) 28%, transparent);
+}
+
+.pg-odds {
+  font-weight: 700;
+  font-size: 0.82rem;
+  letter-spacing: 0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.pg-tierBadge {
+  display: inline-block;
+  font-weight: 800;
+  font-size: 0.72rem;
+  letter-spacing: 0.05em;
+  padding: 1px 7px;
+  border-radius: 4px;
+  text-transform: uppercase;
+}
+
+.pg-batterOdds {
+  display: block;
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--color-muted);
+  margin-top: 1px;
+  font-variant-numeric: tabular-nums;
 }
 
 .pg-tier {
@@ -853,6 +887,19 @@ body,
   padding-left: 10px;
   border-left: 3px solid var(--color-primary);
   margin-bottom: 8px;
+}
+
+.acc-toggleLabel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 0.86rem;
+}
+.acc-toggleLabel input[type="checkbox"] {
+  accent-color: var(--color-primary);
+  width: 16px;
+  height: 16px;
 }
 
 .wl-addRow {

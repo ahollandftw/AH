@@ -14,11 +14,23 @@ import { useWebAuth } from '../auth/WebAuthProvider.tsx'
 
 function tierColor(k: string): string {
   switch (k) {
-    case 'S': return '#ffdf00'
-    case 'A': return '#00e639'
-    case 'B': return '#adc8f5'
-    case 'C': return '#8f9097'
-    default: return '#44474d'
+    case 'A+': return '#ffdf00'
+    case 'A':  return '#00e639'
+    case 'B':  return '#adc8f5'
+    case 'C':  return '#8f9097'
+    case 'D':  return '#44474d'
+    default:   return '#44474d'
+  }
+}
+
+function tierBadgeBg(k: string): string {
+  switch (k) {
+    case 'A+': return 'rgba(255,223,0,0.15)'
+    case 'A':  return 'rgba(0,230,57,0.12)'
+    case 'B':  return 'rgba(173,200,245,0.12)'
+    case 'C':  return 'rgba(143,144,151,0.10)'
+    case 'D':  return 'rgba(68,71,77,0.10)'
+    default:   return 'transparent'
   }
 }
 
@@ -131,8 +143,8 @@ export default function ProjectionsPage() {
       </div>
       <p className="pg-sub">
         {displayDate} &mdash; {games.length} game{games.length !== 1 ? 's' : ''} &mdash;{' '}
-        {filteredRows.length && filteredRows[0]?.source === 'stats_homeruns'
-          ? 'Ranked by xhr (schedule-filtered).'
+        {filteredRows.length && filteredRows[0]?.source === 'hr_model'
+          ? 'Matchup-based HR model — grouped by tier.'
           : 'Daily launch — grouped by tier.'}
       </p>
       {!hasSubscription ? (
@@ -185,6 +197,21 @@ export default function ProjectionsPage() {
                   </div>
                   <div className="pg-right">
                     <span className="pg-prob">{formatProbability(r.hrProbability)}</span>
+                    <span
+                      className="pg-odds"
+                      style={{ color: tierColor(r.tier ?? 'D') }}
+                    >
+                      {r.americanOddsStr ?? '—'}
+                    </span>
+                    <span
+                      className="pg-tierBadge"
+                      style={{
+                        color: tierColor(r.tier ?? 'D'),
+                        background: tierBadgeBg(r.tier ?? 'D'),
+                      }}
+                    >
+                      {r.tier ?? '—'}
+                    </span>
                     {r.l7Hrs != null ? (
                       <span className="pg-small">L7 HRs: {r.l7Hrs}</span>
                     ) : null}

@@ -1,0 +1,31 @@
+name: Daily BDL Sync
+
+on:
+  schedule:
+    # 10:00 AM Central = 15:00 UTC (CDT) / 16:00 UTC (CST)
+    - cron: '0 15 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Trigger daily sync
+        run: |
+          curl -sf -X POST "${{ secrets.API_BASE_URL }}/bdl/sync/daily" \
+            -H "Content-Type: application/json" \
+            --max-time 120
+        env:
+          API_BASE_URL: ${{ secrets.API_BASE_URL }}
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          if [ -n "$SLACK_WEBHOOK_URL" ]; then
+            curl -sf -X POST "$SLACK_WEBHOOK_URL" \
+              -H "Content-Type: application/json" \
+              -d '{"text":"⚠️ Daily BDL sync failed. Check GitHub Actions."}'
+          fi
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

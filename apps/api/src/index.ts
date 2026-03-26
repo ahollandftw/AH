@@ -4,6 +4,8 @@ import Stripe from 'stripe'
 import { runAggregation } from './aggregate.js'
 import { config } from './config.js'
 import { registerLeaderboardRoutes } from './routes/leaderboards.js'
+import { registerBdlRoutes } from './routes/bdl.js'
+import { startLiveMonitor } from './bdl/liveMonitor.js'
 import { getServiceClient } from './supabase.js'
 
 config.supabaseUrl()
@@ -78,6 +80,7 @@ app.get('/health', (_req, res) => {
 })
 
 registerLeaderboardRoutes(app)
+registerBdlRoutes(app)
 
 app.post('/billing/create-checkout-session', async (req, res) => {
   try {
@@ -133,4 +136,7 @@ app.post('/internal/aggregate', async (_req, res) => {
 
 app.listen(config.port, () => {
   console.log(`API listening on http://localhost:${config.port}`)
+  if (process.env.BDL_API_KEY) {
+    startLiveMonitor()
+  }
 })

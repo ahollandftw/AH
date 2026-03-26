@@ -24,6 +24,6 @@ export const config = {
   stripePlusMonthlyLookupKey: () => req('STRIPE_PRICE_LOOKUP_KEY_PLUS_MONTHLY'),
   appUrl: () => process.env.PUBLIC_APP_URL?.trim() || 'http://localhost:5173',
   port: Number(process.env.PORT ?? '3001'),
-  /** Approximate season start (YYYY-MM-DD). Override with SEASON_START. */
   seasonStart: () => process.env.SEASON_START ?? `${new Date().getFullYear()}-03-15`,
+  bdlApiKey: () => req('BDL_API_KEY'),
 }
