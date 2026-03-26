@@ -100,9 +100,9 @@ export function registerLeaderboardRoutes(app: Express) {
       // Optional enrichment fields may not exist yet in DB, so we fall back gracefully.
       let hrEvents: any[] = []
       try {
-        const { data, error } = await supabase
+            const { data, error } = await supabase
           .from('bdl_hr_events')
-          .select('stat_player_id,pitcher_name,pitch_type,hit_distance,detected_at')
+              .select('stat_player_id,bdl_pitcher_id,pitcher_name,pitch_type,hit_distance,detected_at')
           .not('stat_player_id', 'is', null)
           .gte('detected_at', from)
           .order('detected_at', { ascending: false })
@@ -112,7 +112,7 @@ export function registerLeaderboardRoutes(app: Express) {
       } catch {
         const { data, error } = await supabase
           .from('bdl_hr_events')
-          .select('stat_player_id,detected_at')
+          .select('stat_player_id,bdl_pitcher_id,detected_at')
           .not('stat_player_id', 'is', null)
           .gte('detected_at', from)
           .order('detected_at', { ascending: false })
@@ -150,7 +150,7 @@ export function registerLeaderboardRoutes(app: Express) {
           .in('player_id', statIds),
         supabase
           .from('stats_exit_velocity')
-          .select('player_id,attempts')
+          .select('player_id,attempts,brl_percent,ev95percent,avg_hit_speed,fbld')
           .eq('role', 'batting')
           .eq('season', season)
           .in('player_id', statIds),
@@ -163,16 +163,79 @@ export function registerLeaderboardRoutes(app: Express) {
 
       const playerMap = new Map((players ?? []).map((p: any) => [String(p.stat_player_id), p]))
       const hrMap = new Map((yearHrs ?? []).map((r: any) => [String(r.player_id), Number(r.hr_total) || 0]))
-      const attMap = new Map((yearAtt ?? []).map((r: any) => [String(r.player_id), Number(r.attempts) || 0]))
+      const batterMap = new Map(
+        (yearAtt ?? []).map((r: any) => [
+          String(r.player_id),
+          {
+            attempts: Number(r.attempts) || 0,
+            brl_percent: r.brl_percent != null ? Number(r.brl_percent) : 0,
+            ev95percent: r.ev95percent != null ? Number(r.ev95percent) : 0,
+            avg_hit_speed: r.avg_hit_speed != null ? Number(r.avg_hit_speed) : 0,
+            fbld: r.fbld != null ? Number(r.fbld) : 0,
+          },
+        ]),
+      )
       const todayMap = new Map((todayProbs ?? []).map((r: any) => [String(r.player_id), r.hr_probability != null ? Number(r.hr_probability) : null]))
+
+      // If daily_hr_projections isn't populated, we compute a simplified opponent-adjusted
+      // HR probability using our existing stats tables + the opposing pitcher's HR allowed.
+
+      const pitcherIds = Array.from(
+        new Set(
+          statIds
+            .map((pid) => latestByPlayer.get(pid)?.bdl_pitcher_id ?? null)
+            .filter((x) => x != null),
+        ),
+      ) as number[]
+
+      const pitcherHrMap = new Map<string, number>()
+      if (pitcherIds.length) {
+        try {
+          const { data: pRows } = await supabase
+            .from('bdl_season_stats')
+            .select('bdl_player_id,pitching_hr')
+            .eq('season', season)
+            .in('bdl_player_id', pitcherIds)
+          for (const pr of pRows ?? []) {
+            const key = String(pr.bdl_player_id)
+            pitcherHrMap.set(key, pr.pitching_hr != null ? Number(pr.pitching_hr) : 20)
+          }
+        } catch {
+          // ignore: simplified probability will use default pitcher factor
+        }
+      }
 
       const rows = statIds.map((pid) => {
         const p = playerMap.get(pid)
         const latest = latestByPlayer.get(pid)
         const hrTotal = hrMap.get(pid) ?? 0
-        const attempts = attMap.get(pid) ?? 0
+        const batter = batterMap.get(pid)
+        const attempts = batter?.attempts ?? 0
         const hrRate = attempts > 0 ? hrTotal / attempts : null
-        const todayProb = todayMap.get(pid) ?? null
+        let todayProb = todayMap.get(pid) ?? null
+
+        // Fallback: compute model-like probability using power score + pitcher factor.
+        // (No matchup pitch-usage component, because we don't have it here.)
+        if (todayProb == null) {
+          const brl = batter?.brl_percent ?? 0
+          const ev95 = batter?.ev95percent ?? 0
+          const avg = batter?.avg_hit_speed ?? 0
+          const fbld = batter?.fbld ?? 0
+
+          // If we have no meaningful batting input, leave as null.
+          if (attempts > 0 && (brl > 0 || ev95 > 0 || avg > 0 || fbld > 0 || hrTotal > 0)) {
+            const baseRate = hrTotal / attempts
+            const powerScore = 0.35 * brl + 0.25 * ev95 + 0.20 * (avg / 100) + 0.20 * fbld
+
+            const pitcherId = latest?.bdl_pitcher_id != null ? String(latest.bdl_pitcher_id) : null
+            const pitcherHr = pitcherId ? pitcherHrMap.get(pitcherId) ?? 20 : 20
+            const pitcherFactor = pitcherHr / 20
+
+            let prob = baseRate * powerScore * pitcherFactor
+            prob = Math.max(0.01, Math.min(0.6, prob))
+            todayProb = prob
+          }
+        }
 
         return {
           stat_player_id: pid,
