@@ -102,7 +102,7 @@ export function registerLeaderboardRoutes(app: Express) {
       try {
             const { data, error } = await supabase
           .from('bdl_hr_events')
-              .select('stat_player_id,bdl_pitcher_id,pitcher_name,pitch_type,hit_distance,detected_at')
+          .select('stat_player_id,bdl_pitcher_id,pitcher_name,pitch_type,hit_distance,detected_at')
           .not('stat_player_id', 'is', null)
           .gte('detected_at', from)
           .order('detected_at', { ascending: false })
@@ -112,7 +112,7 @@ export function registerLeaderboardRoutes(app: Express) {
       } catch {
         const { data, error } = await supabase
           .from('bdl_hr_events')
-          .select('stat_player_id,bdl_pitcher_id,detected_at')
+          .select('stat_player_id,detected_at')
           .not('stat_player_id', 'is', null)
           .gte('detected_at', from)
           .order('detected_at', { ascending: false })
