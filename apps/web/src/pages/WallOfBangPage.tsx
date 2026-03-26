@@ -27,6 +27,10 @@ export default function WallOfBangPage() {
   const [posts, setPosts] = useState<WallPost[]>([])
   const [commentsByPost, setCommentsByPost] = useState<Record<number, WallComment[]>>({})
   const [commentDrafts, setCommentDrafts] = useState<Record<number, string>>({})
+  const [pendingPosts, setPendingPosts] = useState<WallPost[]>([])
+  const isModerator = ['dutchisop@gmail.com', 'analytichustle.support@gmail.com'].includes(
+    String(session?.user.email ?? '').toLowerCase(),
+  )
 
   async function loadPosts() {
     const base = import.meta.env.VITE_API_BASE_URL ?? ''
@@ -39,11 +43,40 @@ export default function WallOfBangPage() {
       const cj = await cr.json()
       setCommentsByPost((prev) => ({ ...prev, [post.id]: (cj?.data ?? []) as WallComment[] }))
     }
+    if (isModerator && session?.user.email) {
+      const pr = await fetch(
+        `${base}/wall/pending?requester_email=${encodeURIComponent(session.user.email)}`,
+      )
+      const pj = await pr.json()
+      setPendingPosts((pj?.data ?? []) as WallPost[])
+    } else {
+      setPendingPosts([])
+    }
   }
 
   useEffect(() => {
     void loadPosts()
-  }, [])
+  }, [isModerator, session?.user.email])
+
+  async function moderate(postId: number, action: 'approve' | 'deny') {
+    if (!isModerator || !session?.user.email) return
+    const base = import.meta.env.VITE_API_BASE_URL ?? ''
+    const res = await fetch(`${base}/wall/moderate-json`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: postId,
+        action,
+        requester_email: session.user.email,
+      }),
+    })
+    if (!res.ok) {
+      setMsg(await res.text())
+      return
+    }
+    setMsg(`Post ${action}d.`)
+    await loadPosts()
+  }
 
   async function submit() {
     if (!session?.user.id) {
@@ -122,6 +155,29 @@ export default function WallOfBangPage() {
       </div>
 
       <div className="pg-cards">
+        {isModerator && pendingPosts.length > 0 ? (
+          <div className="acc-card" style={{ width: '100%' }}>
+            <h2 className="pg-sectionTitle">Pending moderation</h2>
+            {pendingPosts.map((p) => (
+              <div key={p.id} className="pg-card pg-card--stack" style={{ marginBottom: 10 }}>
+                <div className="pg-info">
+                  <span className="pg-name">{p.title}</span>
+                  <span className="pg-meta">By {p.display_name}</span>
+                  <span className="pg-matchup">{p.description}</span>
+                </div>
+                <div className="acc-actions">
+                  <button type="button" className="wl-addBtn" onClick={() => void moderate(p.id, 'approve')}>
+                    Approve
+                  </button>
+                  <button type="button" className="wl-rmBtn" onClick={() => void moderate(p.id, 'deny')}>
+                    Deny
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
         {posts.map((p) => (
           <div key={p.id} className="pg-card pg-card--stack">
             <div className="pg-info">

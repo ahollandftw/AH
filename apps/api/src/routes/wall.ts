@@ -3,6 +3,12 @@ import { Resend } from 'resend'
 import { config } from '../config.js'
 import { getServiceClient } from '../supabase.js'
 
+function isModerator(email: string): boolean {
+  const e = String(email ?? '').trim().toLowerCase()
+  if (!e) return false
+  return config.wallModerators().includes(e)
+}
+
 export function registerWallRoutes(app: Express) {
   app.get('/wall/posts', async (_req, res) => {
     try {
@@ -33,6 +39,27 @@ export function registerWallRoutes(app: Express) {
         .select('id,post_id,user_id,display_name,body,created_at')
         .eq('post_id', postId)
         .order('created_at', { ascending: true })
+      if (error) throw error
+      res.json({ data })
+    } catch (e) {
+      res.status(500).json({ error: String(e) })
+    }
+  })
+
+  app.get('/wall/pending', async (req, res) => {
+    try {
+      const requesterEmail = String(req.query.requester_email ?? '').trim().toLowerCase()
+      if (!isModerator(requesterEmail)) {
+        res.status(403).json({ error: 'Not authorized' })
+        return
+      }
+      const sb = getServiceClient()
+      const { data, error } = await sb
+        .from('wall_posts')
+        .select('id,user_id,display_name,title,description,ticket_image_url,status,created_at')
+        .eq('status', 'pending')
+        .order('created_at', { ascending: false })
+        .limit(200)
       if (error) throw error
       res.json({ data })
     } catch (e) {
@@ -119,6 +146,29 @@ export function registerWallRoutes(app: Express) {
       }
 
       res.json({ ok: true, id: postId })
+    } catch (e) {
+      res.status(500).json({ error: String(e) })
+    }
+  })
+
+  app.post('/wall/moderate-json', async (req, res) => {
+    try {
+      const requesterEmail = String(req.body?.requester_email ?? '').trim().toLowerCase()
+      const action = String(req.body?.action ?? '').trim().toLowerCase()
+      const id = Number(req.body?.id ?? 0)
+      if (!id || !['approve', 'deny'].includes(action)) {
+        res.status(400).json({ error: 'id and action(approve|deny) required' })
+        return
+      }
+      if (!isModerator(requesterEmail)) {
+        res.status(403).json({ error: 'Not authorized' })
+        return
+      }
+      const status = action === 'approve' ? 'approved' : 'denied'
+      const sb = getServiceClient()
+      const { error } = await sb.from('wall_posts').update({ status }).eq('id', id)
+      if (error) throw error
+      res.json({ ok: true, id, status })
     } catch (e) {
       res.status(500).json({ error: String(e) })
     }

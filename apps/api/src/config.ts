@@ -30,4 +30,10 @@ export const config = {
   supportEmail: () => process.env.SUPPORT_EMAIL?.trim() || 'analytichustle.support@gmail.com',
   moderationSecret: () => process.env.WALL_MODERATION_SECRET?.trim() || '',
   publicApiUrl: () => process.env.PUBLIC_API_URL?.trim() || `http://localhost:${Number(process.env.PORT ?? '3001')}`,
+  wallModerators: () =>
+    (process.env.WALL_MODERATOR_EMAILS ??
+      'dutchisop@gmail.com,analytichustle.support@gmail.com')
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean),
 }
