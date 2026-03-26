@@ -65,6 +65,16 @@ async function pollGamePlays(bdlGameId: number, lastOrder: number): Promise<numb
     ]),
   )
 
+  // Cross-reference pitcher IDs to show opposing pitcher + optional pitch detail
+  const pitcherIds = [...new Set(hrPlays.map((p) => p.pitcher_id).filter(Boolean))] as number[]
+  const { data: pitcherXref } = pitcherIds.length
+    ? await sb.from('bdl_players').select('bdl_id, full_name').in('bdl_id', pitcherIds)
+    : { data: [] }
+
+  const pitcherMap = new Map(
+    (pitcherXref ?? []).map((r: { bdl_id: number; full_name: string }) => [r.bdl_id, r.full_name]),
+  )
+
   const today = todayET()
 
   for (const play of hrPlays) {
@@ -77,19 +87,39 @@ async function pollGamePlays(bdlGameId: number, lastOrder: number): Promise<numb
         `(game ${bdlGameId}, inning ${play.inning}) — "${play.text}"`,
     )
 
-    // Insert HR event (ignore duplicates)
-    await sb.from('bdl_hr_events').upsert(
-      {
-        bdl_game_id: bdlGameId,
-        bdl_batter_id: play.batter_id,
-        stat_player_id: statId,
-        play_order: play.order,
-        play_text: play.text,
-        inning: play.inning,
-        detected_at: new Date().toISOString(),
-      },
-      { onConflict: 'bdl_game_id,play_order' },
-    )
+    // Insert HR event (ignore duplicates). If DB columns for enrichment aren't present yet,
+    // fall back to the minimal insert so live monitoring doesn't break.
+    try {
+      await sb.from('bdl_hr_events').upsert(
+        {
+          bdl_game_id: bdlGameId,
+          bdl_batter_id: play.batter_id,
+          stat_player_id: statId,
+          bdl_pitcher_id: play.pitcher_id,
+          pitcher_name: play.pitcher_id ? (pitcherMap.get(play.pitcher_id) ?? null) : null,
+          pitch_type: (play as any)?.pitch_type ?? (play as any)?.pitch_type_code ?? null,
+          hit_distance: (play as any)?.hit_distance ?? null,
+          play_order: play.order,
+          play_text: play.text,
+          inning: play.inning,
+          detected_at: new Date().toISOString(),
+        },
+        { onConflict: 'bdl_game_id,play_order' },
+      )
+    } catch (e) {
+      await sb.from('bdl_hr_events').upsert(
+        {
+          bdl_game_id: bdlGameId,
+          bdl_batter_id: play.batter_id,
+          stat_player_id: statId,
+          play_order: play.order,
+          play_text: play.text,
+          inning: play.inning,
+          detected_at: new Date().toISOString(),
+        },
+        { onConflict: 'bdl_game_id,play_order' },
+      )
+    }
 
     // Validate user picks if we have a cross-referenced stat_player_id
     if (statId) {

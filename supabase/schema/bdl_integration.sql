@@ -105,6 +105,12 @@ create table if not exists public.bdl_hr_events (
 create index if not exists bdl_hr_events_date_idx on public.bdl_hr_events(detected_at);
 create index if not exists bdl_hr_events_player_idx on public.bdl_hr_events(stat_player_id);
 
+-- Optional enrichment for Stats tab (safe if columns already exist)
+alter table public.bdl_hr_events add column if not exists bdl_pitcher_id integer;
+alter table public.bdl_hr_events add column if not exists pitcher_name text;
+alter table public.bdl_hr_events add column if not exists pitch_type text;
+alter table public.bdl_hr_events add column if not exists hit_distance integer;
+
 -- ─── Extend user_settings for sportsbook + notifications ────────────
 alter table public.user_settings
   add column if not exists default_sportsbook text not null default 'draftkings';

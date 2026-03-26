@@ -136,6 +136,9 @@ export type BdlPlay = {
   outs: number | null
   batter_id: number | null
   pitcher_id: number | null
+  pitch_type_code?: string | null
+  pitch_type?: string | null
+  hit_distance?: number | null
 }
 
 export type BdlSeasonStats = {

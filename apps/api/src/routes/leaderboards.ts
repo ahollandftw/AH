@@ -70,4 +70,141 @@ export function registerLeaderboardRoutes(app: Express) {
       res.status(500).json({ error: String(e) })
     }
   })
+
+  // ── Stats tab: homers list (year totals + today%) ──────────────────
+  app.get('/leaderboard/homers', async (req, res: Response) => {
+    try {
+      const dateIso = String(req.query.date ?? '').trim()
+      const days = Number(req.query.days ?? '1') || 1
+      const limit = Number(req.query.limit ?? '100') || 100
+
+      // Default date = app "display date" in ET
+      const computedDateIso =
+        dateIso ||
+        (() => {
+          const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }))
+          const y = d.getFullYear()
+          const m = String(d.getMonth() + 1).padStart(2, '0')
+          const dd = String(d.getDate()).padStart(2, '0')
+          return `${y}-${m}-${dd}`
+        })()
+
+      const season = Number(req.query.season ?? new Date(`${computedDateIso}T00:00:00Z`).getUTCFullYear()) || 0
+
+      const now = Date.now()
+      const from = new Date(now - days * 24 * 60 * 60 * 1000).toISOString()
+
+      const supabase = getServiceClient()
+
+      // HR events in the selected window; aggregate to latest event per hitter.
+      // Optional enrichment fields may not exist yet in DB, so we fall back gracefully.
+      let hrEvents: any[] = []
+      try {
+        const { data, error } = await supabase
+          .from('bdl_hr_events')
+          .select('stat_player_id,pitcher_name,pitch_type,hit_distance,detected_at')
+          .not('stat_player_id', 'is', null)
+          .gte('detected_at', from)
+          .order('detected_at', { ascending: false })
+          .limit(5000)
+        if (error) throw error
+        hrEvents = data ?? []
+      } catch {
+        const { data, error } = await supabase
+          .from('bdl_hr_events')
+          .select('stat_player_id,detected_at')
+          .not('stat_player_id', 'is', null)
+          .gte('detected_at', from)
+          .order('detected_at', { ascending: false })
+          .limit(5000)
+        if (error) throw error
+        hrEvents = data ?? []
+      }
+
+      const latestByPlayer = new Map<string, any>()
+      for (const ev of (hrEvents ?? []) as any[]) {
+        const pid = String(ev.stat_player_id ?? '')
+        if (!pid) continue
+        if (!latestByPlayer.has(pid)) latestByPlayer.set(pid, ev)
+      }
+
+      const statIds = Array.from(latestByPlayer.keys())
+
+      if (!statIds.length) {
+        res.json({ last_updated: new Date().toISOString(), date: computedDateIso, count: 0, players: [] })
+        return
+      }
+
+      const [{ data: players }, { data: yearHrs }, { data: yearAtt }, { data: todayProbs }] = await Promise.all([
+        supabase
+          .from('players')
+          .select('stat_player_id,name,team,position')
+          .in('stat_player_id', statIds)
+          .limit(statIds.length),
+        supabase
+          .from('stats_homeruns')
+          .select('player_id,hr_total')
+          .eq('role', 'batting')
+          .eq('type', 'adj_xhr')
+          .eq('year', season)
+          .in('player_id', statIds),
+        supabase
+          .from('stats_exit_velocity')
+          .select('player_id,attempts')
+          .eq('role', 'batting')
+          .eq('season', season)
+          .in('player_id', statIds),
+        supabase
+          .from('daily_hr_projections')
+          .select('player_id,hr_probability')
+          .eq('date', computedDateIso)
+          .in('player_id', statIds),
+      ])
+
+      const playerMap = new Map((players ?? []).map((p: any) => [String(p.stat_player_id), p]))
+      const hrMap = new Map((yearHrs ?? []).map((r: any) => [String(r.player_id), Number(r.hr_total) || 0]))
+      const attMap = new Map((yearAtt ?? []).map((r: any) => [String(r.player_id), Number(r.attempts) || 0]))
+      const todayMap = new Map((todayProbs ?? []).map((r: any) => [String(r.player_id), r.hr_probability != null ? Number(r.hr_probability) : null]))
+
+      const rows = statIds.map((pid) => {
+        const p = playerMap.get(pid)
+        const latest = latestByPlayer.get(pid)
+        const hrTotal = hrMap.get(pid) ?? 0
+        const attempts = attMap.get(pid) ?? 0
+        const hrRate = attempts > 0 ? hrTotal / attempts : null
+        const todayProb = todayMap.get(pid) ?? null
+
+        return {
+          stat_player_id: pid,
+          player_name: p?.name ?? null,
+          team: p?.team ?? null,
+          position: p?.position ?? null,
+          opponent_pitcher: latest?.pitcher_name ?? null,
+          pitch_type: latest?.pitch_type ?? null,
+          distance: latest?.hit_distance ?? null,
+          hr_total_year: hrTotal,
+          hr_rate: hrRate, // HR / AB (attempts)
+          today_probability: todayProb,
+          today_pct: todayProb != null && Number.isFinite(todayProb) ? todayProb * 100 : null,
+        }
+      })
+
+      rows.sort((a, b) => {
+        const A = a.today_probability ?? -1
+        const B = b.today_probability ?? -1
+        if (A !== B) return B - A
+        return (b.hr_total_year ?? 0) - (a.hr_total_year ?? 0)
+      })
+
+      res.json({
+        last_updated: new Date().toISOString(),
+        date: computedDateIso,
+        season,
+        count: rows.length,
+        players: rows.slice(0, limit),
+      })
+    } catch (e) {
+      res.status(500).json({ error: String(e) })
+    }
+  })
 }
