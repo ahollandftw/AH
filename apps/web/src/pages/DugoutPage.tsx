@@ -11,6 +11,7 @@ import {
 } from '@kinetic/shared'
 import { useWebAuth } from '../auth/WebAuthProvider.tsx'
 import { normalizeTeamCode, paletteForTeam } from '../theme/teamPalette'
+import hrIcon from '../../../../data/icons8-home-run-96.png'
 
 export default function DugoutPage() {
   const { supabase, hasSubscription, session } = useWebAuth()
@@ -513,7 +514,9 @@ export default function DugoutPage() {
                                           : (inningRaw || periodRaw)
                                     return (
                                       <div key={i} className="pg-scoringPlay pg-scoringPlay--hr">
-                                        <span className="pg-scoringPlayIcon">🏠⚾</span>
+                                        <span className="pg-scoringPlayIcon" aria-hidden="true">
+                                          <img className="pg-scoringPlayHrIcon" src={hrIcon} alt="" />
+                                        </span>
                                         <span className="pg-scoringPlayText">{txt}</span>
                                         <span className="pg-scoringPlayInning">{inningLabel}</span>
                                       </div>

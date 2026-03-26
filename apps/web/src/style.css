@@ -1218,6 +1218,14 @@ body,
   font-size: 0.9rem;
 }
 
+.pg-scoringPlayHrIcon {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+  display: block;
+  filter: drop-shadow(0 1px 0 rgba(0, 0, 0, 0.35));
+}
+
 .pg-scoringPlayText {
   color: var(--color-text);
   font-weight: 500;
