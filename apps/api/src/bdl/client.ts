@@ -134,11 +134,30 @@ export type BdlPlay = {
   scoring_play: boolean
   score_value: number | null
   outs: number | null
+  balls?: number | null
+  strikes?: number | null
   batter_id: number | null
   pitcher_id: number | null
+  pitch_type?: string | null
+  pitch_velocity?: number | null
+  hit_coordinate_x?: number | null
+  hit_coordinate_y?: number | null
+  trajectory?: string | null
+}
+
+export type BdlPitchDetail = {
   pitch_type_code?: string | null
   pitch_type?: string | null
   hit_distance?: number | null
+}
+
+export type BdlPlateAppearance = {
+  batter_id: number
+  pitcher_id: number
+  inning: number
+  half_inning?: string | null
+  result?: string | null
+  pitches?: BdlPitchDetail[]
 }
 
 export type BdlSeasonStats = {

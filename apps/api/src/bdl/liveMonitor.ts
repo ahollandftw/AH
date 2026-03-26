@@ -1,5 +1,5 @@
 import { getServiceClient } from '../supabase.js'
-import { bdlFetch, bdlFetchAll, type BdlGame, type BdlPlay } from './client.js'
+import { bdlFetch, bdlFetchAll, type BdlGame, type BdlPlay, type BdlPlateAppearance } from './client.js'
 import { syncGames, syncPlayerProps } from './sync.js'
 
 const POLL_INTERVAL_MS = 2 * 60 * 1000   // 2 minutes during active games
@@ -51,6 +51,17 @@ async function pollGamePlays(bdlGameId: number, lastOrder: number): Promise<numb
   const hrPlays = newPlays.filter(isHomeRunPlay)
   if (!hrPlays.length) return Math.max(lastOrder, ...newPlays.map((p) => p.order))
 
+  // Plate appearances (for pitch-by-pitch detail like hit_distance). One fetch per game poll.
+  let plateApps: BdlPlateAppearance[] | null = null
+  try {
+    const paRes = await bdlFetch<{ data: BdlPlateAppearance[] }>('/mlb/v1/plate_appearances', {
+      game_id: bdlGameId,
+    })
+    plateApps = paRes.data ?? []
+  } catch {
+    plateApps = null
+  }
+
   // Cross-reference batter IDs
   const batterIds = [...new Set(hrPlays.map((p) => p.batter_id).filter(Boolean))] as number[]
   const { data: xref } = await sb
@@ -89,6 +100,25 @@ async function pollGamePlays(bdlGameId: number, lastOrder: number): Promise<numb
 
     // Insert HR event (ignore duplicates). If DB columns for enrichment aren't present yet,
     // fall back to the minimal insert so live monitoring doesn't break.
+    const parsedDistance =
+      play.text && /\((\d+)\s*feet\)/i.test(play.text)
+        ? Number(play.text.match(/\((\d+)\s*feet\)/i)?.[1] ?? NaN)
+        : null
+    const distanceFromText = parsedDistance != null && Number.isFinite(parsedDistance) ? parsedDistance : null
+
+    const pa =
+      plateApps?.find((pa) => {
+        const sameBatter = pa.batter_id === play.batter_id
+        const samePitcher = play.pitcher_id != null ? pa.pitcher_id === play.pitcher_id : true
+        const sameInning = pa.inning === play.inning
+        const isHr = (pa.result ?? '').toLowerCase().includes('home run')
+        return sameBatter && samePitcher && sameInning && isHr
+      }) ?? null
+
+    const lastPitch = pa?.pitches?.length ? pa.pitches[pa.pitches.length - 1] : null
+    const pitchType = play.pitch_type ?? lastPitch?.pitch_type ?? lastPitch?.pitch_type_code ?? null
+    const hitDistance = lastPitch?.hit_distance ?? distanceFromText ?? null
+
     try {
       await sb.from('bdl_hr_events').upsert(
         {
@@ -97,8 +127,8 @@ async function pollGamePlays(bdlGameId: number, lastOrder: number): Promise<numb
           stat_player_id: statId,
           bdl_pitcher_id: play.pitcher_id,
           pitcher_name: play.pitcher_id ? (pitcherMap.get(play.pitcher_id) ?? null) : null,
-          pitch_type: (play as any)?.pitch_type ?? (play as any)?.pitch_type_code ?? null,
-          hit_distance: (play as any)?.hit_distance ?? null,
+          pitch_type: pitchType,
+          hit_distance: hitDistance,
           play_order: play.order,
           play_text: play.text,
           inning: play.inning,
