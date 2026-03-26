@@ -11,6 +11,7 @@ import {
 import { startLiveMonitor, stopLiveMonitor } from '../bdl/liveMonitor.js'
 import { calculateEdge, calculateEdgesForDate } from '../bdl/edge.js'
 import { getServiceClient } from '../supabase.js'
+import { bdlFetch, bdlFetchAll, type BdlPlay, type BdlPlateAppearance } from '../bdl/client.js'
 
 export function registerBdlRoutes(app: Express) {
   const canonTeam = (team: string): string => {
@@ -428,6 +429,128 @@ export function registerBdlRoutes(app: Express) {
       const { data, error } = await query
       if (error) throw error
       res.json({ data })
+    } catch (e) {
+      res.status(500).json({ error: String(e) })
+    }
+  })
+
+  // Backfill/refresh HR events for a date by scanning all plays (not just live-monitor deltas).
+  app.post('/bdl/hr-events/refresh-today', async (req, res) => {
+    try {
+      const date = String(req.body?.date ?? req.query.date ?? '').trim()
+      const sb = getServiceClient()
+
+      // Ensure we have the slate in DB (also keeps bdl_games current)
+      await syncGames(date || undefined)
+
+      // Pull game IDs for the date from Supabase
+      let q = sb.from('bdl_games').select('bdl_id,date')
+      if (date) q = q.eq('date', date)
+      else q = q.order('date', { ascending: false }).limit(20)
+      const { data: games, error: gErr } = await q
+      if (gErr) throw gErr
+
+      const HR_PATTERNS = [/homer/i, /home run/i, /grand slam/i, /homers/i]
+      const isHomeRunPlay = (p: BdlPlay) =>
+        Boolean(p.scoring_play && p.text && HR_PATTERNS.some((re) => re.test(p.text!)))
+
+      let inserted = 0
+      let scannedGames = 0
+
+      for (const g of (games ?? []) as any[]) {
+        const gameId = Number(g.bdl_id)
+        if (!gameId) continue
+        scannedGames++
+
+        const plays = await bdlFetchAll<BdlPlay>('/mlb/v1/plays', { game_id: gameId })
+        const hrPlays = plays.filter(isHomeRunPlay)
+        if (!hrPlays.length) continue
+
+        // plate appearances (for hit_distance, pitch type fallback)
+        let plateApps: BdlPlateAppearance[] | null = null
+        try {
+          const paRes = await bdlFetch<{ data: BdlPlateAppearance[] }>('/mlb/v1/plate_appearances', { game_id: gameId })
+          plateApps = paRes.data ?? []
+        } catch {
+          plateApps = null
+        }
+
+        // Cross-ref batter & pitcher IDs -> names/stat ids
+        const batterIds = [...new Set(hrPlays.map((p) => p.batter_id).filter(Boolean))] as number[]
+        const pitcherIds = [...new Set(hrPlays.map((p) => p.pitcher_id).filter(Boolean))] as number[]
+
+        const [{ data: batX }, { data: pitX }] = await Promise.all([
+          batterIds.length
+            ? sb.from('bdl_players').select('bdl_id,stat_player_id,full_name').in('bdl_id', batterIds)
+            : Promise.resolve({ data: [] as any[] }),
+          pitcherIds.length
+            ? sb.from('bdl_players').select('bdl_id,full_name').in('bdl_id', pitcherIds)
+            : Promise.resolve({ data: [] as any[] }),
+        ])
+
+        const batterMap = new Map((batX ?? []).map((r: any) => [Number(r.bdl_id), r]))
+        const pitcherMap = new Map((pitX ?? []).map((r: any) => [Number(r.bdl_id), String(r.full_name)]))
+
+        for (const play of hrPlays) {
+          if (!play.batter_id) continue
+          const batter = batterMap.get(play.batter_id)
+          const statId = batter?.stat_player_id ?? null
+
+          const parsedDistance =
+            play.text && /\((\d+)\s*feet\)/i.test(play.text)
+              ? Number(play.text.match(/\((\d+)\s*feet\)/i)?.[1] ?? NaN)
+              : null
+          const distanceFromText = parsedDistance != null && Number.isFinite(parsedDistance) ? parsedDistance : null
+
+          const pa =
+            plateApps?.find((pa) => {
+              const sameBatter = pa.batter_id === play.batter_id
+              const samePitcher = play.pitcher_id != null ? pa.pitcher_id === play.pitcher_id : true
+              const sameInning = pa.inning === play.inning
+              const isHr = (pa.result ?? '').toLowerCase().includes('home run')
+              return sameBatter && samePitcher && sameInning && isHr
+            }) ?? null
+          const lastPitch = pa?.pitches?.length ? pa.pitches[pa.pitches.length - 1] : null
+          const pitchType = play.pitch_type ?? lastPitch?.pitch_type ?? lastPitch?.pitch_type_code ?? null
+          const hitDistance = lastPitch?.hit_distance ?? distanceFromText ?? null
+
+          try {
+            await sb.from('bdl_hr_events').upsert(
+              {
+                bdl_game_id: gameId,
+                bdl_batter_id: play.batter_id,
+                stat_player_id: statId,
+                bdl_pitcher_id: play.pitcher_id,
+                pitcher_name: play.pitcher_id ? (pitcherMap.get(play.pitcher_id) ?? null) : null,
+                pitch_type: pitchType,
+                hit_distance: hitDistance,
+                play_order: play.order,
+                play_text: play.text,
+                inning: play.inning,
+                detected_at: new Date().toISOString(),
+              },
+              { onConflict: 'bdl_game_id,play_order' },
+            )
+          } catch {
+            await sb.from('bdl_hr_events').upsert(
+              {
+                bdl_game_id: gameId,
+                bdl_batter_id: play.batter_id,
+                stat_player_id: statId,
+                play_order: play.order,
+                play_text: play.text,
+                inning: play.inning,
+                detected_at: new Date().toISOString(),
+              },
+              { onConflict: 'bdl_game_id,play_order' },
+            )
+          }
+
+          inserted++
+        }
+      }
+
+      res.json({ ok: true, date: date || null, scannedGames, inserted })
     } catch (e) {
       res.status(500).json({ error: String(e) })
     }

@@ -124,9 +124,9 @@ export default function LeaderboardPage() {
                 <th scope="col">Opp. Pitcher</th>
                 <th scope="col">Pitch type</th>
                 <th scope="col">Distance</th>
-                <th scope="col">HR total (year)</th>
+                <th scope="col">HR total ({data?.season ?? 'year'})</th>
                 <th scope="col">today%</th>
-                <th scope="col">HR/AB</th>
+                <th scope="col">HR/AB ({data?.season ?? 'year'})</th>
               </tr>
             </thead>
             <tbody>

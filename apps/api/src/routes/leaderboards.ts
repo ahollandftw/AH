@@ -137,7 +137,8 @@ export function registerLeaderboardRoutes(app: Express) {
         return
       }
 
-      const [{ data: players }, { data: yearHrs }, { data: yearAtt }, { data: todayProbs }] = await Promise.all([
+      const [{ data: players }, { data: yearHrs }, { data: yearAtt }, { data: todayProbs }, { data: bdlXref }] =
+        await Promise.all([
         supabase
           .from('players')
           .select('stat_player_id,name,team,position')
@@ -161,6 +162,10 @@ export function registerLeaderboardRoutes(app: Express) {
           .select('player_id,hr_probability')
           .eq('date', computedDateIso)
           .in('player_id', statIds),
+        supabase
+          .from('bdl_players')
+          .select('bdl_id,stat_player_id')
+          .in('stat_player_id', statIds),
       ])
 
       const playerMap = new Map((players ?? []).map((p: any) => [String(p.stat_player_id), p]))
@@ -181,6 +186,41 @@ export function registerLeaderboardRoutes(app: Express) {
 
       // If daily_hr_projections isn't populated, we compute a simplified opponent-adjusted
       // HR probability using our existing stats tables + the opposing pitcher's HR allowed.
+
+      // Prefer *current season* HR totals from BDL season stats when available.
+      const statToBdl = new Map((bdlXref ?? []).map((r: any) => [String(r.stat_player_id), Number(r.bdl_id)]))
+      const bdlIds = Array.from(new Set((bdlXref ?? []).map((r: any) => Number(r.bdl_id)).filter(Boolean)))
+
+      if (bdlIds.length) {
+        try {
+          const { data: bdlSeason } = await supabase
+            .from('bdl_season_stats')
+            .select('bdl_player_id,batting_hr,batting_ab')
+            .eq('season', seasonPrimary)
+            .in('bdl_player_id', bdlIds)
+
+          const hrByStat = new Map<string, number>()
+          const abByStat = new Map<string, number>()
+          for (const row of bdlSeason ?? []) {
+            const bdlId = Number((row as any).bdl_player_id)
+            const statId = (bdlXref ?? []).find((x: any) => Number(x.bdl_id) === bdlId)?.stat_player_id
+            if (!statId) continue
+            hrByStat.set(String(statId), Number((row as any).batting_hr) || 0)
+            abByStat.set(String(statId), Number((row as any).batting_ab) || 0)
+          }
+
+          for (const sid of statIds) {
+            if (hrByStat.has(sid)) hrMap.set(sid, hrByStat.get(sid) ?? 0)
+            const batter = batterMap.get(sid)
+            const ab = abByStat.get(sid)
+            if (batter && ab != null && Number.isFinite(ab)) batter.attempts = Number(ab) || 0
+          }
+
+          seasonUsed = seasonPrimary
+        } catch {
+          // ignore: fall back to Statcast-derived totals
+        }
+      }
 
       // Automatic 2026 -> 2025 fallback (matches ProjectionsPage behavior).
       // If the target season's HR totals or AB inputs are missing, use 2025.
