@@ -485,40 +485,50 @@ export default function ProjectionsPage() {
             <p className="pg-sub">{matchupFor.name} {matchupFor.opponent ?? ''}</p>
             {matchupLoading ? (
               <p className="pg-sub">Loading matchup...</p>
-            ) : matchupData ? (
-              <>
-                <div className="pg-matchupGrid">
-                  <div>
-                    <div className="pg-label">Pitcher (Left)</div>
-                    <div className="pg-matchupName">{matchupData.pitcher_name ?? 'Unknown'}</div>
-                    <div className="pg-small">ERA: {matchupData.pitcher_era ?? '—'} • K: {matchupData.pitcher_k ?? '—'}</div>
-                  </div>
-                  <div>
-                    <div className="pg-label">Batter (Right)</div>
-                    <div className="pg-matchupName">{matchupData.batter_name}</div>
-                    <div className="pg-small">AVG: {matchupData.batter_avg ?? '—'} • HR: {matchupData.batter_hr ?? '—'}</div>
-                  </div>
-                  <div className="pg-matchStat">BvP AB: {matchupData.sample_ab ?? 0}</div>
-                  <div className="pg-matchStat">BvP H: {matchupData.h ?? 0}</div>
-                  <div className="pg-matchStat">BvP HR: {matchupData.hr ?? 0}</div>
-                  <div className="pg-matchStat">BvP K: {matchupData.k ?? 0}</div>
-                  <div className="pg-matchStat">BvP AVG: {matchupData.avg ?? '—'}</div>
-                  <div className="pg-matchStat">BvP OPS: {matchupData.ops ?? '—'}</div>
-                </div>
-                <div style={{ marginTop: 10 }}>
-                  <div className="pg-label">Projection inputs ({playerInputs?.season ?? 'latest'})</div>
-                  <div className="pg-matchupGrid">
-                    <div className="pg-matchStat">Hard Hit / EV95: {playerInputs?.ev95percent ?? '—'}</div>
-                    <div className="pg-matchStat">Barrel %: {playerInputs?.brl_percent ?? '—'}</div>
-                    <div className="pg-matchStat">Avg EV: {playerInputs?.avg_hit_speed ?? '—'}</div>
-                    <div className="pg-matchStat">FB/LD: {playerInputs?.fbld ?? '—'}</div>
-                    <div className="pg-matchStat">HR Total: {playerInputs?.hr_total ?? '—'}</div>
-                    <div className="pg-matchStat">Batted Ball Attempts: {playerInputs?.attempts ?? '—'}</div>
-                  </div>
-                </div>
-              </>
             ) : (
-              <p className="pg-sub">No stored batter-vs-pitcher matchup data yet for this opponent.</p>
+              <>
+                {matchupData?.pitcher_name ? (
+                  <div className="pg-matchupGrid">
+                    <div>
+                      <div className="pg-label">Pitcher</div>
+                      <div className="pg-matchupName">{matchupData.pitcher_name}</div>
+                      <div className="pg-small">ERA: {matchupData.pitcher_era ?? '—'} &bull; K: {matchupData.pitcher_k ?? '—'} &bull; WHIP: {matchupData.pitcher_whip ?? '—'}</div>
+                    </div>
+                    <div>
+                      <div className="pg-label">Batter</div>
+                      <div className="pg-matchupName">{matchupData.batter_name}</div>
+                      <div className="pg-small">HR: {matchupData.batter_hr ?? '—'} &bull; Avg EV: {matchupData.batter_avg_hit_speed ?? '—'} &bull; Barrel: {matchupData.batter_barrel ?? '—'}%</div>
+                    </div>
+                  </div>
+                ) : null}
+                {matchupData?.sample_ab ? (
+                  <div style={{ marginTop: 10 }}>
+                    <div className="pg-label">Batter vs Pitcher</div>
+                    <div className="pg-matchupGrid">
+                      <div className="pg-matchStat">AB: {matchupData.sample_ab}</div>
+                      <div className="pg-matchStat">H: {matchupData.h ?? 0}</div>
+                      <div className="pg-matchStat">HR: {matchupData.hr ?? 0}</div>
+                      <div className="pg-matchStat">K: {matchupData.k ?? 0}</div>
+                      <div className="pg-matchStat">AVG: {matchupData.avg ?? '—'}</div>
+                      <div className="pg-matchStat">OPS: {matchupData.ops ?? '—'}</div>
+                    </div>
+                  </div>
+                ) : null}
+                <div style={{ marginTop: 10 }}>
+                  <div className="pg-label">Statcast / Projection Inputs ({matchupData?.season ?? playerInputs?.season ?? selectedYear})</div>
+                  <div className="pg-matchupGrid">
+                    <div className="pg-matchStat">Hard Hit / EV95: {matchupData?.batter_ev95 ?? playerInputs?.ev95percent ?? '—'}</div>
+                    <div className="pg-matchStat">Barrel %: {matchupData?.batter_barrel ?? playerInputs?.brl_percent ?? '—'}</div>
+                    <div className="pg-matchStat">Avg EV: {matchupData?.batter_avg_hit_speed ?? playerInputs?.avg_hit_speed ?? '—'}</div>
+                    <div className="pg-matchStat">FB/LD: {matchupData?.batter_fbld ?? playerInputs?.fbld ?? '—'}</div>
+                    <div className="pg-matchStat">HR Total: {matchupData?.batter_hr ?? playerInputs?.hr_total ?? '—'}</div>
+                    <div className="pg-matchStat">Batted Ball Attempts: {matchupData?.batter_attempts ?? playerInputs?.attempts ?? '—'}</div>
+                  </div>
+                </div>
+                {!matchupData && !playerInputs ? (
+                  <p className="pg-sub">No data found for this player/season. Try selecting a different year.</p>
+                ) : null}
+              </>
             )}
           </div>
         </div>

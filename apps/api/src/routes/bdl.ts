@@ -274,13 +274,8 @@ export function registerBdlRoutes(app: Express) {
               .sort((a, b) => b.at_bats - a.at_bats)[0] ?? null
         }
       }
-      if (!best) {
-        res.json({ data: null })
-        return
-      }
-
       const [pitcherStatsRes, batterStatsRes] = await Promise.all([
-        best.pitcher_bdl_id
+        best?.pitcher_bdl_id
           ? sb
               .from('bdl_season_stats')
               .select('pitching_era,pitching_k,pitching_whip,pitching_hr')
@@ -299,7 +294,7 @@ export function registerBdlRoutes(app: Express) {
             .maybeSingle(),
           sb
             .from('stats_exit_velocity')
-            .select('avg_hit_speed,ev95percent,brl_percent')
+            .select('avg_hit_speed,ev95percent,brl_percent,fbld,attempts')
             .eq('role', 'batting')
             .eq('player_id', statPlayerId)
             .eq('season', season)
@@ -314,15 +309,15 @@ export function registerBdlRoutes(app: Express) {
           batter_name: batterXref.full_name,
           batter_stat_player_id: statPlayerId,
           opponent_team: opponentTeam,
-          pitcher_name: best.pitcher_name,
-          sample_ab: best.at_bats,
-          h: best.hits,
-          hr: best.home_runs,
-          k: best.strikeouts,
-          avg: best.avg,
-          obp: best.obp,
-          slg: best.slg,
-          ops: best.ops,
+          pitcher_name: best?.pitcher_name ?? null,
+          sample_ab: best?.at_bats ?? null,
+          h: best?.hits ?? null,
+          hr: best?.home_runs ?? null,
+          k: best?.strikeouts ?? null,
+          avg: best?.avg ?? null,
+          obp: best?.obp ?? null,
+          slg: best?.slg ?? null,
+          ops: best?.ops ?? null,
           pitcher_era: pitcherStatsRes.data?.pitching_era ?? null,
           pitcher_k: pitcherStatsRes.data?.pitching_k ?? null,
           pitcher_whip: pitcherStatsRes.data?.pitching_whip ?? null,
@@ -331,6 +326,8 @@ export function registerBdlRoutes(app: Express) {
           batter_avg_hit_speed: batterEv?.avg_hit_speed ?? null,
           batter_ev95: batterEv?.ev95percent ?? null,
           batter_barrel: batterEv?.brl_percent ?? null,
+          batter_fbld: batterEv?.fbld ?? null,
+          batter_attempts: batterEv?.attempts ?? null,
           season,
         },
       })
