@@ -26,6 +26,8 @@ export default function DugoutPage() {
   const [matchupLoading, setMatchupLoading] = useState(false)
   const [matchupFor, setMatchupFor] = useState<DailyProjection | null>(null)
   const [matchupData, setMatchupData] = useState<any>(null)
+  const [liveGames, setLiveGames] = useState<any[]>([])
+  const [selectedYear, setSelectedYear] = useState<number>(2026)
 
   useEffect(() => {
     if (!supabase) return
@@ -42,13 +44,30 @@ export default function DugoutPage() {
     void Promise.all([
       listDailyHrProjections(supabase, displayDate),
       getGamesForDate(supabase, displayDate),
+      supabase
+        .from('bdl_games')
+        .select('bdl_game_id,start_time_utc,home_team_abbrev,away_team_abbrev,status,home_score,away_score,home_hits,away_hits,home_errors,away_errors,scoring_summary')
+        .eq('date', displayDate),
     ])
-      .then(([proj, sched]) => {
+      .then(([proj, sched, live]) => {
         setRows(proj)
         setGames(sched)
+        setLiveGames((live.data ?? []) as any[])
       })
       .finally(() => setLoading(false))
   }, [supabase, displayDate])
+
+  useEffect(() => {
+    if (!supabase) return
+    const id = setInterval(() => {
+      void supabase
+        .from('bdl_games')
+        .select('bdl_game_id,start_time_utc,home_team_abbrev,away_team_abbrev,status,home_score,away_score,home_hits,away_hits,home_errors,away_errors,scoring_summary')
+        .eq('date', displayDate)
+        .then(({ data }) => setLiveGames((data ?? []) as any[]))
+    }, 60000)
+    return () => clearInterval(id)
+  }, [displayDate, supabase])
 
   const topByTeam = useMemo(() => {
     const m = new Map<string, DailyProjection>()
@@ -64,11 +83,24 @@ export default function DugoutPage() {
   }, [rows])
 
   const visibleGames = useMemo(() => {
-    if (hasSubscription || games.length <= 1) return games
+    const pairKey = (a: string, b: string) =>
+      [normalizeTeamCode(a) ?? a, normalizeTeamCode(b) ?? b].sort().join('|')
+    const byPair = new Map<string, any>()
+    for (const g of liveGames) {
+      byPair.set(pairKey(g.home_team_abbrev, g.away_team_abbrev), g)
+    }
+    const sorted = [...games].sort((a, b) => {
+      const ga = byPair.get(pairKey(a.homeTeam, a.awayTeam))
+      const gb = byPair.get(pairKey(b.homeTeam, b.awayTeam))
+      const ta = ga?.start_time_utc ? new Date(ga.start_time_utc).getTime() : Number.MAX_SAFE_INTEGER
+      const tb = gb?.start_time_utc ? new Date(gb.start_time_utc).getTime() : Number.MAX_SAFE_INTEGER
+      return ta - tb
+    })
+    if (hasSubscription || sorted.length <= 1) return sorted
     const idx =
-      displayDate.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0) % games.length
-    return [games[idx]]
-  }, [displayDate, games, hasSubscription])
+      displayDate.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0) % sorted.length
+    return [sorted[idx]]
+  }, [displayDate, games, hasSubscription, liveGames])
 
   function toProjections(params: { date: string; team?: string; player?: string }) {
     const qp = new URLSearchParams()
@@ -102,6 +134,7 @@ export default function DugoutPage() {
       const q = new URLSearchParams({
         player_id: r.playerId,
         opponent_team: opponentTeam,
+        season: String(selectedYear),
       })
       if (r.opponentPitcher) q.set('pitcher_name', r.opponentPitcher)
       const res = await fetch(`${base}/bdl/matchup-card?${q.toString()}`)
@@ -162,6 +195,20 @@ export default function DugoutPage() {
       setPickMsg('Sign in to use targets.')
       return
     }
+    const player = rows.find((r) => r.playerId === playerId)
+    const team = normalizeTeamCode(player?.team ?? '')
+    const locked = liveGames.some((g) => {
+      const a = normalizeTeamCode(g.away_team_abbrev ?? '')
+      const h = normalizeTeamCode(g.home_team_abbrev ?? '')
+      const status = String(g.status ?? '').toLowerCase()
+      const started = !/scheduled|pre|not started/.test(status)
+      return started && (team === a || team === h)
+    })
+    if (locked) {
+      setPickMsg('Game already started. Picks are locked for players in active/final games.')
+      return
+    }
+
     if (pickBusy) return
     setPickMsg('')
     setPickBusy(playerId)
@@ -220,6 +267,17 @@ export default function DugoutPage() {
           max={availableDates[availableDates.length - 1]}
           onChange={(e) => setDisplayDate(e.target.value)}
         />
+        <label htmlFor="dugout-year" className="pg-label">Year</label>
+        <select
+          id="dugout-year"
+          className="acc-select"
+          value={selectedYear}
+          onChange={(e) => setSelectedYear(Number(e.target.value))}
+        >
+          {[2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019].map((y) => (
+            <option key={y} value={y}>{y}</option>
+          ))}
+        </select>
       </div>
       <p className="pg-sub">
         {displayDate} &mdash; {visibleGames.length} game{visibleGames.length !== 1 ? 's' : ''}{' '}
@@ -250,6 +308,10 @@ export default function DugoutPage() {
             ) : (
               <div className="pg-cards">
                 {visibleGames.map((g) => {
+                  const pairKey = [normalizeTeamCode(g.homeTeam) ?? g.homeTeam, normalizeTeamCode(g.awayTeam) ?? g.awayTeam].sort().join('|')
+                  const live = liveGames.find((lg) => [normalizeTeamCode(lg.home_team_abbrev) ?? lg.home_team_abbrev, normalizeTeamCode(lg.away_team_abbrev) ?? lg.away_team_abbrev].sort().join('|') === pairKey) ?? null
+                  const status = String(live?.status ?? '').toLowerCase()
+                  const gameStarted = !!live && !/scheduled|pre|not started/.test(status)
                   const awayKey = normalizeTeamCode(g.awayTeam) ?? g.awayTeam
                   const homeKey = normalizeTeamCode(g.homeTeam) ?? g.homeTeam
                   const awayTop = topByTeam.get(awayKey)
@@ -272,8 +334,39 @@ export default function DugoutPage() {
                               {g.awayTeam} @ {g.homeTeam}
                             </Link>
                           </div>
-                          <div className="pg-weather">Weather: —</div>
+                          <div className="pg-weather">
+                            {live?.start_time_utc
+                              ? `${new Date(live.start_time_utc).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} • ${live.status ?? 'Scheduled'}`
+                              : 'Start time: —'}
+                          </div>
                         </div>
+                        {gameStarted ? (
+                          <div className="pg-gameRows">
+                            <div className="pg-gameLine">
+                              <span className="pg-gameLabel">Scoreboard (R / H / E)</span>
+                              <span className="pg-gameValue" style={{ textAlign: 'left' }}>
+                                {g.awayTeam}: {live?.away_score ?? 0} / {live?.away_hits ?? 0} / {live?.away_errors ?? 0}
+                                <br />
+                                {g.homeTeam}: {live?.home_score ?? 0} / {live?.home_hits ?? 0} / {live?.home_errors ?? 0}
+                              </span>
+                            </div>
+                            <div className="pg-gameLine">
+                              <span className="pg-gameLabel">Scoring plays</span>
+                              <span className="pg-gameValue" style={{ textAlign: 'left' }}>
+                                {(Array.isArray(live?.scoring_summary) ? live.scoring_summary : []).length === 0
+                                  ? 'No scoring plays listed yet.'
+                                  : (live.scoring_summary as any[])
+                                      .map((p: any) => {
+                                        const txt = String(p?.play ?? '')
+                                        const hr = /home run|homer|grand slam/i.test(txt)
+                                        return `${hr ? '🏠⚾' : '⚾'} ${txt} (${p?.inning ?? ''})`
+                                      })
+                                      .slice(-6)
+                                      .join(' | ')}
+                              </span>
+                            </div>
+                          </div>
+                        ) : (
                         <div className="pg-batterRow">
                           <div className="pg-batterCol pg-batterCol--left">
                             <div className="pg-batterTop">
@@ -390,6 +483,7 @@ export default function DugoutPage() {
                             </div>
                           </div>
                         </div>
+                        )}
                       </div>
 
                       <button

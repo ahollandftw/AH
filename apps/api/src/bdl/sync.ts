@@ -132,6 +132,7 @@ export async function syncActivePlayers(): Promise<{ synced: number; matched: nu
 
     return {
       bdl_id: p.id,
+      team_id: p.team?.id ?? null,
       stat_player_id: statId,
       full_name: p.full_name,
       first_name: p.first_name,
@@ -177,13 +178,19 @@ export async function syncGames(
     return {
       bdl_game_id: g.id,
       date,
+      start_time_utc: g.date ?? null,
       home_team_abbrev: g.home_team?.abbreviation ?? '',
       away_team_abbrev: g.away_team?.abbreviation ?? '',
       home_team_name: g.home_team_name ?? g.home_team?.display_name ?? '',
       away_team_name: g.away_team_name ?? g.away_team?.display_name ?? '',
       status,
+      scoring_summary: g.scoring_summary ?? null,
       home_score: g.home_team_data?.runs ?? 0,
       away_score: g.away_team_data?.runs ?? 0,
+      home_hits: g.home_team_data?.hits ?? 0,
+      away_hits: g.away_team_data?.hits ?? 0,
+      home_errors: g.home_team_data?.errors ?? 0,
+      away_errors: g.away_team_data?.errors ?? 0,
       venue: g.venue ?? null,
       season: g.season,
       synced_at: new Date().toISOString(),

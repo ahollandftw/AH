@@ -1,4 +1,4 @@
-import { BrowserRouter, Link, Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
+import { BrowserRouter, Link, Navigate, Outlet, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { useEffect, useState } from 'react'
 import { WebAuthProvider } from './auth/WebAuthProvider.tsx'
 import { useWebAuth } from './auth/WebAuthProvider.tsx'
@@ -9,11 +9,13 @@ import AccountPage from './pages/AccountPage.tsx'
 import CommunityLeaderboardPage from './pages/CommunityLeaderboardPage.tsx'
 import FriendsPage from './pages/FriendsPage.tsx'
 import HelpPage from './pages/HelpPage.tsx'
+import WallOfBangPage from './pages/WallOfBangPage.tsx'
 import appLogo from '../../../data/logo.svg'
 import './leaderboard.css'
 
 function Layout() {
   const { pathname } = useLocation()
+  const navigate = useNavigate()
   const { session, supabase, waiverAccepted } = useWebAuth()
   const [profileName, setProfileName] = useState<string | null>(null)
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
@@ -22,8 +24,17 @@ function Layout() {
     ['/projections', 'Projections', '📈'],
     ['/stats', 'Stats', '📊'],
     ['/community', 'Leaderboard', '🏆'],
-    ['/friends', 'Friends', '👥'],
-    ['/help', 'Help', '❓'],
+    ['/wall', 'Wall of Bang', '💥'],
+  ] as const
+  const menuLinks = [
+    ['/dugout', 'Dugout'],
+    ['/projections', 'Projections'],
+    ['/stats', 'Stats'],
+    ['/community', 'Leaderboard'],
+    ['/wall', 'Wall of Bang'],
+    ['/friends', 'Friends'],
+    ['/help', 'Help'],
+    ['/account', 'Account'],
   ] as const
   const links =
     session && !waiverAccepted
@@ -96,7 +107,21 @@ function Layout() {
   return (
     <div className="appRoot">
       <header className="topBanner" role="banner" aria-label="AnalyticHustle header">
-        <div className="topBanner-side" />
+        <div className="topBanner-side">
+          {!(session && !waiverAccepted) ? (
+            <select
+              className="acc-select"
+              value={pathname}
+              onChange={(e) => navigate(e.target.value)}
+              aria-label="Open app menu"
+              style={{ minWidth: 120, fontSize: '0.74rem', padding: '6px 8px' }}
+            >
+              {menuLinks.map(([to, label]) => (
+                <option key={to} value={to}>{label}</option>
+              ))}
+            </select>
+          ) : null}
+        </div>
         <Link to="/dugout" className="topBanner-logoLink" aria-label="Go to Dugout">
           <span className="topBanner-logoFrame" style={{ ['--logo-url' as string]: `url("${appLogo}")` }}>
             <span className="topBanner-logoMask" aria-hidden="true" />
@@ -157,6 +182,7 @@ export default function App() {
             <Route path="/projections" element={<ProjectionsPage />} />
             <Route path="/stats" element={<LeaderboardPage />} />
             <Route path="/community" element={<CommunityLeaderboardPage />} />
+            <Route path="/wall" element={<WallOfBangPage />} />
             <Route path="/friends" element={<FriendsPage />} />
             <Route path="/help" element={<HelpPage />} />
             <Route path="/account" element={<AccountPage />} />

@@ -145,6 +145,7 @@ export function registerBdlRoutes(app: Express) {
       const statPlayerId = String(req.query.player_id ?? '').trim()
       const opponentTeam = canonTeam(String(req.query.opponent_team ?? ''))
       const pitcherNameQ = String(req.query.pitcher_name ?? '').trim().toLowerCase()
+      const season = Number(req.query.season ?? 2026) || 2026
       if (!statPlayerId || !opponentTeam) {
         res.status(400).json({ error: 'player_id and opponent_team required' })
         return
@@ -228,7 +229,51 @@ export function registerBdlRoutes(app: Express) {
             return nm === pitcherNameQ || nm.includes(pitcherNameQ) || pitcherNameQ.includes(nm)
           }) ?? null
         : null
-      const best = byName ?? candidates[0] ?? null
+      let best = byName ?? candidates[0] ?? null
+      if (!best) {
+        const { data: oppTeamPlayer } = await sb
+          .from('bdl_players')
+          .select('team_id')
+          .eq('team_abbrev', opponentTeam === 'TBR' ? 'TB' : opponentTeam === 'WSN' ? 'WSH' : opponentTeam)
+          .not('team_id', 'is', null)
+          .limit(1)
+          .maybeSingle()
+        const oppTeamId = Number((oppTeamPlayer as any)?.team_id ?? 0)
+        if (oppTeamId && batterXref.bdl_id) {
+          await syncMatchup(Number(batterXref.bdl_id), oppTeamId)
+          const { data: retryRows } = await sb
+            .from('bdl_matchups')
+            .select('opponent_bdl_player_id,at_bats,hits,home_runs,strikeouts,avg,obp,slg,ops')
+            .eq('bdl_player_id', batterXref.bdl_id)
+          const retryOppIds = Array.from(new Set((retryRows ?? []).map((r: any) => Number(r.opponent_bdl_player_id ?? 0)).filter((n: number) => n > 0)))
+          const { data: retryOppPlayers } = retryOppIds.length
+            ? await sb.from('bdl_players').select('bdl_id,full_name,team_abbrev').in('bdl_id', retryOppIds)
+            : ({ data: [] } as any)
+          const retryMap = new Map<number, { full_name: string | null; team_abbrev: string | null }>(
+            (retryOppPlayers ?? []).map((p: any) => [Number(p.bdl_id), { full_name: p.full_name ?? null, team_abbrev: p.team_abbrev ?? null }]),
+          )
+          best =
+            (retryRows ?? [])
+              .map((r: any) => {
+                const opp = retryMap.get(Number(r.opponent_bdl_player_id ?? 0))
+                return {
+                  pitcher_bdl_id: Number(r.opponent_bdl_player_id ?? 0) || null,
+                  pitcher_name: opp?.full_name ?? null,
+                  pitcher_team: canonTeam(String(opp?.team_abbrev ?? '')),
+                  at_bats: Number(r.at_bats ?? 0),
+                  hits: Number(r.hits ?? 0),
+                  home_runs: Number(r.home_runs ?? 0),
+                  strikeouts: Number(r.strikeouts ?? 0),
+                  avg: r.avg != null ? Number(r.avg) : null,
+                  obp: r.obp != null ? Number(r.obp) : null,
+                  slg: r.slg != null ? Number(r.slg) : null,
+                  ops: r.ops != null ? Number(r.ops) : null,
+                }
+              })
+              .filter((r) => r.pitcher_team === opponentTeam)
+              .sort((a, b) => b.at_bats - a.at_bats)[0] ?? null
+        }
+      }
       if (!best) {
         res.json({ data: null })
         return
@@ -238,18 +283,31 @@ export function registerBdlRoutes(app: Express) {
         best.pitcher_bdl_id
           ? sb
               .from('bdl_season_stats')
-              .select('pitching_era,pitching_k,pitching_whip')
+              .select('pitching_era,pitching_k,pitching_whip,pitching_hr')
               .eq('bdl_player_id', best.pitcher_bdl_id)
-              .eq('season', 2026)
+              .eq('season', season)
               .maybeSingle()
           : Promise.resolve({ data: null, error: null as any }),
-        sb
-          .from('player_stats_daily')
-          .select('home_runs,hits,at_bats')
-          .eq('player_id', statPlayerId)
-          .eq('date', new Date().toISOString().slice(0, 10))
-          .maybeSingle(),
+        Promise.all([
+          sb
+            .from('stats_homeruns')
+            .select('hr_total')
+            .eq('role', 'batting')
+            .eq('type', 'adj_xhr')
+            .eq('player_id', statPlayerId)
+            .eq('year', season)
+            .maybeSingle(),
+          sb
+            .from('stats_exit_velocity')
+            .select('avg_hit_speed,ev95percent,brl_percent')
+            .eq('role', 'batting')
+            .eq('player_id', statPlayerId)
+            .eq('season', season)
+            .maybeSingle(),
+        ]),
       ])
+      const batterHr = (batterStatsRes as any)?.[0]?.data?.hr_total ?? null
+      const batterEv = (batterStatsRes as any)?.[1]?.data ?? null
 
       res.json({
         data: {
@@ -268,13 +326,12 @@ export function registerBdlRoutes(app: Express) {
           pitcher_era: pitcherStatsRes.data?.pitching_era ?? null,
           pitcher_k: pitcherStatsRes.data?.pitching_k ?? null,
           pitcher_whip: pitcherStatsRes.data?.pitching_whip ?? null,
-          batter_hr: batterStatsRes.data?.home_runs ?? null,
-          batter_hits: batterStatsRes.data?.hits ?? null,
-          batter_ab: batterStatsRes.data?.at_bats ?? null,
-          batter_avg:
-            batterStatsRes.data?.hits != null && batterStatsRes.data?.at_bats
-              ? Number(batterStatsRes.data.hits) / Number(batterStatsRes.data.at_bats)
-              : null,
+          pitcher_hr_allowed: pitcherStatsRes.data?.pitching_hr ?? null,
+          batter_hr: batterHr,
+          batter_avg_hit_speed: batterEv?.avg_hit_speed ?? null,
+          batter_ev95: batterEv?.ev95percent ?? null,
+          batter_barrel: batterEv?.brl_percent ?? null,
+          season,
         },
       })
     } catch (e) {

@@ -49,6 +49,8 @@ export default function ProjectionsPage() {
   const [matchupFor, setMatchupFor] = useState<DailyProjection | null>(null)
   const [matchupData, setMatchupData] = useState<any>(null)
   const [playerInputs, setPlayerInputs] = useState<any>(null)
+  const [selectedYear, setSelectedYear] = useState<number>(2026)
+  const [liveGames, setLiveGames] = useState<any[]>([])
   const [displayDate, setDisplayDate] = useState(
     searchParams.get('date') ?? getAppDisplayDateIso(),
   )
@@ -75,13 +77,30 @@ export default function ProjectionsPage() {
     void Promise.all([
       listDailyHrProjections(supabase, displayDate),
       getGamesForDate(supabase, displayDate),
+      supabase
+        .from('bdl_games')
+        .select('home_team_abbrev,away_team_abbrev,status')
+        .eq('date', displayDate),
     ])
-      .then(([proj, sched]) => {
+      .then(([proj, sched, live]) => {
         setRows(proj)
         setGames(sched)
+        setLiveGames((live.data ?? []) as any[])
       })
       .finally(() => setLoading(false))
   }, [supabase, displayDate])
+
+  useEffect(() => {
+    if (!supabase) return
+    const id = setInterval(() => {
+      void supabase
+        .from('bdl_games')
+        .select('home_team_abbrev,away_team_abbrev,status')
+        .eq('date', displayDate)
+        .then(({ data }) => setLiveGames((data ?? []) as any[]))
+    }, 60000)
+    return () => clearInterval(id)
+  }, [displayDate, supabase])
 
   const filteredRows = useMemo(() => {
     let out = rows
@@ -172,6 +191,20 @@ export default function ProjectionsPage() {
       setPickMsg('Sign in to use targets.')
       return
     }
+    const player = rows.find((r) => r.playerId === playerId)
+    const playerTeam = normalizeTeamCode(player?.team ?? '')
+    const locked = liveGames.some((g) => {
+      const a = normalizeTeamCode(g.away_team_abbrev ?? '')
+      const h = normalizeTeamCode(g.home_team_abbrev ?? '')
+      const status = String(g.status ?? '').toLowerCase()
+      const started = !/scheduled|pre|not started/.test(status)
+      return started && (playerTeam === a || playerTeam === h)
+    })
+    if (locked) {
+      setPickMsg('Game already started. Picks are locked for players in active/final games.')
+      return
+    }
+
     if (pickBusy) return
     setPickMsg('')
     setPickBusy(playerId)
@@ -226,13 +259,14 @@ export default function ProjectionsPage() {
       const base = import.meta.env.VITE_API_BASE_URL ?? ''
       const [matchupRes, evRes, hrRes] = await Promise.all([
         fetch(
-          `${base}/bdl/matchup-card?player_id=${encodeURIComponent(r.playerId)}&opponent_team=${encodeURIComponent(opponentTeam)}${r.opponentPitcher ? `&pitcher_name=${encodeURIComponent(r.opponentPitcher)}` : ''}`,
+          `${base}/bdl/matchup-card?player_id=${encodeURIComponent(r.playerId)}&opponent_team=${encodeURIComponent(opponentTeam)}&season=${selectedYear}${r.opponentPitcher ? `&pitcher_name=${encodeURIComponent(r.opponentPitcher)}` : ''}`,
         ),
         supabase
           ?.from('stats_exit_velocity')
           .select('avg_hit_speed,ev95percent,brl_percent,fbld,attempts,season')
           .eq('role', 'batting')
           .eq('player_id', r.playerId)
+          .eq('season', selectedYear)
           .order('season', { ascending: false })
           .limit(1)
           .maybeSingle(),
@@ -242,6 +276,7 @@ export default function ProjectionsPage() {
           .eq('role', 'batting')
           .eq('type', 'adj_xhr')
           .eq('player_id', r.playerId)
+          .eq('year', selectedYear)
           .order('year', { ascending: false })
           .limit(1)
           .maybeSingle(),
@@ -287,6 +322,17 @@ export default function ProjectionsPage() {
             setSearchParams(next, { replace: true })
           }}
         />
+        <label htmlFor="proj-year" className="pg-label">Year</label>
+        <select
+          id="proj-year"
+          className="acc-select"
+          value={selectedYear}
+          onChange={(e) => setSelectedYear(Number(e.target.value))}
+        >
+          {[2026, 2025, 2024, 2023, 2022, 2021, 2020, 2019].map((y) => (
+            <option key={y} value={y}>{y}</option>
+          ))}
+        </select>
         {(selectedTeam || selectedPlayerId) && (
           <button
             type="button"

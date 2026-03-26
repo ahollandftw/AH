@@ -26,4 +26,8 @@ export const config = {
   port: Number(process.env.PORT ?? '3001'),
   seasonStart: () => process.env.SEASON_START ?? `${new Date().getFullYear()}-03-15`,
   bdlApiKey: () => req('BDL_API_KEY'),
+  resendApiKey: () => process.env.RESEND_API_KEY?.trim() || '',
+  supportEmail: () => process.env.SUPPORT_EMAIL?.trim() || 'analytichustle.support@gmail.com',
+  moderationSecret: () => process.env.WALL_MODERATION_SECRET?.trim() || '',
+  publicApiUrl: () => process.env.PUBLIC_API_URL?.trim() || `http://localhost:${Number(process.env.PORT ?? '3001')}`,
 }

@@ -5,6 +5,7 @@
 -- ─── Player cross-reference ──────────────────────────────────────────
 create table if not exists public.bdl_players (
   bdl_id       integer primary key,
+  team_id      integer,
   stat_player_id text references public.players(stat_player_id),
   full_name    text not null,
   first_name   text,
@@ -20,13 +21,19 @@ create index if not exists bdl_players_stat_id_idx on public.bdl_players(stat_pl
 create table if not exists public.bdl_games (
   bdl_game_id       integer primary key,
   date              date not null,
+  start_time_utc    timestamptz,
   home_team_abbrev  text not null,
   away_team_abbrev  text not null,
   home_team_name    text,
   away_team_name    text,
   status            text not null default 'Scheduled',
+  scoring_summary   jsonb,
   home_score        integer default 0,
   away_score        integer default 0,
+  home_hits         integer default 0,
+  away_hits         integer default 0,
+  home_errors       integer default 0,
+  away_errors       integer default 0,
   venue             text,
   season            integer,
   last_play_order   integer default 0,
