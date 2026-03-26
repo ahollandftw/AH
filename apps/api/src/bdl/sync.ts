@@ -38,38 +38,94 @@ export async function syncActivePlayers(): Promise<{ synced: number; matched: nu
 
   const sb = supabase()
 
+  // Build a comprehensive lookup from ALL sources of player data
+  // statPlayerIdSet: all known stat_player_ids
+  // nameToStatId: normalized name → stat_player_id
+  const statIdSet = new Set<string>()
+  const nameToStatId = new Map<string, string>()
+
+  // Source 1: players table (names like "Aaron Judge")
   const { data: ourPlayers } = await sb
     .from('players')
     .select('stat_player_id, name, team')
     .limit(5000)
-  const ourMap = new Map<string, { stat_player_id: string; name: string; team: string | null }>()
-  for (const p of ourPlayers ?? []) {
-    ourMap.set(normalize(p.name), p)
-    ourMap.set(p.stat_player_id, p)
+  for (const p of (ourPlayers ?? []) as { stat_player_id: string; name: string; team: string | null }[]) {
+    statIdSet.add(p.stat_player_id)
+    nameToStatId.set(normalize(p.name), p.stat_player_id)
+    // Also add reversed "First Last" → "last first" in case stored as "Last, First"
+    if (p.name.includes(',')) {
+      const parts = p.name.split(',').map((s: string) => s.trim())
+      nameToStatId.set(normalize(`${parts[1]} ${parts[0]}`), p.stat_player_id)
+    }
   }
+
+  // Source 2: stats_exit_velocity (names like "Judge, Aaron" in last_name_first_name)
+  const { data: evPlayers } = await sb
+    .from('stats_exit_velocity')
+    .select('player_id, last_name_first_name')
+    .eq('role', 'batting')
+    .order('season', { ascending: false })
+    .limit(3000)
+  for (const r of (evPlayers ?? []) as { player_id: string; last_name_first_name: string | null }[]) {
+    statIdSet.add(r.player_id)
+    if (r.last_name_first_name) {
+      // "Judge, Aaron" → normalized "judge aaron" AND "aaron judge"
+      nameToStatId.set(normalize(r.last_name_first_name), r.player_id)
+      const parts = r.last_name_first_name.split(',').map((s: string) => s.trim())
+      if (parts.length >= 2) {
+        nameToStatId.set(normalize(`${parts[1]} ${parts[0]}`), r.player_id)
+      }
+    }
+  }
+
+  // Source 3: stats_homeruns (player_display like "Judge, Aaron")
+  const { data: hrPlayers } = await sb
+    .from('stats_homeruns')
+    .select('player_id, player_display')
+    .eq('role', 'batting')
+    .order('year', { ascending: false })
+    .limit(3000)
+  for (const r of (hrPlayers ?? []) as { player_id: string; player_display: string | null }[]) {
+    statIdSet.add(r.player_id)
+    if (r.player_display) {
+      nameToStatId.set(normalize(r.player_display), r.player_id)
+      const parts = r.player_display.split(',').map((s: string) => s.trim())
+      if (parts.length >= 2) {
+        nameToStatId.set(normalize(`${parts[1]} ${parts[0]}`), r.player_id)
+      }
+    }
+  }
+
+  console.log(`[BDL] cross-ref pool: ${statIdSet.size} stat IDs, ${nameToStatId.size} name variants`)
 
   let matched = 0
   const rows = players.map((p) => {
     let statId: string | null = null
 
-    // Strategy 1: integer ID might be MLBAM ID (same as stat_player_id)
+    // Strategy 1: BDL integer ID matches a Statcast ID directly
     const idStr = String(p.id)
-    if (ourMap.has(idStr)) {
-      statId = ourMap.get(idStr)!.stat_player_id
+    if (statIdSet.has(idStr)) {
+      statId = idStr
     }
 
-    // Strategy 2: name match
+    // Strategy 2: exact full_name match ("Aaron Judge" → "aaron judge")
     if (!statId) {
-      const key = normalize(p.full_name)
-      const match = ourMap.get(key)
-      if (match) statId = match.stat_player_id
+      statId = nameToStatId.get(normalize(p.full_name)) ?? null
     }
 
-    // Strategy 3: "Last, First" → "First Last" reversal
+    // Strategy 3: "First Last" constructed from parts
     if (!statId) {
-      const rev = normalize(`${p.first_name} ${p.last_name}`)
-      const match = ourMap.get(rev)
-      if (match) statId = match.stat_player_id
+      statId = nameToStatId.get(normalize(`${p.first_name} ${p.last_name}`)) ?? null
+    }
+
+    // Strategy 4: "Last, First" constructed from parts
+    if (!statId) {
+      statId = nameToStatId.get(normalize(`${p.last_name} ${p.first_name}`)) ?? null
+    }
+
+    // Strategy 5: "Last, First" with comma
+    if (!statId) {
+      statId = nameToStatId.get(normalize(`${p.last_name}, ${p.first_name}`)) ?? null
     }
 
     if (statId) matched++
