@@ -1140,22 +1140,36 @@ body,
   color: var(--color-text);
 }
 
-.pg-scoreboard--linescore {
-  font-size: 0.76rem;
+.pg-scoreboardWrap {
   overflow-x: auto;
-  display: block;
-  white-space: nowrap;
+  -webkit-overflow-scrolling: touch;
+  margin-top: 6px;
+}
+
+.pg-scoreboard--linescore {
+  font-size: 0.72rem;
+  width: 100%;
+  table-layout: fixed;
 }
 
 .pg-scoreboard--linescore th,
 .pg-scoreboard--linescore td {
-  padding: 4px 7px;
-  min-width: 26px;
+  padding: 3px 0;
+  min-width: 0;
+  width: auto;
+}
+
+.pg-scoreboard--linescore th:first-child,
+.pg-scoreboard--linescore td:first-child {
+  width: 38px;
+  min-width: 38px;
 }
 
 .pg-scoreboard-totals {
   font-weight: 800 !important;
   border-left: 2px solid color-mix(in srgb, var(--color-secondary) 30%, transparent) !important;
+  width: 28px !important;
+  min-width: 28px !important;
 }
 
 .pg-scoringPlays {

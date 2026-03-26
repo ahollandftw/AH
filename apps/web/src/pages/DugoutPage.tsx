@@ -429,33 +429,35 @@ export default function DugoutPage() {
                               const maxInn = Math.max(awayInn.length, homeInn.length, 9)
                               const cols = Array.from({ length: maxInn }, (_, i) => i)
                               return (
-                                <table className="pg-scoreboard pg-scoreboard--linescore">
-                                  <thead>
-                                    <tr>
-                                      <th style={{ textAlign: 'left' }}></th>
-                                      {cols.map((i) => <th key={i}>{i + 1}</th>)}
-                                      <th className="pg-scoreboard-totals">R</th>
-                                      <th className="pg-scoreboard-totals">H</th>
-                                      <th className="pg-scoreboard-totals">E</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    <tr>
-                                      <td>{g.awayTeam}</td>
-                                      {cols.map((i) => <td key={i}>{i < awayInn.length ? awayInn[i] : (i < maxInn ? '-' : '')}</td>)}
-                                      <td className="pg-scoreboard-totals">{live?.away_score ?? 0}</td>
-                                      <td className="pg-scoreboard-totals">{live?.away_hits ?? 0}</td>
-                                      <td className="pg-scoreboard-totals">{live?.away_errors ?? 0}</td>
-                                    </tr>
-                                    <tr>
-                                      <td>{g.homeTeam}</td>
-                                      {cols.map((i) => <td key={i}>{i < homeInn.length ? homeInn[i] : (i < maxInn ? '-' : '')}</td>)}
-                                      <td className="pg-scoreboard-totals">{live?.home_score ?? 0}</td>
-                                      <td className="pg-scoreboard-totals">{live?.home_hits ?? 0}</td>
-                                      <td className="pg-scoreboard-totals">{live?.home_errors ?? 0}</td>
-                                    </tr>
-                                  </tbody>
-                                </table>
+                                <div className="pg-scoreboardWrap">
+                                  <table className="pg-scoreboard pg-scoreboard--linescore">
+                                    <thead>
+                                      <tr>
+                                        <th style={{ textAlign: 'left' }}></th>
+                                        {cols.map((i) => <th key={i}>{i + 1}</th>)}
+                                        <th className="pg-scoreboard-totals">R</th>
+                                        <th className="pg-scoreboard-totals">H</th>
+                                        <th className="pg-scoreboard-totals">E</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      <tr>
+                                        <td>{g.awayTeam}</td>
+                                        {cols.map((i) => <td key={i}>{i < awayInn.length ? awayInn[i] : '-'}</td>)}
+                                        <td className="pg-scoreboard-totals">{live?.away_score ?? 0}</td>
+                                        <td className="pg-scoreboard-totals">{live?.away_hits ?? 0}</td>
+                                        <td className="pg-scoreboard-totals">{live?.away_errors ?? 0}</td>
+                                      </tr>
+                                      <tr>
+                                        <td>{g.homeTeam}</td>
+                                        {cols.map((i) => <td key={i}>{i < homeInn.length ? homeInn[i] : '-'}</td>)}
+                                        <td className="pg-scoreboard-totals">{live?.home_score ?? 0}</td>
+                                        <td className="pg-scoreboard-totals">{live?.home_hits ?? 0}</td>
+                                        <td className="pg-scoreboard-totals">{live?.home_errors ?? 0}</td>
+                                      </tr>
+                                    </tbody>
+                                  </table>
+                                </div>
                               )
                             })()}
                             <div className="pg-label" style={{ marginTop: 10 }}>Scoring Plays</div>
@@ -467,11 +469,18 @@ export default function DugoutPage() {
                                   {plays.map((p: any, i: number) => {
                                     const txt = String(p?.play ?? '')
                                     const hr = /home run|homer|grand slam/i.test(txt)
+                                    const rawInning = String(p?.inning ?? '')
+                                    const period = String(p?.period ?? '')
+                                    let inningLabel = rawInning
+                                    if (period && rawInning) {
+                                      const half = /top/i.test(rawInning) ? 'Top' : /bot/i.test(rawInning) ? 'Bot' : rawInning
+                                      inningLabel = `${half} ${period}`
+                                    }
                                     return (
                                       <div key={i} className={`pg-scoringPlay ${hr ? 'pg-scoringPlay--hr' : ''}`}>
                                         <span className="pg-scoringPlayIcon">{hr ? '🏠⚾' : '⚾'}</span>
                                         <span className="pg-scoringPlayText">{txt}</span>
-                                        <span className="pg-scoringPlayInning">{p?.inning ?? ''}</span>
+                                        <span className="pg-scoringPlayInning">{inningLabel}</span>
                                       </div>
                                     )
                                   })}

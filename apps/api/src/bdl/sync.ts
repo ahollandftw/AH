@@ -15,6 +15,8 @@ const supabase = () => getServiceClient()
 
 function normalize(name: string): string {
   return name
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/[^a-z\s]/g, '')
     .replace(/\s+/g, ' ')
@@ -152,7 +154,17 @@ export async function syncActivePlayers(): Promise<{ synced: number; matched: nu
     if (error) console.error('[BDL] player upsert error:', error.message)
   }
 
-  console.log(`[BDL] synced ${rows.length} players, ${matched} cross-referenced`)
+  const teamUpdates = rows.filter((r) => r.stat_player_id && r.team_abbrev)
+  let teamFixed = 0
+  for (const r of teamUpdates) {
+    const { error } = await sb
+      .from('players')
+      .update({ team: r.team_abbrev })
+      .eq('stat_player_id', r.stat_player_id!)
+      .neq('team', r.team_abbrev!)
+    if (!error) teamFixed++
+  }
+  console.log(`[BDL] synced ${rows.length} players, ${matched} cross-referenced, ${teamFixed} team updates`)
   return { synced: rows.length, matched }
 }
 
