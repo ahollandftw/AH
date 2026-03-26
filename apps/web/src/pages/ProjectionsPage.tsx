@@ -11,6 +11,7 @@ import {
   type ScheduleGame,
 } from '@kinetic/shared'
 import { useWebAuth } from '../auth/WebAuthProvider.tsx'
+import { normalizeTeamCode } from '../theme/teamPalette'
 
 function tierColor(k: string): string {
   switch (k) {
@@ -50,7 +51,7 @@ export default function ProjectionsPage() {
   const [displayDate, setDisplayDate] = useState(
     searchParams.get('date') ?? getAppDisplayDateIso(),
   )
-  const selectedTeam = (searchParams.get('team') ?? '').toUpperCase()
+  const selectedTeam = (normalizeTeamCode(searchParams.get('team') ?? '') ?? '').toUpperCase()
   const selectedPlayerId = searchParams.get('player') ?? ''
 
   useEffect(() => {
@@ -90,7 +91,7 @@ export default function ProjectionsPage() {
       const allowed = new Set([g.awayTeam, g.homeTeam])
       out = out.filter((r) => r.team && allowed.has(r.team))
     }
-    if (selectedTeam) out = out.filter((r) => (r.team ?? '').toUpperCase() === selectedTeam)
+    if (selectedTeam) out = out.filter((r) => (normalizeTeamCode(r.team ?? '') ?? '').toUpperCase() === selectedTeam)
     if (selectedPlayerId) out = out.filter((r) => r.playerId === selectedPlayerId)
     return out
   }, [displayDate, games, hasSubscription, rows, selectedPlayerId, selectedTeam])
@@ -119,7 +120,7 @@ export default function ProjectionsPage() {
     const txt = (r.opponent ?? '').trim()
     if (!txt) return null
     const m = txt.match(/(?:vs|@)\s+([A-Za-z]{2,4})/i)
-    return m?.[1]?.toUpperCase() ?? null
+    return normalizeTeamCode(m?.[1] ?? '')?.toUpperCase() ?? null
   }
 
   function pickStatusLabel(v: boolean | null | undefined): string {
@@ -209,7 +210,7 @@ export default function ProjectionsPage() {
     try {
       const base = import.meta.env.VITE_API_BASE_URL ?? ''
       const res = await fetch(
-        `${base}/bdl/matchup-card?player_id=${encodeURIComponent(r.playerId)}&opponent_team=${encodeURIComponent(opponentTeam)}`,
+        `${base}/bdl/matchup-card?player_id=${encodeURIComponent(r.playerId)}&opponent_team=${encodeURIComponent(opponentTeam)}${r.opponentPitcher ? `&pitcher_name=${encodeURIComponent(r.opponentPitcher)}` : ''}`,
       )
       const payload = await res.json()
       setMatchupData(payload?.data ?? null)
@@ -326,7 +327,8 @@ export default function ProjectionsPage() {
                     </span>
                     {r.opponent ? (
                       <span className="pg-matchup">{r.opponent}</span>
-                    ) : r.opponentPitcher ? (
+                    ) : null}
+                    {r.opponentPitcher ? (
                       <span className="pg-matchup">
                         vs {r.opponentPitcher}{' '}
                         {r.opponentPitcherHand ? `(${r.opponentPitcherHand})` : ''}
@@ -378,21 +380,21 @@ export default function ProjectionsPage() {
             ) : matchupData ? (
               <div className="pg-matchupGrid">
                 <div>
-                  <div className="pg-label">Pitcher</div>
+                  <div className="pg-label">Pitcher (Left)</div>
                   <div className="pg-matchupName">{matchupData.pitcher_name ?? 'Unknown'}</div>
-                  <div className="pg-small">Team: {matchupData.opponent_team}</div>
+                  <div className="pg-small">ERA: {matchupData.pitcher_era ?? '—'} • K: {matchupData.pitcher_k ?? '—'}</div>
                 </div>
                 <div>
-                  <div className="pg-label">Batter</div>
+                  <div className="pg-label">Batter (Right)</div>
                   <div className="pg-matchupName">{matchupData.batter_name}</div>
-                  <div className="pg-small">AB: {matchupData.sample_ab ?? 0}</div>
+                  <div className="pg-small">AVG: {matchupData.batter_avg ?? '—'} • HR: {matchupData.batter_hr ?? '—'}</div>
                 </div>
-                <div className="pg-matchStat">AVG: {matchupData.avg ?? '—'}</div>
-                <div className="pg-matchStat">SLG: {matchupData.slg ?? '—'}</div>
-                <div className="pg-matchStat">OPS: {matchupData.ops ?? '—'}</div>
-                <div className="pg-matchStat">HR: {matchupData.hr ?? 0}</div>
-                <div className="pg-matchStat">H: {matchupData.h ?? 0}</div>
-                <div className="pg-matchStat">K: {matchupData.k ?? 0}</div>
+                <div className="pg-matchStat">BvP AB: {matchupData.sample_ab ?? 0}</div>
+                <div className="pg-matchStat">BvP H: {matchupData.h ?? 0}</div>
+                <div className="pg-matchStat">BvP HR: {matchupData.hr ?? 0}</div>
+                <div className="pg-matchStat">BvP K: {matchupData.k ?? 0}</div>
+                <div className="pg-matchStat">BvP AVG: {matchupData.avg ?? '—'}</div>
+                <div className="pg-matchStat">BvP OPS: {matchupData.ops ?? '—'}</div>
               </div>
             ) : (
               <p className="pg-sub">No stored batter-vs-pitcher matchup data yet for this opponent.</p>

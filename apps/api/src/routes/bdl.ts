@@ -12,6 +12,18 @@ import { calculateEdge, calculateEdgesForDate } from '../bdl/edge.js'
 import { getServiceClient } from '../supabase.js'
 
 export function registerBdlRoutes(app: Express) {
+  const canonTeam = (team: string): string => {
+    const t = team.trim().toUpperCase()
+    if (t === 'TB' || t === 'TBR') return 'TBR'
+    if (t === 'WSH' || t === 'WSN' || t === 'WAS') return 'WSN'
+    if (t === 'AZ' || t === 'ARI') return 'ARI'
+    if (t === 'KC' || t === 'KCR') return 'KCR'
+    if (t === 'SF' || t === 'SFG') return 'SFG'
+    if (t === 'SD' || t === 'SDP') return 'SDP'
+    if (t === 'OAK' || t === 'ATH') return 'ATH'
+    if (t === 'CWS' || t === 'CHW') return 'CHW'
+    return t
+  }
   /* ── Daily sync (called by cron or manually) ─────────────────── */
 
   app.post('/bdl/sync/daily', async (_req, res) => {
@@ -131,7 +143,8 @@ export function registerBdlRoutes(app: Express) {
   app.get('/bdl/matchup-card', async (req, res) => {
     try {
       const statPlayerId = String(req.query.player_id ?? '').trim()
-      const opponentTeam = String(req.query.opponent_team ?? '').trim().toUpperCase()
+      const opponentTeam = canonTeam(String(req.query.opponent_team ?? ''))
+      const pitcherNameQ = String(req.query.pitcher_name ?? '').trim().toLowerCase()
       if (!statPlayerId || !opponentTeam) {
         res.status(400).json({ error: 'player_id and opponent_team required' })
         return
@@ -171,8 +184,9 @@ export function registerBdlRoutes(app: Express) {
         .map((r: any) => {
           const opp = Array.isArray(r.opponent) ? r.opponent[0] : r.opponent
           return {
+            pitcher_bdl_id: Number(r.opponent_bdl_player_id ?? 0) || null,
             pitcher_name: opp?.full_name ?? null,
-            pitcher_team: String(opp?.team_abbrev ?? '').toUpperCase(),
+            pitcher_team: canonTeam(String(opp?.team_abbrev ?? '')),
             at_bats: Number(r.at_bats ?? 0),
             hits: Number(r.hits ?? 0),
             home_runs: Number(r.home_runs ?? 0),
@@ -186,11 +200,34 @@ export function registerBdlRoutes(app: Express) {
         .filter((r) => r.pitcher_team === opponentTeam)
         .sort((a, b) => b.at_bats - a.at_bats)
 
-      const best = candidates[0] ?? null
+      const byName = pitcherNameQ
+        ? candidates.find((c) => {
+            const nm = String(c.pitcher_name ?? '').toLowerCase()
+            return nm === pitcherNameQ || nm.includes(pitcherNameQ) || pitcherNameQ.includes(nm)
+          }) ?? null
+        : null
+      const best = byName ?? candidates[0] ?? null
       if (!best) {
         res.json({ data: null })
         return
       }
+
+      const [pitcherStatsRes, batterStatsRes] = await Promise.all([
+        best.pitcher_bdl_id
+          ? sb
+              .from('bdl_season_stats')
+              .select('pitching_era,pitching_k,pitching_whip')
+              .eq('bdl_player_id', best.pitcher_bdl_id)
+              .eq('season', 2026)
+              .maybeSingle()
+          : Promise.resolve({ data: null, error: null as any }),
+        sb
+          .from('player_stats_daily')
+          .select('home_runs,hits,at_bats')
+          .eq('player_id', statPlayerId)
+          .eq('date', new Date().toISOString().slice(0, 10))
+          .maybeSingle(),
+      ])
 
       res.json({
         data: {
@@ -206,6 +243,16 @@ export function registerBdlRoutes(app: Express) {
           obp: best.obp,
           slg: best.slg,
           ops: best.ops,
+          pitcher_era: pitcherStatsRes.data?.pitching_era ?? null,
+          pitcher_k: pitcherStatsRes.data?.pitching_k ?? null,
+          pitcher_whip: pitcherStatsRes.data?.pitching_whip ?? null,
+          batter_hr: batterStatsRes.data?.home_runs ?? null,
+          batter_hits: batterStatsRes.data?.hits ?? null,
+          batter_ab: batterStatsRes.data?.at_bats ?? null,
+          batter_avg:
+            batterStatsRes.data?.hits != null && batterStatsRes.data?.at_bats
+              ? Number(batterStatsRes.data.hits) / Number(batterStatsRes.data.at_bats)
+              : null,
         },
       })
     } catch (e) {

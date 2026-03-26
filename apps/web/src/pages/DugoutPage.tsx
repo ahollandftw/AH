@@ -10,7 +10,7 @@ import {
   type ScheduleGame,
 } from '@kinetic/shared'
 import { useWebAuth } from '../auth/WebAuthProvider.tsx'
-import { paletteForTeam } from '../theme/teamPalette'
+import { normalizeTeamCode, paletteForTeam } from '../theme/teamPalette'
 
 export default function DugoutPage() {
   const { supabase, hasSubscription, session } = useWebAuth()
@@ -23,6 +23,9 @@ export default function DugoutPage() {
   const [pickState, setPickState] = useState<Record<string, boolean | null>>({})
   const [pickBusy, setPickBusy] = useState<string | null>(null)
   const [pickMsg, setPickMsg] = useState('')
+  const [matchupLoading, setMatchupLoading] = useState(false)
+  const [matchupFor, setMatchupFor] = useState<DailyProjection | null>(null)
+  const [matchupData, setMatchupData] = useState<any>(null)
 
   useEffect(() => {
     if (!supabase) return
@@ -51,10 +54,11 @@ export default function DugoutPage() {
     const m = new Map<string, DailyProjection>()
     for (const r of rows) {
       if (!r.team) continue
-      const prev = m.get(r.team)
+      const key = normalizeTeamCode(r.team) ?? r.team
+      const prev = m.get(key)
       const currP = r.hrProbability ?? -1
       const prevP = prev?.hrProbability ?? -1
-      if (!prev || currP > prevP) m.set(r.team, r)
+      if (!prev || currP > prevP) m.set(key, r)
     }
     return m
   }, [rows])
@@ -77,9 +81,37 @@ export default function DugoutPage() {
   function initials(name: string | null | undefined): string {
     const n = (name ?? '').trim()
     if (!n) return '—'
-    const parts = n.split(/[,\s]+/).filter(Boolean)
+    const commaParts = n.split(',').map((s) => s.trim()).filter(Boolean)
+    if (commaParts.length >= 2) {
+      return `${commaParts[1][0] ?? ''}${commaParts[0][0] ?? ''}`.toUpperCase()
+    }
+    const parts = n.split(/\s+/).filter(Boolean)
     if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
     return `${parts[0][0] ?? ''}${parts[1][0] ?? ''}`.toUpperCase()
+  }
+
+  async function openMatchup(r: DailyProjection) {
+    setMatchupFor(r)
+    setMatchupData(null)
+    const match = String(r.opponent ?? '').match(/(?:vs|@)\s+([A-Za-z]{2,4})/i)
+    const opponentTeam = normalizeTeamCode(match?.[1] ?? '') ?? ''
+    if (!opponentTeam) return
+    setMatchupLoading(true)
+    try {
+      const base = import.meta.env.VITE_API_BASE_URL ?? ''
+      const q = new URLSearchParams({
+        player_id: r.playerId,
+        opponent_team: opponentTeam,
+      })
+      if (r.opponentPitcher) q.set('pitcher_name', r.opponentPitcher)
+      const res = await fetch(`${base}/bdl/matchup-card?${q.toString()}`)
+      const payload = await res.json()
+      setMatchupData(payload?.data ?? null)
+    } catch {
+      setMatchupData(null)
+    } finally {
+      setMatchupLoading(false)
+    }
   }
 
   async function loadPicks() {
@@ -205,8 +237,10 @@ export default function DugoutPage() {
             ) : (
               <div className="pg-cards">
                 {visibleGames.map((g) => {
-                  const awayTop = topByTeam.get(g.awayTeam)
-                  const homeTop = topByTeam.get(g.homeTeam)
+                  const awayKey = normalizeTeamCode(g.awayTeam) ?? g.awayTeam
+                  const homeKey = normalizeTeamCode(g.homeTeam) ?? g.homeTeam
+                  const awayTop = topByTeam.get(awayKey)
+                  const homeTop = topByTeam.get(homeKey)
                   const awayPalette = paletteForTeam(awayTop?.team ?? g.awayTeam)
                   const homePalette = paletteForTeam(homeTop?.team ?? g.homeTeam)
                   const isExpanded = expandedGameId === g.gameId
@@ -259,16 +293,13 @@ export default function DugoutPage() {
                                   >
                                     🎯
                                   </button>
-                                  <Link
-                                    className="pg-link pg-playerLink"
-                                    to={toProjections({
-                                      date: displayDate,
-                                      team: g.awayTeam,
-                                      player: awayTop.playerId,
-                                    })}
+                                  <button
+                                    type="button"
+                                    className="pg-playerSelect"
+                                    onClick={() => void openMatchup(awayTop)}
                                   >
                                     {awayTop.name}
-                                  </Link>
+                                  </button>
                                 </div>
                               ) : (
                                 <span className="pg-gamePick--muted">—</span>
@@ -311,16 +342,13 @@ export default function DugoutPage() {
                             <div>
                               {homeTop ? (
                                 <div className="pg-pickPlayerRow pg-pickPlayerRow--right">
-                                  <Link
-                                    className="pg-link pg-playerLink"
-                                    to={toProjections({
-                                      date: displayDate,
-                                      team: g.homeTeam,
-                                      player: homeTop.playerId,
-                                    })}
+                                  <button
+                                    type="button"
+                                    className="pg-playerSelect"
+                                    onClick={() => void openMatchup(homeTop)}
                                   >
                                     {homeTop.name}
-                                  </Link>
+                                  </button>
                                   <button
                                     type="button"
                                     className={`pg-targetBtn ${Object.prototype.hasOwnProperty.call(pickState, homeTop.playerId) ? 'is-selected' : ''}`}
@@ -365,7 +393,7 @@ export default function DugoutPage() {
                             <div className="pg-gameLine">
                               <span className="pg-gameLabel">Starting pitchers</span>
                               <span className="pg-gameValue">
-                                {g.awayTeam}: — &nbsp;|&nbsp; {g.homeTeam}: —
+                                {g.awayTeam}: {homeTop?.opponentPitcher ?? '—'} &nbsp;|&nbsp; {g.homeTeam}: {awayTop?.opponentPitcher ?? '—'}
                               </span>
                             </div>
                             <div className="pg-gameLine">
@@ -393,6 +421,40 @@ export default function DugoutPage() {
           </section>
         </>
       )}
+      {matchupFor ? (
+        <div className="pg-modalBackdrop" onClick={() => setMatchupFor(null)}>
+          <div className="pg-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="pg-modalHead">
+              <h3>Matchup Comparison</h3>
+              <button type="button" className="pg-clearBtn" onClick={() => setMatchupFor(null)}>Close</button>
+            </div>
+            {matchupLoading ? (
+              <p className="pg-sub">Loading matchup...</p>
+            ) : matchupData ? (
+              <div className="pg-matchupGrid">
+                <div>
+                  <div className="pg-label">Pitcher (Left)</div>
+                  <div className="pg-matchupName">{matchupData.pitcher_name ?? 'Unknown'}</div>
+                  <div className="pg-small">ERA: {matchupData.pitcher_era ?? '—'} • K: {matchupData.pitcher_k ?? '—'}</div>
+                </div>
+                <div>
+                  <div className="pg-label">Batter (Right)</div>
+                  <div className="pg-matchupName">{matchupData.batter_name}</div>
+                  <div className="pg-small">AVG: {matchupData.batter_avg ?? '—'} • HR: {matchupData.batter_hr ?? '—'}</div>
+                </div>
+                <div className="pg-matchStat">BvP AB: {matchupData.sample_ab ?? 0}</div>
+                <div className="pg-matchStat">BvP H: {matchupData.h ?? 0}</div>
+                <div className="pg-matchStat">BvP HR: {matchupData.hr ?? 0}</div>
+                <div className="pg-matchStat">BvP K: {matchupData.k ?? 0}</div>
+                <div className="pg-matchStat">BvP AVG: {matchupData.avg ?? '—'}</div>
+                <div className="pg-matchStat">BvP OPS: {matchupData.ops ?? '—'}</div>
+              </div>
+            ) : (
+              <p className="pg-sub">No stored matchup data found for this player on this opponent.</p>
+            )}
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

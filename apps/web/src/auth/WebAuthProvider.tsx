@@ -196,7 +196,7 @@ export function WebAuthProvider({ children }: { children: React.ReactNode }) {
     if (!supabase) return { ok: false as const, message: 'Supabase not configured' }
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
-      options: { redirectTo: `${window.location.origin}/account` },
+      options: { redirectTo: `${window.location.origin}/dugout` },
     })
     return error ? { ok: false as const, message: error.message } : { ok: true as const }
   }, [supabase])
