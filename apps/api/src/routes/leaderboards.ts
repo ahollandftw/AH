@@ -267,7 +267,10 @@ export function registerLeaderboardRoutes(app: Express) {
         players: rows.slice(0, limit),
       })
     } catch (e) {
-      res.status(500).json({ error: String(e) })
+      console.error('[leaderboard/homers] failed:', e)
+      res.status(500).json({
+        error: e instanceof Error ? (e.stack ?? e.message) : String(e),
+      })
     }
   })
 }
