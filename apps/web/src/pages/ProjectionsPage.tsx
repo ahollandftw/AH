@@ -67,9 +67,9 @@ export default function ProjectionsPage() {
     void getScheduleDates(supabase).then((dates) => {
       if (!dates.length) return
       setAvailableDates(dates)
-      if (!dates.includes(displayDate)) setDisplayDate(dates[0])
+      setDisplayDate((d) => (dates.includes(d) ? d : dates[0]))
     })
-  }, [supabase, displayDate])
+  }, [supabase])
 
   useEffect(() => {
     if (!supabase) return
@@ -79,13 +79,21 @@ export default function ProjectionsPage() {
       getGamesForDate(supabase, displayDate),
       supabase
         .from('bdl_games')
-        .select('home_team_abbrev,away_team_abbrev,status')
+        .select('bdl_game_id,date,home_team_abbrev,away_team_abbrev,status')
         .eq('date', displayDate),
     ])
       .then(([proj, sched, live]) => {
         setRows(proj)
         setGames(sched)
-        setLiveGames((live.data ?? []) as any[])
+        const raw = (live.data ?? []) as any[]
+        const dayIso = displayDate
+        setLiveGames(
+          raw.filter((lg) => {
+            const d = lg.date
+            if (d == null) return true
+            return String(d).slice(0, 10) === dayIso
+          }),
+        )
       })
       .finally(() => setLoading(false))
   }, [supabase, displayDate])
@@ -95,9 +103,19 @@ export default function ProjectionsPage() {
     const id = setInterval(() => {
       void supabase
         .from('bdl_games')
-        .select('home_team_abbrev,away_team_abbrev,status')
+        .select('bdl_game_id,date,home_team_abbrev,away_team_abbrev,status')
         .eq('date', displayDate)
-        .then(({ data }) => setLiveGames((data ?? []) as any[]))
+        .then(({ data }) => {
+          const raw = (data ?? []) as any[]
+          const dayIso = displayDate
+          setLiveGames(
+            raw.filter((lg) => {
+              const d = lg.date
+              if (d == null) return true
+              return String(d).slice(0, 10) === dayIso
+            }),
+          )
+        })
     }, 60000)
     return () => clearInterval(id)
   }, [displayDate, supabase])

@@ -272,6 +272,94 @@ async function importSchedule(file) {
   console.log(`schedule ${path.basename(file)}: ${batch.length} rows`)
 }
 
+/** e.g. b.battedballvLHP2019through2025 → batting + vs_lhp */
+function parseBattedBallFile(base) {
+  const m = base.match(/^(b|p)\.battedballv(LHP|RHP|LHH|RHH)/i)
+  if (!m) return null
+  const role = m[1].toLowerCase() === 'b' ? 'batting' : 'pitching'
+  const vs = m[2].toUpperCase()
+  const split = { LHP: 'vs_lhp', RHP: 'vs_rhp', LHH: 'vs_lhh', RHH: 'vs_rhh' }[vs]
+  return split ? { role, split } : null
+}
+
+async function importParkFactors(file, scope) {
+  const raw = readCsvUtf8(file)
+  const rows = parse(raw, csvParseOpts)
+  const batch = []
+  for (const r of rows) {
+    const venue = String(r.Venue ?? '').trim()
+    if (!venue) continue
+    const yearLabel = String(r.Year ?? '').trim()
+    const metrics = {}
+    for (const [k, v] of Object.entries(r)) {
+      if (['Rk.', 'Team', 'Venue', 'Year', 'Park Factor'].includes(k)) continue
+      const n = num(v)
+      metrics[k] = n !== null ? n : v
+    }
+    batch.push({
+      scope,
+      rk: int(r['Rk.']),
+      team: String(r.Team ?? '').trim(),
+      venue,
+      year_label: yearLabel,
+      park_factor: int(r['Park Factor']),
+      metrics,
+    })
+  }
+  const chunkSize = 50
+  for (let i = 0; i < batch.length; i += chunkSize) {
+    const part = batch.slice(i, i + chunkSize)
+    const { error } = await supabase.from('stats_park_factors').upsert(part, {
+      onConflict: 'scope,venue,year_label',
+    })
+    if (error) console.error('stats_park_factors', file, error.message)
+  }
+  console.log(`park_factors ${scope} ${path.basename(file)}: ${batch.length} rows`)
+}
+
+async function importBattedBall(file, role, split) {
+  const raw = readCsvUtf8(file)
+  const rows = parse(raw, csvParseOpts)
+  const batch = []
+  for (const r of rows) {
+    const pid = String(r.player_id ?? r.PlayerId ?? '').trim()
+    if (!/^\d+$/.test(pid)) continue
+    await upsertPlayerFromRow(r.Name, pid, r.Team)
+    const metrics = { ...r }
+    delete metrics.Name
+    delete metrics.Team
+    delete metrics.PlayerId
+    delete metrics.player_id
+    delete metrics.NameASCII
+    delete metrics.MLBAMID
+    for (const k of Object.keys(metrics)) {
+      const v = metrics[k]
+      if (v != null && v !== '' && typeof v === 'string') {
+        const n = num(v)
+        if (n !== null) metrics[k] = n
+      }
+    }
+    batch.push({
+      role,
+      split,
+      player_id: pid,
+      player_name: r.Name ?? null,
+      team: r.Team ?? null,
+      mlbam_id: int(r.MLBAMID),
+      metrics,
+    })
+  }
+  const chunkSize = 150
+  for (let i = 0; i < batch.length; i += chunkSize) {
+    const part = batch.slice(i, i + chunkSize)
+    const { error } = await supabase.from('stats_batted_ball').upsert(part, {
+      onConflict: 'role,split,player_id',
+    })
+    if (error) console.error('stats_batted_ball', file, error.message)
+  }
+  console.log(`batted_ball ${role} ${split} ${path.basename(file)}: ${batch.length} rows`)
+}
+
 async function main() {
   const dir = path.join(root, 'data')
   const files = fs.readdirSync(dir).filter((f) => f.endsWith('.csv'))
@@ -281,6 +369,26 @@ async function main() {
 
     if (f.toLowerCase().includes('schedule')) {
       await importSchedule(full)
+      continue
+    }
+
+    const lower = f.toLowerCase()
+    if (lower === 'parkfactors2025.csv') {
+      await importParkFactors(full, 'overall')
+      continue
+    }
+    if (lower === 'parkfactorsleftyhitters.csv') {
+      await importParkFactors(full, 'lefty_hitters')
+      continue
+    }
+    if (lower === 'parkfactorsrightyhitters.csv') {
+      await importParkFactors(full, 'righty_hitters')
+      continue
+    }
+
+    const bb = parseBattedBallFile(path.basename(f, '.csv'))
+    if (bb) {
+      await importBattedBall(full, bb.role, bb.split)
       continue
     }
 

@@ -54,3 +54,6 @@ export { getAppDisplayDateIso } from './displayDate'
 
 export type { ScheduleGame } from './schedule'
 export { getGamesForDate, getScheduleDates, getTeamsPlayingOn } from './schedule'
+
+export type { BallparkInfo } from './mlbBallparks'
+export { BALLPARKS, getBallparkForHomeTeam, normalizeMlbHomeTeam } from './mlbBallparks'

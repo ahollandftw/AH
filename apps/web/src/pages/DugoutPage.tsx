@@ -14,6 +14,31 @@ import { normalizeTeamCode, paletteForTeam } from '../theme/teamPalette'
 import hrIcon96 from '../../../../data/icons8-home-run-96.png'
 import hrIcon64 from '../../../../data/icons8-home-run-64.png'
 
+type WeatherSlateEntry = {
+  home_team: string | null
+  stadium: string | null
+  weather?: {
+    current?: {
+      temp?: number
+      feels_like?: number
+      weather?: Array<{ description?: string }>
+    }
+  }
+  error?: string
+}
+
+function formatBallparkWx(entry: WeatherSlateEntry | undefined): string | null {
+  if (!entry?.weather?.current || entry.error) return null
+  const c = entry.weather.current
+  const t = c.temp
+  const desc = c.weather?.[0]?.description
+  if (t == null && !desc) return null
+  const parts: string[] = []
+  if (t != null) parts.push(`${Math.round(t)}°F`)
+  if (desc) parts.push(desc)
+  return parts.join(' · ')
+}
+
 export default function DugoutPage() {
   const { supabase, hasSubscription, session } = useWebAuth()
   const [loading, setLoading] = useState(true)
@@ -31,15 +56,16 @@ export default function DugoutPage() {
   const [liveGames, setLiveGames] = useState<any[]>([])
   const [selectedYear, setSelectedYear] = useState<number>(2026)
   const [playerInputs, setPlayerInputs] = useState<any>(null)
+  const [weatherByHome, setWeatherByHome] = useState<Record<string, WeatherSlateEntry>>({})
 
   useEffect(() => {
     if (!supabase) return
     void getScheduleDates(supabase).then((dates) => {
       if (!dates.length) return
       setAvailableDates(dates)
-      if (!dates.includes(displayDate)) setDisplayDate(dates[0])
+      setDisplayDate((d) => (dates.includes(d) ? d : dates[0]))
     })
-  }, [supabase, displayDate])
+  }, [supabase])
 
   useEffect(() => {
     if (!supabase) return
@@ -49,13 +75,21 @@ export default function DugoutPage() {
       getGamesForDate(supabase, displayDate),
       supabase
         .from('bdl_games')
-        .select('bdl_game_id,start_time_utc,home_team_abbrev,away_team_abbrev,status,home_score,away_score,home_hits,away_hits,home_errors,away_errors,home_inning_scores,away_inning_scores,current_period,scoring_summary')
+        .select('bdl_game_id,date,start_time_utc,home_team_abbrev,away_team_abbrev,status,home_score,away_score,home_hits,away_hits,home_errors,away_errors,home_inning_scores,away_inning_scores,current_period,scoring_summary')
         .eq('date', displayDate),
     ])
       .then(([proj, sched, live]) => {
         setRows(proj)
         setGames(sched)
-        setLiveGames((live.data ?? []) as any[])
+        const raw = (live.data ?? []) as any[]
+        const dayIso = displayDate
+        setLiveGames(
+          raw.filter((lg) => {
+            const d = lg.date
+            if (d == null) return true
+            return String(d).slice(0, 10) === dayIso
+          }),
+        )
       })
       .finally(() => setLoading(false))
   }, [supabase, displayDate])
@@ -65,9 +99,17 @@ export default function DugoutPage() {
     const id = setInterval(() => {
       void supabase
         .from('bdl_games')
-        .select('bdl_game_id,start_time_utc,home_team_abbrev,away_team_abbrev,status,home_score,away_score,home_hits,away_hits,home_errors,away_errors,home_inning_scores,away_inning_scores,current_period,scoring_summary')
+        .select('bdl_game_id,date,start_time_utc,home_team_abbrev,away_team_abbrev,status,home_score,away_score,home_hits,away_hits,home_errors,away_errors,home_inning_scores,away_inning_scores,current_period,scoring_summary')
         .eq('date', displayDate)
-        .then(({ data }) => setLiveGames((data ?? []) as any[]))
+        .then(({ data }) => {
+          const raw = (data ?? []) as any[]
+          const dayIso = displayDate
+          setLiveGames(raw.filter((lg) => {
+            const d = lg.date
+            if (d == null) return true
+            return String(d).slice(0, 10) === dayIso
+          }))
+        })
     }, 60000)
     return () => clearInterval(id)
   }, [displayDate, supabase])
@@ -88,13 +130,18 @@ export default function DugoutPage() {
   const visibleGames = useMemo(() => {
     const pairKey = (a: string, b: string) =>
       [normalizeTeamCode(a) ?? a, normalizeTeamCode(b) ?? b].sort().join('|')
+    const liveById = new Map<string, any>()
     const byPair = new Map<string, any>()
     for (const g of liveGames) {
+      const id = String(g.bdl_game_id ?? '')
+      if (id) liveById.set(id, g)
       byPair.set(pairKey(g.home_team_abbrev, g.away_team_abbrev), g)
     }
+    const pickLive = (game: ScheduleGame) =>
+      liveById.get(game.gameId) ?? byPair.get(pairKey(game.homeTeam, game.awayTeam)) ?? null
     const sorted = [...games].sort((a, b) => {
-      const ga = byPair.get(pairKey(a.homeTeam, a.awayTeam))
-      const gb = byPair.get(pairKey(b.homeTeam, b.awayTeam))
+      const ga = pickLive(a)
+      const gb = pickLive(b)
       const ta = ga?.start_time_utc ? new Date(ga.start_time_utc).getTime() : Number.MAX_SAFE_INTEGER
       const tb = gb?.start_time_utc ? new Date(gb.start_time_utc).getTime() : Number.MAX_SAFE_INTEGER
       return ta - tb
@@ -104,6 +151,35 @@ export default function DugoutPage() {
       displayDate.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0) % sorted.length
     return [sorted[idx]]
   }, [displayDate, games, hasSubscription, liveGames])
+
+  useEffect(() => {
+    const base = import.meta.env.VITE_API_BASE_URL ?? ''
+    if (!base || visibleGames.length === 0) {
+      setWeatherByHome({})
+      return
+    }
+    const homes = [
+      ...new Set(visibleGames.map((g) => normalizeTeamCode(g.homeTeam) ?? g.homeTeam)),
+    ]
+    const ac = new AbortController()
+    void fetch(`${base}/bdl/weather/slate?homes=${encodeURIComponent(homes.join(','))}`, {
+      signal: ac.signal,
+    })
+      .then((r) => {
+        if (!r.ok) return null
+        return r.json() as Promise<{ entries?: WeatherSlateEntry[] }>
+      })
+      .then((data) => {
+        if (!data?.entries) return
+        const next: Record<string, WeatherSlateEntry> = {}
+        for (const e of data.entries) {
+          if (e.home_team) next[e.home_team] = e
+        }
+        setWeatherByHome(next)
+      })
+      .catch(() => {})
+    return () => ac.abort()
+  }, [visibleGames])
 
   function toProjections(params: { date: string; team?: string; player?: string }) {
     const qp = new URLSearchParams()
@@ -394,7 +470,14 @@ export default function DugoutPage() {
               <div className="pg-cards">
                 {visibleGames.map((g) => {
                   const pairKey = [normalizeTeamCode(g.homeTeam) ?? g.homeTeam, normalizeTeamCode(g.awayTeam) ?? g.awayTeam].sort().join('|')
-                  const live = liveGames.find((lg) => [normalizeTeamCode(lg.home_team_abbrev) ?? lg.home_team_abbrev, normalizeTeamCode(lg.away_team_abbrev) ?? lg.away_team_abbrev].sort().join('|') === pairKey) ?? null
+                  const live =
+                    liveGames.find((lg) => String(lg.bdl_game_id ?? '') === g.gameId) ??
+                    liveGames.find(
+                      (lg) =>
+                        [normalizeTeamCode(lg.home_team_abbrev) ?? lg.home_team_abbrev, normalizeTeamCode(lg.away_team_abbrev) ?? lg.away_team_abbrev].sort().join('|') ===
+                        pairKey,
+                    ) ??
+                    null
                   const status = String(live?.status ?? '').toLowerCase()
                   const gameStarted = !!live && !/scheduled|pre|not started/.test(status)
                   const awayKey = normalizeTeamCode(g.awayTeam) ?? g.awayTeam
@@ -404,6 +487,8 @@ export default function DugoutPage() {
                   const awayPalette = paletteForTeam(awayTop?.team ?? g.awayTeam)
                   const homePalette = paletteForTeam(homeTop?.team ?? g.homeTeam)
                   const isExpanded = expandedGameId === g.gameId
+                  const homeNorm = normalizeTeamCode(g.homeTeam) ?? g.homeTeam
+                  const wxLine = formatBallparkWx(weatherByHome[homeNorm])
                   return (
                     <div
                       key={g.gameId}
@@ -423,6 +508,11 @@ export default function DugoutPage() {
                             {formatGameStatus(live) || (live?.start_time_utc ? new Date(live.start_time_utc).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : 'TBD')}
                           </div>
                         </div>
+                        {wxLine ? (
+                          <div className="pg-sub" style={{ marginTop: 6 }} title={weatherByHome[homeNorm]?.stadium ?? ''}>
+                            {wxLine}
+                          </div>
+                        ) : null}
                         {gameStarted ? (
                           <div className="pg-gameRows">
                             {(() => {

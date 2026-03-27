@@ -26,6 +26,8 @@ export const config = {
   port: Number(process.env.PORT ?? '3001'),
   seasonStart: () => process.env.SEASON_START ?? `${new Date().getFullYear()}-03-15`,
   bdlApiKey: () => req('BDL_API_KEY'),
+  /** OpenWeather One Call 3.0 — optional; weather routes return 503 if unset */
+  openWeatherApiKey: () => process.env.OPENWEATHER_API_KEY?.trim() ?? '',
   resendApiKey: () => process.env.RESEND_API_KEY?.trim() || '',
   supportEmail: () => process.env.SUPPORT_EMAIL?.trim() || 'analytichustle.support@gmail.com',
   moderationSecret: () => process.env.WALL_MODERATION_SECRET?.trim() || '',

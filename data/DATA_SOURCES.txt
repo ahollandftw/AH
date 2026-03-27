@@ -1,0 +1,35 @@
+Stat / reference CSV layout (repo: data/)
+
+PARK FACTORS (team + venue, no player_id)
+- PARKFACTORS2025.csv
+  Header: Rk.,Team,Venue,Year,Park Factor,wOBAcon,xwOBAcon,BACON,xBACON,HardHit,R,OBP,H,1B,2B,3B,HR,BB,SO,PA
+  Year column is a range label e.g. 2023-2025. PA may be quoted with commas.
+  Imported to Supabase: stats_park_factors scope=overall
+
+- parkfactorsleftyhitters.csv
+  Same column shape as above. scope=lefty_hitters
+
+- parkfactorsrightyhitters.csv
+  Same column shape as above. scope=righty_hitters
+
+BATTED BALL (player-level, Statcast ID)
+- b.battedballvLHP2019through2025.csv  (batters vs LHP)
+- b.battedballvRHP2019through2025.csv  (batters vs RHP)
+- p.battedballvLHH2019through2025.csv  (pitchers vs LHH)
+- p.battedballvRHH2019through2025.csv  (pitchers vs RHH)
+
+  Header example (batting): Name,Team,BABIP,GB/FB,LD%,GB%,FB%,IFFB%,HR/FB,... NameASCII,PlayerId,MLBAMID
+  Pitching files add Balls,Strikes,Pitches before Pull%.
+
+  PlayerId = Statcast player id string (same as players.stat_player_id / CSV player_id elsewhere).
+  Import maps PlayerId -> player_id column in DB; add column "player_id" in sheet if missing (duplicate of PlayerId).
+
+  Imported to: stats_batted_ball (role + split + player_id PK), metrics jsonb holds remaining columns.
+
+EXISTING STATCAST CSVs (see supabase/schema/stats_csv_tables.sql)
+- b.homerunsYYYY.csv / p.homerunsYYYY.csv -> stats_homeruns
+- b.exit_velocityYYYY.csv / p.exit_velocityYYYY.csv -> stats_exit_velocity
+- b.pitch-arsenal-statsYYYY.csv / p.pitch-arsenal-statsYYYY.csv -> stats_pitch_arsenal
+- mlb_*_schedule.csv -> schedule_games
+
+Import command: npm run import:stats (repo root, requires SUPABASE_SERVICE_ROLE_KEY)

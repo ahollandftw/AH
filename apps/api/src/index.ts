@@ -6,6 +6,7 @@ import { config } from './config.js'
 import { registerLeaderboardRoutes } from './routes/leaderboards.js'
 import { registerBdlRoutes } from './routes/bdl.js'
 import { registerWallRoutes } from './routes/wall.js'
+import { registerWeatherRoutes } from './routes/weather.js'
 import { startLiveMonitor } from './bdl/liveMonitor.js'
 import { getServiceClient } from './supabase.js'
 
@@ -88,6 +89,7 @@ app.get('/health', (_req, res) => {
 
 registerLeaderboardRoutes(app)
 registerBdlRoutes(app)
+registerWeatherRoutes(app)
 registerWallRoutes(app)
 
 app.post('/billing/create-checkout-session', async (req, res) => {

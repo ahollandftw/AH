@@ -67,6 +67,56 @@ export function registerBdlRoutes(app: Express) {
     }
   })
 
+  /**
+   * Inspect season stats: `source=bdl` hits BallDontLie (same key as sync);
+   * default `source=db` reads `bdl_season_stats` after POST /bdl/sync/season-stats.
+   */
+  app.get('/bdl/season-stats', async (req, res) => {
+    try {
+      const season = Number(req.query.season) || 2026
+      const source = String(req.query.source ?? 'db').toLowerCase()
+      if (source === 'bdl') {
+        const perPage = Math.min(100, Math.max(1, Number(req.query.per_page) || 25))
+        const body = await bdlFetch<{ data: unknown[]; meta?: { next_cursor?: number | null } }>(
+          '/mlb/v1/season_stats',
+          {
+            season,
+            season_type: 'regular',
+            per_page: perPage,
+          },
+        )
+        res.json({
+          ok: true,
+          source: 'bdl',
+          endpoint: 'https://api.balldontlie.io/mlb/v1/season_stats',
+          season,
+          data: body.data,
+          meta: body.meta,
+        })
+        return
+      }
+      const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 50))
+      const sb = getServiceClient()
+      const { data, error, count } = await sb
+        .from('bdl_season_stats')
+        .select('*', { count: 'exact' })
+        .eq('season', season)
+        .limit(limit)
+      if (error) throw error
+      res.json({
+        ok: true,
+        source: 'db',
+        table: 'bdl_season_stats',
+        season,
+        total_rows: count,
+        returned: (data ?? []).length,
+        rows: data ?? [],
+      })
+    } catch (e) {
+      res.status(500).json({ error: String(e) })
+    }
+  })
+
   app.post('/bdl/sync/matchup', async (req, res) => {
     try {
       const playerId = Number(req.body?.player_id)
