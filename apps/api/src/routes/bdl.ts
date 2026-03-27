@@ -839,4 +839,86 @@ export function registerBdlRoutes(app: Express) {
         .json({ error: e instanceof Error ? (e.stack ?? e.message) : String(e) })
     }
   })
+
+  /* ── Lineup: fetch from BDL and cross-ref to stat_player_id ─────── */
+  app.get('/bdl/lineup', async (req, res) => {
+    try {
+      const bdlGameId = Number(req.query.game_id ?? 0)
+      if (!bdlGameId) {
+        res.status(400).json({ error: 'game_id required' })
+        return
+      }
+
+      // BDL returns lineups keyed by team; structure: { data: { home: [...], away: [...] } }
+      type BdlLineupEntry = {
+        player: { id: number; full_name: string; position: string }
+        batting_order: number | null
+        position: string | null
+      }
+      type BdlLineupResponse = {
+        data?: { home?: BdlLineupEntry[]; away?: BdlLineupEntry[] }
+      }
+
+      let bdlLineup: BdlLineupResponse
+      try {
+        bdlLineup = await bdlFetch<BdlLineupResponse>('/mlb/v1/lineups', { game_id: bdlGameId })
+      } catch (fetchErr) {
+        // BDL returns 404/400 for games with no lineup posted yet
+        res.json({ data: null, reason: 'Lineup not posted yet' })
+        return
+      }
+
+      const homeEntries: BdlLineupEntry[] = bdlLineup?.data?.home ?? []
+      const awayEntries: BdlLineupEntry[] = bdlLineup?.data?.away ?? []
+
+      if (!homeEntries.length && !awayEntries.length) {
+        res.json({ data: null, reason: 'Lineup not posted yet' })
+        return
+      }
+
+      // Cross-reference BDL player IDs → stat_player_id
+      const allBdlIds = [
+        ...new Set([
+          ...homeEntries.map((e) => e.player?.id).filter(Boolean),
+          ...awayEntries.map((e) => e.player?.id).filter(Boolean),
+        ]),
+      ] as number[]
+
+      const sb = getServiceClient()
+      const { data: xref } = allBdlIds.length
+        ? await sb.from('bdl_players').select('bdl_id,stat_player_id,full_name').in('bdl_id', allBdlIds)
+        : { data: [] as any[] }
+
+      const xrefMap = new Map<number, { stat_player_id: string | null; full_name: string | null }>(
+        (xref ?? []).map((r: any) => [Number(r.bdl_id), { stat_player_id: r.stat_player_id ?? null, full_name: r.full_name ?? null }]),
+      )
+
+      const mapEntry = (e: BdlLineupEntry) => {
+        const xr = xrefMap.get(Number(e.player?.id ?? 0))
+        return {
+          bdl_player_id: e.player?.id ?? null,
+          stat_player_id: xr?.stat_player_id ?? null,
+          full_name: e.player?.full_name ?? xr?.full_name ?? null,
+          position: e.position ?? e.player?.position ?? null,
+          batting_order: e.batting_order ?? null,
+        }
+      }
+
+      const sortByOrder = (a: ReturnType<typeof mapEntry>, b: ReturnType<typeof mapEntry>) => {
+        if (a.batting_order == null) return 1
+        if (b.batting_order == null) return -1
+        return a.batting_order - b.batting_order
+      }
+
+      res.json({
+        data: {
+          home: homeEntries.map(mapEntry).sort(sortByOrder),
+          away: awayEntries.map(mapEntry).sort(sortByOrder),
+        },
+      })
+    } catch (e) {
+      console.error('[bdl/lineup] failed:', e)
+      res.status(500).json({ error: e instanceof Error ? e.message : String(e) })
+    }
+  })
 }

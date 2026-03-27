@@ -1557,3 +1557,332 @@ body,
     scroll-behavior: auto !important;
   }
 }
+
+/* ── Matchup modal redesign ───────────────────────────────────────── */
+.pg-modal--matchup {
+  width: min(720px, 96vw);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.pg-modal--matchup .pg-modalHead {
+  padding: 14px 16px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-primary) 20%, transparent);
+  flex-shrink: 0;
+}
+
+.pg-modalTitle {
+  font-size: 1rem;
+  font-weight: 800;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pg-modalVs {
+  color: var(--color-muted);
+  font-weight: 500;
+  margin: 0 4px;
+}
+
+.pg-matchupBody {
+  overflow-y: auto;
+  padding: 14px 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Players header row */
+.pg-matchupPlayers {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.pg-matchupPlayerCard {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: color-mix(in srgb, var(--color-surface) 60%, #0c0f16);
+  border: 1px solid color-mix(in srgb, var(--color-primary) 18%, transparent);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.pg-matchupPlayerCard--pitcher {
+  border-color: color-mix(in srgb, var(--color-secondary) 25%, transparent);
+}
+
+.pg-matchupPlayerCard--batter {
+  border-color: color-mix(in srgb, var(--color-primary) 30%, transparent);
+}
+
+.pg-avatar--lg {
+  width: 44px;
+  height: 44px;
+  font-size: 0.9rem;
+  flex-shrink: 0;
+}
+
+.pg-matchupRole {
+  font-size: 0.65rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-muted);
+  margin-bottom: 2px;
+}
+
+.pg-matchupPlayerName {
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--color-text);
+  line-height: 1.2;
+}
+
+.pg-matchupVsDivider {
+  font-size: 0.7rem;
+  font-weight: 900;
+  color: var(--color-muted);
+  letter-spacing: 0.1em;
+  flex-shrink: 0;
+}
+
+/* BvP section */
+.pg-bvpSection {
+  background: color-mix(in srgb, var(--color-primary) 6%, #0c0f16);
+  border: 1px solid color-mix(in srgb, var(--color-primary) 22%, transparent);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+
+.pg-bvpSection--empty {
+  opacity: 0.7;
+}
+
+.pg-bvpLabel {
+  font-size: 0.68rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--color-primary);
+  margin-bottom: 10px;
+}
+
+.pg-bvpGrid {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.pg-bvpCell {
+  flex: 1;
+  min-width: 52px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: color-mix(in srgb, var(--color-surface) 70%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-primary) 14%, transparent);
+  border-radius: 8px;
+  padding: 8px 4px 6px;
+}
+
+.pg-bvpVal {
+  font-size: 1.1rem;
+  font-weight: 900;
+  color: var(--color-text);
+  line-height: 1;
+}
+
+.pg-bvpVal--hr {
+  color: var(--color-primary);
+}
+
+.pg-bvpKey {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-muted);
+  margin-top: 4px;
+}
+
+/* Stats two-column grid */
+.pg-matchupStatsGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.pg-matchupStatCol {
+  background: color-mix(in srgb, var(--color-surface) 55%, #0c0f16);
+  border: 1px solid color-mix(in srgb, var(--color-primary) 16%, transparent);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.pg-matchupStatHead {
+  padding: 8px 12px;
+  font-size: 0.68rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 8%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--color-primary) 16%, transparent);
+}
+
+.pg-matchupStatRows {
+  display: flex;
+  flex-direction: column;
+}
+
+.pg-mStatRow {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 7px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-primary) 8%, transparent);
+  transition: background 0.15s;
+}
+
+.pg-mStatRow:last-child {
+  border-bottom: none;
+}
+
+.pg-mStatRow--good {
+  background: rgba(30, 255, 165, 0.07);
+}
+
+.pg-mStatRow--good .pg-mStatVal {
+  color: rgba(70, 255, 170, 0.9);
+}
+
+.pg-mStatLabel {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-muted);
+  min-width: 70px;
+  flex-shrink: 0;
+}
+
+.pg-mStatVal {
+  font-size: 0.85rem;
+  font-weight: 800;
+  color: var(--color-text);
+  flex: 1;
+}
+
+.pg-mStatHint {
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: color-mix(in srgb, var(--color-primary) 55%, var(--color-muted));
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* Pitch breakdown */
+.pg-pitchSection {
+  border: 1px solid color-mix(in srgb, var(--color-secondary) 18%, transparent);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.pg-pitchSection .pg-matchupStatHead {
+  background: color-mix(in srgb, var(--color-secondary) 8%, transparent);
+  border-color: color-mix(in srgb, var(--color-secondary) 16%, transparent);
+  color: var(--color-secondary);
+}
+
+.pg-pitchTypeGrid {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.pg-pitchTypeRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-secondary) 10%, transparent);
+  font-size: 0.78rem;
+}
+
+.pg-pitchTypeRow:last-child { border-bottom: none; }
+
+.pg-pitchTypeRow--hot {
+  background: rgba(30, 255, 165, 0.05);
+}
+
+.pg-pitchName {
+  font-weight: 800;
+  color: var(--color-text);
+  min-width: 80px;
+  flex-shrink: 0;
+}
+
+.pg-pitchUsage {
+  color: var(--color-muted);
+  font-weight: 600;
+  min-width: 80px;
+  flex-shrink: 0;
+}
+
+.pg-pitchStat {
+  color: var(--color-muted);
+  font-weight: 600;
+  flex: 1;
+}
+
+/* Lineup badge */
+.pg-lineupBadge {
+  font-size: 0.62rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--color-muted);
+  background: color-mix(in srgb, var(--color-primary) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-primary) 18%, transparent);
+  border-radius: 999px;
+  padding: 1px 6px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.pg-lineupName--plain {
+  color: var(--color-text);
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 0;
+  background: none;
+  border: none;
+  cursor: default;
+  flex: 1;
+}
+
+.pg-lineupRow--pitcher {
+  opacity: 0.7;
+  border-top: 1px solid color-mix(in srgb, var(--color-primary) 14%, transparent);
+  margin-top: 4px;
+  padding-top: 6px;
+}
+
+@media (max-width: 600px) {
+  .pg-matchupStatsGrid {
+    grid-template-columns: 1fr;
+  }
+  .pg-matchupPlayers {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .pg-matchupVsDivider {
+    text-align: center;
+  }
+}

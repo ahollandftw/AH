@@ -27,54 +27,71 @@ function utcToETDateIso(utcStr: string): string | null {
   }
 }
 
+/** Stable pair key for deduplication (order-independent). */
+function teamPairKey(a: string, b: string): string {
+  return [a.toUpperCase(), b.toUpperCase()].sort().join('|')
+}
+
 export async function getGamesForDate(
   supabase: SupabaseClient,
   dateIso: string,
 ): Promise<ScheduleGame[]> {
-  // Prefer BallDontLie-synced rows so each date matches the live API slate (CSV schedule can drift).
-  const { data: bdl, error: bdlErr } = await supabase
-    .from('bdl_games')
-    .select('bdl_game_id,date,start_time_utc,home_team_abbrev,away_team_abbrev')
-    .eq('date', dateIso)
-    .order('bdl_game_id')
+  // Fetch both sources in parallel so we can merge them.
+  // BDL has live scores/status, schedule_games has the full slate from the CSV.
+  // We prefer BDL rows when a matchup exists in both, and supplement with
+  // schedule_games for any matchups not yet synced to bdl_games.
+  const [bdlRes, schedRes] = await Promise.all([
+    supabase
+      .from('bdl_games')
+      .select('bdl_game_id,date,start_time_utc,home_team_abbrev,away_team_abbrev')
+      .eq('date', dateIso)
+      .order('bdl_game_id'),
+    supabase
+      .from('schedule_games')
+      .select('game_id,date,home_team,away_team,slate_type,games_on_date')
+      .eq('date', dateIso)
+      .order('game_id'),
+  ])
 
-  if (!bdlErr && bdl?.length) {
-    // Guard against rows whose `date` was stored incorrectly (e.g. sync ran on 3/27 and
-    // overwrote a 3/26 game's date). Validate against start_time_utc in ET when present.
-    const valid = (bdl as any[]).filter((r) => {
-      const utc: string | null = r.start_time_utc ?? null
-      if (!utc) return true // no time info — trust the stored date
+  const merged: ScheduleGame[] = []
+  const coveredPairs = new Set<string>()
+
+  // Add validated BDL games first (ET date check guards against sync-day bleed-over)
+  for (const r of ((bdlRes.data ?? []) as any[])) {
+    const utc: string | null = r.start_time_utc ?? null
+    if (utc) {
       const etDate = utcToETDateIso(utc)
-      return etDate == null || etDate === dateIso
-    })
-    if (valid.length) {
-      const n = valid.length
-      return valid.map((r) => ({
-        gameId: String(r.bdl_game_id),
-        date: r.date,
-        homeTeam: r.home_team_abbrev,
-        awayTeam: r.away_team_abbrev,
-        slateType: null,
-        gamesOnDate: n,
-      }))
+      if (etDate && etDate !== dateIso) continue // wrong calendar day — skip
     }
+    const key = teamPairKey(r.home_team_abbrev, r.away_team_abbrev)
+    coveredPairs.add(key)
+    merged.push({
+      gameId: String(r.bdl_game_id),
+      date: r.date,
+      homeTeam: r.home_team_abbrev,
+      awayTeam: r.away_team_abbrev,
+      slateType: null,
+      gamesOnDate: 0, // filled in below
+    })
   }
 
-  const { data, error } = await supabase
-    .from('schedule_games')
-    .select('game_id,date,home_team,away_team,slate_type,games_on_date')
-    .eq('date', dateIso)
-    .order('game_id')
+  // Supplement with schedule_games for matchups not yet in bdl_games
+  for (const r of ((schedRes.data ?? []) as any[])) {
+    const key = teamPairKey(r.home_team, r.away_team)
+    if (coveredPairs.has(key)) continue // BDL already covers this matchup
+    coveredPairs.add(key)
+    merged.push({
+      gameId: r.game_id,
+      date: r.date,
+      homeTeam: r.home_team,
+      awayTeam: r.away_team,
+      slateType: r.slate_type ?? null,
+      gamesOnDate: r.games_on_date ?? null,
+    })
+  }
 
-  if (error || !data?.length) return []
-  return data.map((r: any) => ({
-    gameId: r.game_id,
-    date: r.date,
-    homeTeam: r.home_team,
-    awayTeam: r.away_team,
-    slateType: r.slate_type ?? null,
-    gamesOnDate: r.games_on_date ?? null,
-  }))
+  const n = merged.length
+  return merged.map((g) => ({ ...g, gamesOnDate: g.gamesOnDate || n }))
 }
 
 /** Sorted YYYY-MM-DD values that exist in synced games or the static schedule. */

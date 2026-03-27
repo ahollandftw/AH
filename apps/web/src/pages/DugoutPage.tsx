@@ -58,6 +58,9 @@ export default function DugoutPage() {
   const [selectedYear, setSelectedYear] = useState<number>(2026)
   const [playerInputs, setPlayerInputs] = useState<any>(null)
   const [weatherByHome, setWeatherByHome] = useState<Record<string, WeatherSlateEntry>>({})
+  type LineupPlayer = { bdl_player_id: number | null; stat_player_id: string | null; full_name: string | null; position: string | null; batting_order: number | null }
+  const [lineupByGame, setLineupByGame] = useState<Record<string, { home: LineupPlayer[]; away: LineupPlayer[] } | null>>({})
+  const [lineupLoadingFor, setLineupLoadingFor] = useState<string | null>(null)
 
   useEffect(() => {
     if (!supabase) return
@@ -301,6 +304,22 @@ export default function DugoutPage() {
       setPlayerInputs(null)
     } finally {
       setMatchupLoading(false)
+    }
+  }
+
+  async function fetchLineup(bdlGameId: string) {
+    if (lineupByGame[bdlGameId] !== undefined) return // already fetched
+    const base = import.meta.env.VITE_API_BASE_URL ?? ''
+    if (!base) return
+    setLineupLoadingFor(bdlGameId)
+    try {
+      const r = await fetch(`${base}/bdl/lineup?game_id=${bdlGameId}`)
+      const json = await r.json()
+      setLineupByGame((prev) => ({ ...prev, [bdlGameId]: json?.data ?? null }))
+    } catch {
+      setLineupByGame((prev) => ({ ...prev, [bdlGameId]: null }))
+    } finally {
+      setLineupLoadingFor(null)
     }
   }
 
@@ -756,7 +775,13 @@ export default function DugoutPage() {
                       <button
                         type="button"
                         className="pg-expandBtn"
-                        onClick={() => setExpandedGameId(isExpanded ? null : g.gameId)}
+                        onClick={() => {
+                          const nextExpanded = isExpanded ? null : g.gameId
+                          setExpandedGameId(nextExpanded)
+                          if (nextExpanded && live?.bdl_game_id) {
+                            void fetchLineup(String(live.bdl_game_id))
+                          }
+                        }}
                       >
                         {isExpanded ? 'Hide details' : 'Expand details'}
                       </button>
@@ -764,116 +789,147 @@ export default function DugoutPage() {
                       {isExpanded ? (
                         <div className="pg-detailWrap">
                           <div className="pg-gameRows">
+                            {/* Probable pitchers */}
                             <div className="pg-gameLine">
                               <span className="pg-gameLabel">Probable pitchers</span>
                               <span className="pg-gameValue">
                                 {g.awayTeam}: {homeTop?.opponentPitcher ? `${homeTop.opponentPitcher}${homeTop.opponentPitcherHand ? ` (${homeTop.opponentPitcherHand})` : ''}` : '—'}
-                              </span>
-                            </div>
-                            <div className="pg-gameLine">
-                              <span className="pg-gameLabel"></span>
-                              <span className="pg-gameValue">
+                                {' · '}
                                 {g.homeTeam}: {awayTop?.opponentPitcher ? `${awayTop.opponentPitcher}${awayTop.opponentPitcherHand ? ` (${awayTop.opponentPitcherHand})` : ''}` : '—'}
                               </span>
                             </div>
-                            <p className="pg-small" style={{ marginTop: 10, opacity: 0.88, maxWidth: 520 }}>
-                              Missing names here means we did not get a probable starter for that team in{' '}
-                              <code>daily_hr_projections</code> (the table-backed path), or the app fell back to
-                              the HR model which does not attach starter names yet. Tell us if you want a BallDontLie
-                              probable-pitcher field or a separate starters feed wired into projections.
-                            </p>
-                            {!gameStarted ? (
-                              (() => {
-                                const awayKey = normalizeTeamCode(g.awayTeam) ?? g.awayTeam
-                                const homeKey = normalizeTeamCode(g.homeTeam) ?? g.homeTeam
-                                const toTeamKey = (t: string | null | undefined) => normalizeTeamCode(t ?? '') ?? t ?? ''
 
-                                const awayLineup = rows
-                                  .filter((p) => toTeamKey(p.team) === awayKey)
-                                  .slice()
-                                  .sort((a, b) => (b.hrProbability ?? -1) - (a.hrProbability ?? -1))
+                            {/* Lineup — BDL official when available, projected fallback */}
+                            {(() => {
+                              const bdlGameIdStr = live?.bdl_game_id ? String(live.bdl_game_id) : null
+                              const bdlLineup = bdlGameIdStr ? lineupByGame[bdlGameIdStr] : undefined
+                              const isLoadingLineup = bdlGameIdStr === lineupLoadingFor
 
-                                const homeLineup = rows
-                                  .filter((p) => toTeamKey(p.team) === homeKey)
-                                  .slice()
-                                  .sort((a, b) => (b.hrProbability ?? -1) - (a.hrProbability ?? -1))
+                              const ordinal = (n: number) =>
+                                n === 1 ? '1st' : n === 2 ? '2nd' : n === 3 ? '3rd' : `${n}th`
 
-                                const ordinal = (n: number) => {
-                                  if (n === 1) return '1st'
-                                  if (n === 2) return '2nd'
-                                  if (n === 3) return '3rd'
-                                  return `${n}th`
-                                }
+                              if (isLoadingLineup) {
+                                return <div className="pg-sub" style={{ marginTop: 12 }}>Loading lineup…</div>
+                              }
 
-                                if (!awayLineup.length && !homeLineup.length) {
-                                  return <div className="pg-sub">Projected lineup not available for this game.</div>
-                                }
-
-                                return (
-                                  <>
-                                    <div className="pg-lineupGrid">
-                                      <div className="pg-lineupTeam">
-                                        <div className="pg-lineupTeamTitle">{g.awayTeam}</div>
-                                        {awayLineup.map((p, idx) => {
-                                          const hasPick = Object.prototype.hasOwnProperty.call(pickState, p.playerId)
-                                          return (
-                                            <div key={p.playerId} className="pg-lineupRow">
-                                              <span className="pg-lineupOrder">{ordinal(idx + 1)}</span>
-                                              <span className="pg-lineupPos">{String(p.position ?? '—').toUpperCase()}</span>
+                              if (bdlLineup) {
+                                // Official BDL lineup
+                                const renderBdlTeam = (
+                                  entries: typeof bdlLineup.away,
+                                  teamCode: string,
+                                ) => {
+                                  const batters = entries.filter((e) => e.batting_order != null && e.batting_order > 0)
+                                  const pitcher = entries.find((e) => !e.batting_order || e.batting_order === 0)
+                                  return (
+                                    <div className="pg-lineupTeam">
+                                      <div className="pg-lineupTeamTitle">{teamCode}</div>
+                                      {batters.map((p, idx) => {
+                                        const proj = p.stat_player_id
+                                          ? rows.find((r) => r.playerId === p.stat_player_id)
+                                          : null
+                                        const hasPick = proj && Object.prototype.hasOwnProperty.call(pickState, proj.playerId)
+                                        return (
+                                          <div key={p.bdl_player_id ?? idx} className="pg-lineupRow">
+                                            <span className="pg-lineupOrder">{ordinal(idx + 1)}</span>
+                                            <span className="pg-lineupPos">{String(p.position ?? '—').toUpperCase().slice(0, 3)}</span>
+                                            {proj ? (
                                               <button
                                                 type="button"
                                                 className="pg-lineupName"
-                                                onClick={() => void openMatchup(p)}
+                                                onClick={() => void openMatchup(proj)}
                                               >
-                                                {p.name}
+                                                {p.full_name ?? proj.name}
                                               </button>
-                                              <span className="pg-lineupProj">{formatProbability(p.hrProbability)}</span>
+                                            ) : (
+                                              <span className="pg-lineupName pg-lineupName--plain">{p.full_name ?? '—'}</span>
+                                            )}
+                                            <span className="pg-lineupProj">
+                                              {proj ? formatProbability(proj.hrProbability) : '—'}
+                                            </span>
+                                            {proj ? (
                                               <button
                                                 type="button"
                                                 className={`pg-targetBtn ${hasPick ? 'is-selected' : ''}`}
-                                                disabled={pickBusy === p.playerId}
-                                                onClick={() => void togglePick(p.playerId)}
+                                                disabled={pickBusy === proj.playerId}
+                                                onClick={() => void togglePick(proj.playerId)}
                                               >
                                                 🎯
                                               </button>
-                                            </div>
-                                          )
-                                        })}
-                                      </div>
-                                      <div className="pg-lineupTeam">
-                                        <div className="pg-lineupTeamTitle">{g.homeTeam}</div>
-                                        {homeLineup.map((p, idx) => {
-                                          const hasPick = Object.prototype.hasOwnProperty.call(pickState, p.playerId)
-                                          return (
-                                            <div key={p.playerId} className="pg-lineupRow">
-                                              <span className="pg-lineupOrder">{ordinal(idx + 1)}</span>
-                                              <span className="pg-lineupPos">{String(p.position ?? '—').toUpperCase()}</span>
-                                              <button
-                                                type="button"
-                                                className="pg-lineupName"
-                                                onClick={() => void openMatchup(p)}
-                                              >
-                                                {p.name}
-                                              </button>
-                                              <span className="pg-lineupProj">{formatProbability(p.hrProbability)}</span>
-                                              <button
-                                                type="button"
-                                                className={`pg-targetBtn ${hasPick ? 'is-selected' : ''}`}
-                                                disabled={pickBusy === p.playerId}
-                                                onClick={() => void togglePick(p.playerId)}
-                                              >
-                                                🎯
-                                              </button>
-                                            </div>
-                                          )
-                                        })}
-                                      </div>
+                                            ) : <span style={{ width: 32 }} />}
+                                          </div>
+                                        )
+                                      })}
+                                      {pitcher && (
+                                        <div className="pg-lineupRow pg-lineupRow--pitcher">
+                                          <span className="pg-lineupOrder">P</span>
+                                          <span className="pg-lineupPos">SP</span>
+                                          <span className="pg-lineupName pg-lineupName--plain">{pitcher.full_name ?? '—'}</span>
+                                          <span className="pg-lineupProj" />
+                                          <span style={{ width: 32 }} />
+                                        </div>
+                                      )}
                                     </div>
-                                  </>
+                                  )
+                                }
+                                return (
+                                  <div className="pg-lineupGrid" style={{ marginTop: 12 }}>
+                                    {renderBdlTeam(bdlLineup.away, g.awayTeam)}
+                                    {renderBdlTeam(bdlLineup.home, g.homeTeam)}
+                                  </div>
                                 )
-                              })()
-                            ) : null}
-                            <div className="pg-gameLine">
+                              }
+
+                              // Projected fallback (from daily_hr_projections)
+                              const toTeamKey = (t: string | null | undefined) => normalizeTeamCode(t ?? '') ?? t ?? ''
+                              const awayKey = normalizeTeamCode(g.awayTeam) ?? g.awayTeam
+                              const homeKey = normalizeTeamCode(g.homeTeam) ?? g.homeTeam
+                              const awayLineup = rows.filter((p) => toTeamKey(p.team) === awayKey).slice().sort((a, b) => (b.hrProbability ?? -1) - (a.hrProbability ?? -1))
+                              const homeLineup = rows.filter((p) => toTeamKey(p.team) === homeKey).slice().sort((a, b) => (b.hrProbability ?? -1) - (a.hrProbability ?? -1))
+
+                              if (!awayLineup.length && !homeLineup.length) {
+                                return (
+                                  <div className="pg-sub" style={{ marginTop: 12 }}>
+                                    Lineup not posted yet.{bdlGameIdStr && bdlLineup === null ? ' BDL returned no lineup for this game.' : ''}
+                                  </div>
+                                )
+                              }
+
+                              const renderProjTeam = (lineup: typeof awayLineup, teamCode: string) => (
+                                <div className="pg-lineupTeam">
+                                  <div className="pg-lineupTeamTitle">{teamCode} <span className="pg-lineupBadge">Projected</span></div>
+                                  {lineup.map((p, idx) => {
+                                    const hasPick = Object.prototype.hasOwnProperty.call(pickState, p.playerId)
+                                    return (
+                                      <div key={p.playerId} className="pg-lineupRow">
+                                        <span className="pg-lineupOrder">{ordinal(idx + 1)}</span>
+                                        <span className="pg-lineupPos">{String(p.position ?? '—').toUpperCase().slice(0, 3)}</span>
+                                        <button type="button" className="pg-lineupName" onClick={() => void openMatchup(p)}>
+                                          {p.name}
+                                        </button>
+                                        <span className="pg-lineupProj">{formatProbability(p.hrProbability)}</span>
+                                        <button
+                                          type="button"
+                                          className={`pg-targetBtn ${hasPick ? 'is-selected' : ''}`}
+                                          disabled={pickBusy === p.playerId}
+                                          onClick={() => void togglePick(p.playerId)}
+                                        >
+                                          🎯
+                                        </button>
+                                      </div>
+                                    )
+                                  })}
+                                </div>
+                              )
+
+                              return (
+                                <div className="pg-lineupGrid" style={{ marginTop: 12 }}>
+                                  {renderProjTeam(awayLineup, g.awayTeam)}
+                                  {renderProjTeam(homeLineup, g.homeTeam)}
+                                </div>
+                              )
+                            })()}
+
+                            <div className="pg-gameLine" style={{ marginTop: 12 }}>
                               <span className="pg-gameLabel">Projections</span>
                               <span className="pg-gameValue">
                                 <Link className="pg-link pg-teamLink" to={toProjections({ date: displayDate })}>
@@ -894,282 +950,145 @@ export default function DugoutPage() {
       )}
       {matchupFor ? (
         <div className="pg-modalBackdrop" onClick={() => setMatchupFor(null)}>
-          <div className="pg-modal" onClick={(e) => e.stopPropagation()}>
+          <div className="pg-modal pg-modal--matchup" onClick={(e) => e.stopPropagation()}>
+            {/* Header */}
             <div className="pg-modalHead">
-              <h3>Matchup Comparison</h3>
-              <button type="button" className="pg-clearBtn" onClick={() => setMatchupFor(null)}>Close</button>
+              <h3 className="pg-modalTitle">
+                {matchupFor.name}
+                <span className="pg-modalVs"> vs </span>
+                {matchupData?.pitcher_name ?? (matchupFor.opponentPitcher ?? matchupFor.opponent)}
+              </h3>
+              <button type="button" className="pg-clearBtn" onClick={() => setMatchupFor(null)}>✕ Close</button>
             </div>
+
             {matchupLoading ? (
-              <p className="pg-sub">Loading matchup...</p>
+              <p className="pg-sub" style={{ padding: '24px 0', textAlign: 'center' }}>Loading matchup…</p>
             ) : (
-              <>
-                {(() => {
-                  const batterGreen = {
-                    iso: matchupData?.batter_iso != null && Number(matchupData.batter_iso) >= 0.25,
-                    barrel: matchupData?.batter_barrel != null && Number(matchupData.batter_barrel) >= 10,
-                    hardHit:
-                      matchupData?.batter_hard_hit != null && Number(matchupData.batter_hard_hit) >= 40,
-                    avgEv:
-                      matchupData?.batter_avg_hit_speed != null &&
-                      Number(matchupData.batter_avg_hit_speed) >= 90,
-                    fbld:
-                      matchupData?.batter_fbld != null && Number(matchupData.batter_fbld) >= 0.45,
-                  }
-                  const pitcherRed = {
-                    hrAllowed:
-                      matchupData?.pitcher_hr_allowed != null &&
-                      Number(matchupData.pitcher_hr_allowed) >= 20,
-                    whip:
-                      matchupData?.pitcher_whip != null && Number(matchupData.pitcher_whip) >= 1.3,
-                    era:
-                      matchupData?.pitcher_era != null && Number(matchupData.pitcher_era) >= 4.5,
-                    k9:
-                      matchupData?.pitcher_k_per_9 != null && Number(matchupData.pitcher_k_per_9) <= 8,
-                  }
-                  const pitchRows = Array.isArray(matchupData?.pitch_type_matchup)
-                    ? matchupData.pitch_type_matchup
-                    : []
-                  return (
-                    <>
-                      <div style={{ marginTop: 10 }}>
-                        <div className="pg-label">
-                          Power / Contact / Plate skills ({matchupData?.season ?? selectedYear})
-                        </div>
-                        <div className="pg-matchupGrid">
-                          <div>
-                            <div className="pg-label" style={{ marginTop: 0 }}>
-                              Pitcher
-                            </div>
-                            <div className="pg-statStack">
-                              <div className={`pg-matchStat ${pitcherRed.era ? 'is-green' : ''}`}>
-                                ERA: {matchupData?.pitcher_era ?? '—'}
-                                <span className={`pg-edgeHint ${pitcherRed.era ? 'is-green' : ''}`}>
-                                  Green light: 4.50+
-                                </span>
-                              </div>
-                              <div className={`pg-matchStat ${pitcherRed.whip ? 'is-green' : ''}`}>
-                                WHIP: {matchupData?.pitcher_whip ?? '—'}
-                                <span className={`pg-edgeHint ${pitcherRed.whip ? 'is-green' : ''}`}>
-                                  Green light: 1.30+
-                                </span>
-                              </div>
-                              <div
-                                className={`pg-matchStat ${pitcherRed.hrAllowed ? 'is-green' : ''}`}
-                              >
-                                HR allowed: {matchupData?.pitcher_hr_allowed ?? '—'}
-                                <span
-                                  className={`pg-edgeHint ${pitcherRed.hrAllowed ? 'is-green' : ''}`}
-                                >
-                                  Green light: 20+
-                                </span>
-                              </div>
-                              <div className={`pg-matchStat ${pitcherRed.k9 ? 'is-green' : ''}`}>
-                                K/9: {matchupData?.pitcher_k_per_9 ?? '—'}
-                                <span className={`pg-edgeHint ${pitcherRed.k9 ? 'is-green' : ''}`}>
-                                  Green light: 8.0 or lower
-                                </span>
-                              </div>
-                            </div>
-                          </div>
-                          <div>
-                            <div className="pg-label" style={{ marginTop: 0 }}>
-                              Batter
-                            </div>
-                            <div className="pg-statStack">
-                              <div className={`pg-matchStat ${batterGreen.iso ? 'is-green' : ''}`}>
-                                ISO: {matchupData?.batter_iso ?? '—'}
-                                <span className={`pg-edgeHint ${batterGreen.iso ? 'is-green' : ''}`}>
-                                  Green light: 0.250+
-                                </span>
-                              </div>
-                              <div
-                                className={`pg-matchStat ${batterGreen.barrel ? 'is-green' : ''}`}
-                              >
-                                Barrel %: {matchupData?.batter_barrel ?? '—'}
-                                <span
-                                  className={`pg-edgeHint ${batterGreen.barrel ? 'is-green' : ''}`}
-                                >
-                                  Green light: 10%+
-                                </span>
-                              </div>
-                              <div
-                                className={`pg-matchStat ${batterGreen.hardHit ? 'is-green' : ''}`}
-                              >
-                                Hard-hit %: {matchupData?.batter_hard_hit ?? '—'}
-                                <span
-                                  className={`pg-edgeHint ${batterGreen.hardHit ? 'is-green' : ''}`}
-                                >
-                                  Green light: 40%+
-                                </span>
-                              </div>
-                              <div
-                                className={`pg-matchStat ${batterGreen.avgEv ? 'is-green' : ''}`}
-                              >
-                                Avg EV: {matchupData?.batter_avg_hit_speed ?? '—'}
-                                <span
-                                  className={`pg-edgeHint ${batterGreen.avgEv ? 'is-green' : ''}`}
-                                >
-                                  Green light: 90+ mph
-                                </span>
-                              </div>
-                              <div
-                                className={`pg-matchStat ${batterGreen.fbld ? 'is-green' : ''}`}
-                              >
-                                FB/LD: {matchupData?.batter_fbld ?? '—'}
-                                <span
-                                  className={`pg-edgeHint ${batterGreen.fbld ? 'is-green' : ''}`}
-                                >
-                                  Green light: 0.45+
-                                </span>
-                              </div>
-                              <div className="pg-matchStat">
-                                K%:{' '}
-                                {matchupData?.batter_k_pct != null
-                                  ? `${(Number(matchupData.batter_k_pct) * 100).toFixed(1)}%`
-                                  : '—'}
-                                <span className="pg-edgeHint">Lower is better</span>
-                              </div>
-                              <div className="pg-matchStat">
-                                BB%:{' '}
-                                {matchupData?.batter_bb_pct != null
-                                  ? `${(Number(matchupData.batter_bb_pct) * 100).toFixed(1)}%`
-                                  : '—'}
-                                <span className="pg-edgeHint">Higher is better</span>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      {pitchRows.length ? (
-                        <div style={{ marginTop: 10 }}>
-                          <div className="pg-label">Pitch-type matchup (pitcher top usage)</div>
-                          <div className="pg-pitchTypeGrid">
-                            {pitchRows.map((r: any, idx: number) => {
-                              const iso = r?.batter_iso != null ? Number(r.batter_iso) : null
-                              const usage = r?.usage != null ? Number(r.usage) : null
-                              const isoGreen = iso != null && iso >= 0.25
-                              const usageBig = usage != null && usage >= 25
-                              return (
-                                <div key={idx} className="pg-pitchTypeRow">
-                                  <div className="pg-pitchTypeTop">
-                                    <span>{r?.pitch_name ?? r?.pitch_type ?? 'Pitch'}</span>
-                                    <span style={{ color: 'var(--color-muted)', fontWeight: 800 }}>
-                                      {usage != null ? `${usage.toFixed(1)}%` : '—'}
-                                    </span>
-                                  </div>
-                                  <div className="pg-pitchTypeMeta">
-                                    <span className={`pg-pill ${usageBig ? 'is-green' : ''}`}>
-                                      Usage {usage != null ? `${usage.toFixed(1)}%` : '—'}
-                                    </span>
-                                    <span className={`pg-pill ${isoGreen ? 'is-green' : ''}`}>
-                                      Batter ISO {iso != null ? iso.toFixed(3) : '—'}
-                                    </span>
-                                    <span className="pg-pill">
-                                      Pitcher SLG allowed{' '}
-                                      {r?.pitcher_slg_allowed != null
-                                        ? Number(r.pitcher_slg_allowed).toFixed(3)
-                                        : '—'}
-                                    </span>
-                                  </div>
-                                </div>
-                              )
-                            })}
-                          </div>
-                        </div>
-                      ) : null}
-                    </>
-                  )
-                })()}
-
-                {matchupData?.pitcher_name ? (
-                  <div className="pg-matchupGrid">
-                    <div>
-                      <div className="pg-label">Pitcher</div>
-                      <div className="pg-matchupName">{matchupData.pitcher_name}</div>
-                      <div className="pg-small">ERA: {matchupData.pitcher_era ?? '—'} &bull; K: {matchupData.pitcher_k ?? '—'} &bull; WHIP: {matchupData.pitcher_whip ?? '—'}</div>
+              <div className="pg-matchupBody">
+                {/* Player headers: pitcher left, batter right */}
+                <div className="pg-matchupPlayers">
+                  <div className="pg-matchupPlayerCard pg-matchupPlayerCard--pitcher">
+                    <div
+                      className="pg-avatar pg-avatar--lg"
+                      style={{ background: 'linear-gradient(140deg, #334155, #1e293b)', color: '#94a3b8' }}
+                    >
+                      {initials(matchupData?.pitcher_name ?? matchupFor.opponentPitcher)}
                     </div>
-                    <div>
-                      <div className="pg-label">Batter</div>
-                      <div className="pg-matchupName">{matchupData.batter_name}</div>
-                      <div className="pg-small">HR: {matchupData.batter_season_hr ?? matchupData.batter_hr ?? '—'} &bull; Avg EV: {matchupData.batter_avg_hit_speed ?? '—'} &bull; Barrel: {matchupData.batter_barrel ?? '—'}%</div>
+                    <div className="pg-matchupPlayerInfo">
+                      <div className="pg-matchupRole">Pitcher</div>
+                      <div className="pg-matchupPlayerName">{matchupData?.pitcher_name ?? matchupFor.opponentPitcher ?? '—'}</div>
                     </div>
                   </div>
-                ) : null}
-                {matchupData?.sample_ab ? (
-                  <div style={{ marginTop: 10 }}>
-                    <div className="pg-label">Batter vs Pitcher</div>
-                    <div className="pg-bvpRow">
-                      <span className="pg-bvpStat">AB: {matchupData.sample_ab}</span>
-                      <span className="pg-bvpStat">H: {matchupData.h ?? 0}</span>
-                      <span className="pg-bvpStat">HR: {matchupData.hr ?? 0}</span>
-                      <span className="pg-bvpStat">K: {matchupData.k ?? 0}</span>
-                      <span className="pg-bvpStat">AVG: {matchupData.avg ?? '—'}</span>
-                      <span className="pg-bvpStat">OPS: {matchupData.ops ?? '—'}</span>
+                  <div className="pg-matchupVsDivider">VS</div>
+                  <div className="pg-matchupPlayerCard pg-matchupPlayerCard--batter">
+                    <div
+                      className="pg-avatar pg-avatar--lg"
+                      style={{ background: 'linear-gradient(140deg, #1e3a5f, #0f2847)', color: '#60a5fa' }}
+                    >
+                      {initials(matchupFor.name)}
                     </div>
-                  </div>
-                ) : null}
-                <div style={{ marginTop: 10 }}>
-                  <div className="pg-label">
-                    Pitcher vs Batter (advantage by stat) ({matchupData?.season ?? playerInputs?.season ?? selectedYear})
-                  </div>
-                  <div className="pg-matchupGrid">
-                    <div>
-                      <div className="pg-label" style={{ marginTop: 0 }}>Pitcher</div>
-                      <div className="pg-statStack">
-                        <div className="pg-matchStat">
-                          ERA: {matchupData?.pitcher_era ?? '—'}
-                          <span className="pg-edgeHint">Advantage: Pitcher (lower)</span>
-                        </div>
-                        <div className="pg-matchStat">
-                          K: {matchupData?.pitcher_k ?? '—'}
-                          <span className="pg-edgeHint">Advantage: Pitcher (higher)</span>
-                        </div>
-                        <div className="pg-matchStat">
-                          WHIP: {matchupData?.pitcher_whip ?? '—'}
-                          <span className="pg-edgeHint">Advantage: Pitcher (lower)</span>
-                        </div>
-                        <div className="pg-matchStat">
-                          HR allowed: {matchupData?.pitcher_hr_allowed ?? '—'}
-                          <span className="pg-edgeHint">Advantage: Pitcher (lower)</span>
-                        </div>
-                      </div>
-                    </div>
-                    <div>
-                      <div className="pg-label" style={{ marginTop: 0 }}>Batter</div>
-                      <div className="pg-statStack">
-                        <div className="pg-matchStat">
-                          EV95: {matchupData?.batter_ev95 ?? playerInputs?.ev95percent ?? '—'}
-                          <span className="pg-edgeHint">Advantage: Batter (higher)</span>
-                        </div>
-                        <div className="pg-matchStat">
-                          Barrel %: {matchupData?.batter_barrel ?? playerInputs?.brl_percent ?? '—'}
-                          <span className="pg-edgeHint">Advantage: Batter (higher)</span>
-                        </div>
-                        <div className="pg-matchStat">
-                          Avg EV: {matchupData?.batter_avg_hit_speed ?? playerInputs?.avg_hit_speed ?? '—'}
-                          <span className="pg-edgeHint">Advantage: Batter (higher)</span>
-                        </div>
-                        <div className="pg-matchStat">
-                          FB/LD: {matchupData?.batter_fbld ?? playerInputs?.fbld ?? '—'}
-                          <span className="pg-edgeHint">Advantage: Batter (higher)</span>
-                        </div>
-                        <div className="pg-matchStat">
-                          HR Total: {matchupData?.batter_hr ?? playerInputs?.hr_total ?? '—'}
-                          <span className="pg-edgeHint">Advantage: Batter (higher)</span>
-                        </div>
-                        <div className="pg-matchStat">
-                          Attempts: {matchupData?.batter_attempts ?? playerInputs?.attempts ?? '—'}
-                          <span className="pg-edgeHint">Advantage: Batter (more PAs)</span>
-                        </div>
-                      </div>
+                    <div className="pg-matchupPlayerInfo">
+                      <div className="pg-matchupRole">Batter</div>
+                      <div className="pg-matchupPlayerName">{matchupFor.name}</div>
                     </div>
                   </div>
                 </div>
-                {!matchupData && !playerInputs ? (
-                  <p className="pg-sub">No data found for this player/season. Try selecting a different year.</p>
-                ) : null}
-              </>
+
+                {/* BvP — batter vs pitcher career history */}
+                {matchupData?.sample_ab ? (
+                  <div className="pg-bvpSection">
+                    <div className="pg-bvpLabel">Batter vs Pitcher (Career)</div>
+                    <div className="pg-bvpGrid">
+                      <div className="pg-bvpCell"><span className="pg-bvpVal">{matchupData.sample_ab}</span><span className="pg-bvpKey">AB</span></div>
+                      <div className="pg-bvpCell"><span className="pg-bvpVal">{matchupData.h ?? 0}</span><span className="pg-bvpKey">H</span></div>
+                      <div className="pg-bvpCell"><span className="pg-bvpVal pg-bvpVal--hr">{matchupData.hr ?? 0}</span><span className="pg-bvpKey">HR</span></div>
+                      <div className="pg-bvpCell"><span className="pg-bvpVal">{matchupData.k ?? 0}</span><span className="pg-bvpKey">K</span></div>
+                      <div className="pg-bvpCell"><span className="pg-bvpVal">{matchupData.avg ?? '—'}</span><span className="pg-bvpKey">AVG</span></div>
+                      <div className="pg-bvpCell"><span className="pg-bvpVal">{matchupData.ops ?? '—'}</span><span className="pg-bvpKey">OPS</span></div>
+                      <div className="pg-bvpCell"><span className="pg-bvpVal">{matchupData.slg ?? '—'}</span><span className="pg-bvpKey">SLG</span></div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="pg-bvpSection pg-bvpSection--empty">
+                    <div className="pg-bvpLabel">Batter vs Pitcher</div>
+                    <p className="pg-sub">No head-to-head history found.</p>
+                  </div>
+                )}
+
+                {/* Stats: pitcher left, batter right */}
+                <div className="pg-matchupStatsGrid">
+                  {/* Pitcher stats */}
+                  <div className="pg-matchupStatCol">
+                    <div className="pg-matchupStatHead">Pitcher Stats ({matchupData?.season ?? selectedYear})</div>
+                    <div className="pg-matchupStatRows">
+                      {[
+                        { label: 'ERA', val: matchupData?.pitcher_era, hint: '4.50+ favors HR', good: matchupData?.pitcher_era != null && Number(matchupData.pitcher_era) >= 4.5 },
+                        { label: 'WHIP', val: matchupData?.pitcher_whip, hint: '1.30+ favors HR', good: matchupData?.pitcher_whip != null && Number(matchupData.pitcher_whip) >= 1.3 },
+                        { label: 'HR Allowed', val: matchupData?.pitcher_hr_allowed, hint: '20+ favors HR', good: matchupData?.pitcher_hr_allowed != null && Number(matchupData.pitcher_hr_allowed) >= 20 },
+                        { label: 'K/9', val: matchupData?.pitcher_k_per_9, hint: '8.0 or lower favors HR', good: matchupData?.pitcher_k_per_9 != null && Number(matchupData.pitcher_k_per_9) <= 8 },
+                        { label: 'K', val: matchupData?.pitcher_k, hint: null, good: false },
+                        { label: 'BB', val: matchupData?.pitcher_bb, hint: null, good: false },
+                        { label: 'IP', val: matchupData?.pitcher_ip, hint: null, good: false },
+                      ].map(({ label, val, hint, good }) => (
+                        <div key={label} className={`pg-mStatRow ${good ? 'pg-mStatRow--good' : ''}`}>
+                          <span className="pg-mStatLabel">{label}</span>
+                          <span className="pg-mStatVal">{val ?? '—'}</span>
+                          {hint && <span className="pg-mStatHint">{hint}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Batter stats */}
+                  <div className="pg-matchupStatCol">
+                    <div className="pg-matchupStatHead">Batter Stats ({matchupData?.season ?? playerInputs?.season ?? selectedYear})</div>
+                    <div className="pg-matchupStatRows">
+                      {[
+                        { label: 'Avg EV', val: matchupData?.batter_avg_hit_speed ?? playerInputs?.avg_hit_speed, hint: '90+ mph ✓', good: (matchupData?.batter_avg_hit_speed ?? playerInputs?.avg_hit_speed) != null && Number(matchupData?.batter_avg_hit_speed ?? playerInputs?.avg_hit_speed) >= 90 },
+                        { label: 'EV95', val: matchupData?.batter_ev95 ?? playerInputs?.ev95percent, hint: null, good: false },
+                        { label: 'Barrel %', val: matchupData?.batter_barrel ?? playerInputs?.brl_percent, hint: '10%+ ✓', good: (matchupData?.batter_barrel ?? playerInputs?.brl_percent) != null && Number(matchupData?.batter_barrel ?? playerInputs?.brl_percent) >= 10 },
+                        { label: 'Hard-hit %', val: matchupData?.batter_hard_hit, hint: '40%+ ✓', good: matchupData?.batter_hard_hit != null && Number(matchupData.batter_hard_hit) >= 40 },
+                        { label: 'ISO', val: matchupData?.batter_iso != null ? Number(matchupData.batter_iso).toFixed(3) : null, hint: '.250+ ✓', good: matchupData?.batter_iso != null && Number(matchupData.batter_iso) >= 0.25 },
+                        { label: 'FB/LD %', val: matchupData?.batter_fbld ?? playerInputs?.fbld, hint: '.45+ ✓', good: (matchupData?.batter_fbld ?? playerInputs?.fbld) != null && Number(matchupData?.batter_fbld ?? playerInputs?.fbld) >= 0.45 },
+                        { label: 'K %', val: matchupData?.batter_k_pct != null ? `${(Number(matchupData.batter_k_pct) * 100).toFixed(1)}%` : null, hint: 'Lower is better', good: false },
+                        { label: 'BB %', val: matchupData?.batter_bb_pct != null ? `${(Number(matchupData.batter_bb_pct) * 100).toFixed(1)}%` : null, hint: 'Higher is better', good: false },
+                        { label: 'HR (season)', val: matchupData?.batter_season_hr ?? matchupData?.batter_hr ?? playerInputs?.hr_total, hint: null, good: false },
+                      ].map(({ label, val, hint, good }) => (
+                        <div key={label} className={`pg-mStatRow ${good ? 'pg-mStatRow--good' : ''}`}>
+                          <span className="pg-mStatLabel">{label}</span>
+                          <span className="pg-mStatVal">{val ?? '—'}</span>
+                          {hint && <span className="pg-mStatHint">{hint}</span>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Pitch type breakdown */}
+                {Array.isArray(matchupData?.pitch_type_matchup) && matchupData.pitch_type_matchup.length > 0 && (
+                  <div className="pg-pitchSection">
+                    <div className="pg-matchupStatHead">Pitch Type Breakdown</div>
+                    <div className="pg-pitchTypeGrid">
+                      {matchupData.pitch_type_matchup.map((r: any, idx: number) => {
+                        const iso = r?.batter_iso != null ? Number(r.batter_iso) : null
+                        const usage = r?.usage != null ? Number(r.usage) : null
+                        return (
+                          <div key={idx} className={`pg-pitchTypeRow ${iso != null && iso >= 0.25 ? 'pg-pitchTypeRow--hot' : ''}`}>
+                            <span className="pg-pitchName">{r?.pitch_name ?? r?.pitch_type ?? 'Pitch'}</span>
+                            <span className="pg-pitchUsage">{usage != null ? `${usage.toFixed(0)}% usage` : '—'}</span>
+                            <span className="pg-pitchStat">Batter ISO: {iso != null ? iso.toFixed(3) : '—'}</span>
+                            <span className="pg-pitchStat">Pitcher SLG allowed: {r?.pitcher_slg_allowed != null ? Number(r.pitcher_slg_allowed).toFixed(3) : '—'}</span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {!matchupData && !playerInputs && (
+                  <p className="pg-sub" style={{ marginTop: 16, textAlign: 'center' }}>No stats found for this player. Try a different year.</p>
+                )}
+              </div>
             )}
           </div>
         </div>
