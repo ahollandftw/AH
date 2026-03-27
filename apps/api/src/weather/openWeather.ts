@@ -16,6 +16,7 @@ export type OneCallPayload = {
     feels_like?: number
     humidity?: number
     wind_speed?: number
+    wind_deg?: number
     weather?: Array<{ id?: number; main?: string; description?: string; icon?: string }>
   }
 }

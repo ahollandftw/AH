@@ -155,6 +155,18 @@ export function registerBdlRoutes(app: Express) {
     }
   })
 
+  app.post('/bdl/sync/projections', async (req, res) => {
+    try {
+      const { runAndSaveProjections } = await import('../hrEngine.js')
+      const date = typeof req.body?.date === 'string' ? req.body.date : undefined
+      const result = await runAndSaveProjections(date)
+      res.json({ ok: true, ...result })
+    } catch (e) {
+      console.error('[bdl/sync/projections] failed:', e)
+      res.status(500).json({ error: e instanceof Error ? e.message : String(e) })
+    }
+  })
+
   /* ── Live monitor control ────────────────────────────────────── */
 
   app.post('/bdl/live/start', (_req, res) => {

@@ -1,8 +1,10 @@
 /**
- * HR helpers + legacy input shape bridged to the logistic model in `./models/hr`.
+ * HR helpers + legacy input shape bridged to the new calibrated logistic model.
  */
-
-import { computeGameHrProbability } from './models/hr/hrProbability.js'
+import {
+  computeGameHrProbability,
+  type NormalizedFeatures,
+} from './models/hr/hrProbability.js'
 import { expectedPaFromLineupSlot } from './models/hr/expectedPA.js'
 
 export type HrProbabilityInput = {
@@ -87,8 +89,8 @@ export function probToTier(prob: number): string {
 }
 
 /**
- * Bridges legacy scalar inputs to the logistic model using coarse z-scales
- * (no league table; use `computeGameHrProbability` with real z when possible).
+ * Bridges legacy scalar inputs to the new calibrated logistic model.
+ * Uses coarse z-scores — prefer using the daily engine output instead.
  */
 export function calculateHrProbability(input: HrProbabilityInput): HrProbabilityResult {
   const baseHrRate = calcBaseHrRate(input.hr_total, input.attempts)
@@ -101,24 +103,25 @@ export function calculateHrProbability(input: HrProbabilityInput): HrProbability
   const pitcherFactor = calcPitcherFactor(input.pitcher_hr_total)
   const normalizedMatchup = calcNormalizedMatchup(input.matchup_score)
 
-  const zHrPerPa = (baseHrRate - 0.035) / 0.025
-  const zPower = (powerScore - 22) / 8
-  const zPitcher = (input.pitcher_hr_total - 20) / 12
-  const zMatchup = (input.matchup_score - 0.4) / 0.1
+  const zHrPerPa = (baseHrRate - 0.036) / 0.022
+  const zPower = (input.brl_percent - 8.2) / 4.0
+  const zArsenal = (input.pitcher_hr_total - 20) / 12
 
-  const out = computeGameHrProbability({
-    features: {
-      zHrPerPa: Number.isFinite(zHrPerPa) ? zHrPerPa : null,
-      zPower: Number.isFinite(zPower) ? zPower : null,
-      zPitcher: Number.isFinite(zPitcher) ? zPitcher : null,
-      zMatchup: Number.isFinite(zMatchup) ? zMatchup : null,
-      zPark: null,
-      zHandedness: null,
-      zWeather: null,
-    },
-    expectedPa: expectedPaFromLineupSlot(undefined),
-  })
+  const features: NormalizedFeatures = {
+    zHrPerPa:      Number.isFinite(zHrPerPa) ? Math.max(-3, Math.min(3, zHrPerPa)) : null,
+    zPower:        Number.isFinite(zPower) ? Math.max(-3, Math.min(3, zPower)) : null,
+    zArsenal:      Number.isFinite(zArsenal) ? Math.max(-3, Math.min(3, zArsenal)) : null,
+    zPark:         null,
+    zHandedness:   null,
+    zWeather:      null,
+    zRecentForm7:  0,
+    zRecentForm14: 0,
+    zLineupSpot:   0,
+    expectedPA:    expectedPaFromLineupSlot(undefined),
+    featuresPresent: ['hrPerPa', 'power', 'arsenal'],
+  }
 
+  const out = computeGameHrProbability(features)
   const probability = out.probability
   const americanOdds = probToAmericanOdds(probability)
 

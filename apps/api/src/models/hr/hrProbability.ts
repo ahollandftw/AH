@@ -1,87 +1,121 @@
-import type { HrModelCoefficients } from './constants.js'
-import {
-  DEFAULT_HR_COEFFICIENTS,
-  HR_PROB_MAX,
-  HR_PROB_MIN,
-} from './constants.js'
+import { CALIBRATION, type CalibrationCoeffKey } from './calibration.js'
+import { adjustedCoefficients } from './features.js'
 
-export type HrFeatureZ = {
-  zHrPerPa: number | null
-  zPower: number | null
-  zPitcher: number | null
-  zMatchup: number | null
-  zPark: number | null
-  zHandedness: number | null
-  zWeather: number | null
+export type Tier = 'A+' | 'A' | 'B' | 'C' | 'D'
+
+export interface NormalizedFeatures {
+  zHrPerPa:      number | null
+  zPower:        number | null
+  zArsenal:      number | null
+  zPark:         number | null
+  zHandedness:   number | null
+  zWeather:      number | null
+  zRecentForm7:  number | null
+  zRecentForm14: number | null
+  zLineupSpot:   number | null
+  expectedPA:    number
+  arsenalRaw?:   number | null
+  arsenalDetail?: unknown[]
+  featuresPresent: CalibrationCoeffKey[]
 }
 
-const TERM_ORDER: { feature: keyof HrFeatureZ; coeff: keyof HrModelCoefficients }[] = [
-  { feature: 'zHrPerPa', coeff: 'b1' },
-  { feature: 'zPower', coeff: 'b2' },
-  { feature: 'zPitcher', coeff: 'b3' },
-  { feature: 'zMatchup', coeff: 'b4' },
-  { feature: 'zPark', coeff: 'b5' },
-  { feature: 'zHandedness', coeff: 'b6' },
-  { feature: 'zWeather', coeff: 'b7' },
+const FEATURE_TO_COEFF: { feature: keyof NormalizedFeatures; coeff: CalibrationCoeffKey }[] = [
+  { feature: 'zHrPerPa',      coeff: 'hrPerPa'      },
+  { feature: 'zPower',        coeff: 'power'        },
+  { feature: 'zArsenal',      coeff: 'arsenal'      },
+  { feature: 'zPark',         coeff: 'park'         },
+  { feature: 'zHandedness',   coeff: 'handedness'   },
+  { feature: 'zWeather',      coeff: 'weather'      },
+  { feature: 'zRecentForm7',  coeff: 'recentForm7'  },
+  { feature: 'zRecentForm14', coeff: 'recentForm14' },
+  { feature: 'zLineupSpot',   coeff: 'lineupSpot'   },
 ]
 
-/**
- * Redistribute coefficient mass from dropped (null) features onto remaining terms proportionally.
- */
-function effectiveCoeffs(
-  coeffs: HrModelCoefficients,
-  features: HrFeatureZ,
-): { b0: number; terms: { b: number; z: number }[] } {
-  const base = { ...coeffs }
-  const rows: { b: number; z: number }[] = []
-  let sumActive = 0
-  for (const { feature, coeff } of TERM_ORDER) {
+export function computeLinearScore(features: NormalizedFeatures): number {
+  const present: CalibrationCoeffKey[] = []
+  for (const { feature, coeff } of FEATURE_TO_COEFF) {
     const z = features[feature]
-    const b = base[coeff]
-    if (z != null && Number.isFinite(z)) {
-      rows.push({ b, z })
-      sumActive += b
+    if (z != null && Number.isFinite(z as number)) {
+      present.push(coeff)
     }
   }
-  if (rows.length === 0) {
-    return { b0: base.b0, terms: [] }
+
+  if (present.length === 0) return CALIBRATION.intercept
+
+  const adj = adjustedCoefficients(present)
+  let x = CALIBRATION.intercept
+  for (const { feature, coeff } of FEATURE_TO_COEFF) {
+    const z = features[feature] as number | null
+    const b = adj[coeff]
+    if (z != null && b != null && Number.isFinite(z)) {
+      x += b * z
+    }
   }
-  const targetSum = TERM_ORDER.reduce((s, t) => s + base[t.coeff], 0)
-  const scale = targetSum > 0 && sumActive > 0 ? targetSum / sumActive : 1
-  return {
-    b0: base.b0,
-    terms: rows.map((r) => ({ b: r.b * scale, z: r.z })),
-  }
+  return x
 }
 
-/** Per-PA logit → game HR probability with expected PA; clamp at end only. */
-export function computeGameHrProbability(args: {
-  features: HrFeatureZ
-  coeffs?: HrModelCoefficients
-  expectedPa: number
-  playerLabel?: string
-}): { probability: number; tier: string; pPa: number; x: number } {
-  const coeffs = args.coeffs ?? DEFAULT_HR_COEFFICIENTS
-  const { b0, terms } = effectiveCoeffs(coeffs, args.features)
-  let x = b0
-  for (const t of terms) {
-    x += t.b * t.z
-  }
+export function perPaProbability(linearScore: number): number {
+  return 1 / (1 + Math.exp(-linearScore))
+}
 
-  const pPa = 1 / (1 + Math.exp(-x))
-  const pa = Math.max(0.1, args.expectedPa)
-  let p = 1 - Math.pow(1 - pPa, pa)
-  p = Math.max(HR_PROB_MIN, Math.min(HR_PROB_MAX, p))
+export function gameHrProbability(perPaProb: number, expectedPA: number): number {
+  return 1 - Math.pow(1 - perPaProb, expectedPA)
+}
 
-  const tier = probToTier(p)
-  return { probability: p, tier, pPa, x }
+export function applyCapAndFloor(rawProb: number): number {
+  return Math.max(CALIBRATION.floor, Math.min(CALIBRATION.cap, rawProb))
+}
+
+export function assignTier(prob: number): Tier {
+  if (prob >= 0.25) return 'A+'
+  if (prob >= 0.20) return 'A'
+  if (prob >= 0.15) return 'B'
+  if (prob >= 0.10) return 'C'
+  return 'D'
 }
 
 export function probToTier(prob: number): string {
-  const pct = prob * 100
-  if (pct >= 25) return 'A+'
-  if (pct >= 20) return 'A'
-  if (pct >= 15) return 'B'
-  if (pct >= 10) return 'C'
-  return 'D'
+  return assignTier(prob)
+}
+
+export function probToAmericanOdds(prob: number): number {
+  if (prob <= 0) return 9999
+  if (prob >= 1) return -9999
+  if (prob >= 0.5) return Math.round(-(prob / (1 - prob)) * 100)
+  return Math.round(((1 - prob) / prob) * 100)
+}
+
+export function formatAmericanOdds(odds: number): string {
+  return odds >= 0 ? `+${odds}` : `${odds}`
+}
+
+export interface ProjectionResult {
+  probability: number
+  probRaw:     number
+  tier:        Tier
+  pPa:         number
+  x:           number
+  features:    NormalizedFeatures
+  dataQuality: 'full' | 'partial' | 'low'
+}
+
+/**
+ * Full single-player projection pipeline.
+ * Takes pre-computed normalized features, runs the linear score → sigmoid → binomial → cap/floor.
+ */
+export function computeGameHrProbability(features: NormalizedFeatures): ProjectionResult {
+  const x     = computeLinearScore(features)
+  const pPa   = perPaProbability(x)
+  const pGame = gameHrProbability(pPa, features.expectedPA)
+  const prob  = applyCapAndFloor(pGame)
+  const tier  = assignTier(prob)
+
+  const hasArsenal = features.zArsenal != null
+  const presentCount = features.featuresPresent.length
+  const dataQuality: 'full' | 'partial' | 'low' =
+    hasArsenal && presentCount >= 7 ? 'full'
+    : presentCount >= 4 ? 'partial'
+    : 'low'
+
+  return { probability: prob, probRaw: pGame, tier, pPa, x, features, dataQuality }
 }

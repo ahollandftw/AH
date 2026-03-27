@@ -491,5 +491,14 @@ export async function runDailySync(): Promise<Record<string, unknown>> {
   // Bulk BvP matchup sync for all today's batters
   const matchups = await syncMatchupsForTodayGames()
 
-  return { players, games, seasonStats, propsTotal, matchups }
+  // Run the HR projection engine and persist results for fast frontend reads
+  let projections: { computed: number; saved: number } = { computed: 0, saved: 0 }
+  try {
+    const { runAndSaveProjections } = await import('../hrEngine.js')
+    projections = await runAndSaveProjections(today)
+  } catch (e) {
+    console.error('[daily-sync] HR projection engine failed:', e)
+  }
+
+  return { players, games, seasonStats, propsTotal, matchups, projections }
 }
