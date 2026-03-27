@@ -24,6 +24,7 @@ type PlanTier = 'basic' | 'plus'
 
 type DailyPickRow = {
   player_id: string
+  hit: boolean | null
   players?: {
     stat_player_id: string
     name: string
@@ -167,13 +168,14 @@ export default function AccountPage() {
     }
     void supabase
       .from('user_daily_picks')
-      .select('player_id, players:player_id (stat_player_id,name,team)')
+      .select('player_id,hit, players:player_id (stat_player_id,name,team)')
       .eq('user_id', session.user.id)
       .eq('pick_date', todayPickDate)
       .order('created_at', { ascending: true })
       .then(({ data }) => {
         const rows = ((data ?? []) as any[]).map((r) => ({
           player_id: String(r.player_id),
+          hit: (r.hit as boolean | null | undefined) ?? null,
           players: Array.isArray(r.players) ? (r.players[0] ?? null) : (r.players ?? null),
         })) as DailyPickRow[]
         setDailyPicks(rows)
@@ -185,18 +187,26 @@ export default function AccountPage() {
   }, [loadDailyPicks])
 
   useEffect(() => {
-    if (!supabase || !session?.user.id || !hasPlus) {
+    if (!supabase || !session?.user.id) {
       setTrackingSummary(null)
       return
     }
     void (async () => {
       const { data: picks } = await supabase
         .from('user_daily_picks')
-        .select('pick_date,player_id')
+        .select('pick_date,player_id,hit')
         .eq('user_id', session.user.id)
-      const pickRows = (picks ?? []) as Array<{ pick_date: string; player_id: string }>
+      const pickRows = (picks ?? []) as Array<{ pick_date: string; player_id: string; hit: boolean | null }>
       if (!pickRows.length) {
         setTrackingSummary({ hits: 0, total: 0, pct: 0 })
+        return
+      }
+      const withHit = pickRows.filter((r) => r.hit !== null)
+      const hitsFromFlag = withHit.filter((r) => r.hit === true).length
+      if (withHit.length === pickRows.length) {
+        const total = pickRows.length
+        const pct = total ? Number(((hitsFromFlag / total) * 100).toFixed(2)) : 0
+        setTrackingSummary({ hits: hitsFromFlag, total, pct })
         return
       }
       const { data: statRows } = await supabase
@@ -209,13 +219,15 @@ export default function AccountPage() {
       )
       let hits = 0
       for (const r of pickRows) {
-        if (hitSet.has(`${r.player_id}|${r.pick_date}`)) hits += 1
+        if (r.hit === true) hits += 1
+        else if (r.hit === false) continue
+        else if (hitSet.has(`${r.player_id}|${r.pick_date}`)) hits += 1
       }
       const total = pickRows.length
       const pct = total ? Number(((hits / total) * 100).toFixed(2)) : 0
       setTrackingSummary({ hits, total, pct })
     })()
-  }, [hasPlus, session?.user.id, supabase, dailyPicks.length])
+  }, [session?.user.id, supabase, dailyPicks.length])
 
   useEffect(() => {
     if (!supabase || !session?.user.id) {
@@ -400,7 +412,7 @@ export default function AccountPage() {
         <div className="acc-card">
           <h2 className="pg-sectionTitle">Liability Waiver Required</h2>
           <p className="pg-sub">
-            Accept the waiver to unlock Dugout, Projections, Stats, and the rest of the app.
+            Accept the waiver to unlock Dugout, Projections, HR Tracking, and the rest of the app.
           </p>
           <div className="pg-focusCard" style={{ marginTop: 8 }}>
             <div className="pg-focusLine"><strong>DISCLAIMER OF LIABILITY</strong></div>
@@ -670,6 +682,9 @@ export default function AccountPage() {
                     <span className="pg-name">{p.players?.name ?? p.player_id}</span>
                     <span className="pg-meta">{(p.players?.team ?? '—').toUpperCase()}</span>
                   </div>
+                  <span className="pg-prob" style={{ marginRight: 8 }}>
+                    {p.hit === true ? 'HR' : p.hit === false ? 'No HR' : 'Pending'}
+                  </span>
                   <button type="button" className="wl-rmBtn" onClick={() => void removeDailyPick(p.player_id)}>
                     Remove
                   </button>
@@ -684,12 +699,13 @@ export default function AccountPage() {
 
           <div className="acc-card">
             <h2 className="pg-sectionTitle">My Tracking</h2>
-            {!hasPlus ? (
-              <p className="pg-sub">Personal tracking is an AH+ feature. Upgrade to see your hit percentage and record history.</p>
-            ) : trackingSummary ? (
+            {trackingSummary ? (
               <p className="pg-sub">
                 Lifetime picks: <strong>{trackingSummary.total}</strong> • Hits: <strong>{trackingSummary.hits}</strong> • Hit %:{' '}
                 <strong>{trackingSummary.pct.toFixed(2)}%</strong>
+                {hasPlus ? null : (
+                  <> <span style={{ opacity: 0.85 }}>(AH+ adds deeper performance insights)</span></>
+                )}
               </p>
             ) : (
               <p className="pg-sub">Loading your tracking stats...</p>

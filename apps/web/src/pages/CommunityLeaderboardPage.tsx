@@ -64,7 +64,9 @@ export default function CommunityLeaderboardPage() {
   return (
     <div className="pg">
       <h1 className="pg-title">Leaderboard</h1>
-      <p className="pg-sub">Public profiles ranked by hit percentage. Click a user to review their picks by date.</p>
+      <p className="pg-sub">
+        All users ranked by hit percentage (including zero picks). Click a user to review their picks by date when their profile allows it.
+      </p>
       {err ? <p className="pg-err">{err}</p> : null}
       {loading ? (
         <div className="lb-skel">

@@ -684,6 +684,12 @@ export default function DugoutPage() {
                                 {g.homeTeam}: {awayTop?.opponentPitcher ? `${awayTop.opponentPitcher}${awayTop.opponentPitcherHand ? ` (${awayTop.opponentPitcherHand})` : ''}` : '—'}
                               </span>
                             </div>
+                            <p className="pg-small" style={{ marginTop: 10, opacity: 0.88, maxWidth: 520 }}>
+                              Missing names here means we did not get a probable starter for that team in{' '}
+                              <code>daily_hr_projections</code> (the table-backed path), or the app fell back to
+                              the HR model which does not attach starter names yet. Tell us if you want a BallDontLie
+                              probable-pitcher field or a separate starters feed wired into projections.
+                            </p>
                             {!gameStarted ? (
                               (() => {
                                 const awayKey = normalizeTeamCode(g.awayTeam) ?? g.awayTeam

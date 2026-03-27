@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from 'express'
+import { mergedHrProbabilityMapForDate } from '../matchupProjectionMerge.js'
 import { getServiceClient } from '../supabase.js'
 import type { LeaderboardEntry, LeaderboardResponse } from '../types.js'
 
@@ -71,283 +72,225 @@ export function registerLeaderboardRoutes(app: Express) {
     }
   })
 
-  // ── Stats tab: homers list (year totals + today%) ──────────────────
+  // ── HR Tracking: one row per stored HR (`bdl_hr_events`) ───────────
   app.get('/leaderboard/homers', async (req, res: Response) => {
     try {
-      const dateIso = String(req.query.date ?? '').trim()
-      const days = Number(req.query.days ?? '1') || 1
-      const limit = Number(req.query.limit ?? '100') || 100
-
-      // Default date = app "display date" in ET
-      const computedDateIso =
-        dateIso ||
-        (() => {
-          const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }))
-          const y = d.getFullYear()
-          const m = String(d.getMonth() + 1).padStart(2, '0')
-          const dd = String(d.getDate()).padStart(2, '0')
-          return `${y}-${m}-${dd}`
-        })()
-
-      const seasonPrimary =
-        Number(req.query.season ?? new Date(`${computedDateIso}T00:00:00Z`).getUTCFullYear()) || 0
-      let seasonUsed = seasonPrimary
-
-      const now = Date.now()
-      const from = new Date(now - days * 24 * 60 * 60 * 1000).toISOString()
+      const limit = Math.min(5000, Math.max(1, Number(req.query.limit ?? '500') || 500))
+      const season =
+        Number(req.query.season ?? new Date().getUTCFullYear()) || new Date().getUTCFullYear()
+      const sortBy = String(req.query.sort ?? 'date').toLowerCase()
+      const sortDir = String(req.query.dir ?? 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc'
+      const qStadium = String(req.query.stadium ?? '').trim().toLowerCase()
+      const qTeam = String(req.query.team ?? '').trim().toLowerCase()
+      const qPitcher = String(req.query.pitcher ?? '').trim().toLowerCase()
+      const qBatter = String(req.query.batter ?? '').trim().toLowerCase()
 
       const supabase = getServiceClient()
 
-      // HR events in the selected window; aggregate to latest event per hitter.
-      // Optional enrichment fields may not exist yet in DB, so we fall back gracefully.
-      let hrEvents: any[] = []
-      try {
-            const { data, error } = await supabase
+      const { data: seasonGames, error: gErr } = await supabase
+        .from('bdl_games')
+        .select('bdl_game_id,date,venue,home_team_abbrev,away_team_abbrev')
+        .gte('date', `${season}-01-01`)
+        .lte('date', `${season}-12-31`)
+
+      if (gErr) throw gErr
+
+      const gameMeta = new Map<
+        number,
+        { date: string; venue: string | null; home: string; away: string }
+      >()
+      for (const g of seasonGames ?? []) {
+        const id = Number((g as { bdl_game_id: number }).bdl_game_id)
+        if (!id) continue
+        gameMeta.set(id, {
+          date: String((g as { date: string }).date),
+          venue: (g as { venue: string | null }).venue ?? null,
+          home: String((g as { home_team_abbrev: string }).home_team_abbrev ?? ''),
+          away: String((g as { away_team_abbrev: string }).away_team_abbrev ?? ''),
+        })
+      }
+
+      let query = supabase.from('bdl_hr_events').select('*').order('id', { ascending: false }).limit(8000)
+
+      const gameIds = [...gameMeta.keys()]
+      if (gameIds.length) {
+        query = supabase
           .from('bdl_hr_events')
-          .select('stat_player_id,bdl_pitcher_id,pitcher_name,pitch_type,hit_distance,detected_at')
-          .not('stat_player_id', 'is', null)
-          .gte('detected_at', from)
-          .order('detected_at', { ascending: false })
-          .limit(5000)
-        if (error) throw error
-        hrEvents = data ?? []
-      } catch {
-        const { data, error } = await supabase
-          .from('bdl_hr_events')
-          .select('stat_player_id,detected_at')
-          .not('stat_player_id', 'is', null)
-          .gte('detected_at', from)
-          .order('detected_at', { ascending: false })
-          .limit(5000)
-        if (error) throw error
-        hrEvents = data ?? []
+          .select('*')
+          .in('bdl_game_id', gameIds)
+          .order('id', { ascending: false })
+          .limit(8000)
       }
 
-      const latestByPlayer = new Map<string, any>()
-      for (const ev of (hrEvents ?? []) as any[]) {
-        const pid = String(ev.stat_player_id ?? '')
-        if (!pid) continue
-        if (!latestByPlayer.has(pid)) latestByPlayer.set(pid, ev)
+      const { data: rawEvents, error: evErr } = await query
+      if (evErr) throw evErr
+
+      let events = (rawEvents ?? []) as Record<string, unknown>[]
+      if (!gameIds.length) {
+        events = events.filter((ev) => {
+          const d = String(ev.detected_at ?? '')
+          return d.startsWith(String(season))
+        })
       }
 
-      const statIds = Array.from(latestByPlayer.keys())
+      const statIds = Array.from(
+        new Set(
+          events.map((e) => String(e.stat_player_id ?? '')).filter((s) => s.length > 0),
+        ),
+      )
+      const batterIds = Array.from(
+        new Set(
+          events.map((e) => Number(e.bdl_batter_id ?? 0)).filter((n) => n > 0),
+        ),
+      )
 
-      if (!statIds.length) {
-        res.json({ last_updated: new Date().toISOString(), date: computedDateIso, count: 0, players: [] })
-        return
-      }
-
-      const [{ data: players }, { data: yearHrs }, { data: yearAtt }, { data: todayProbs }, { data: bdlXref }] =
-        await Promise.all([
-        supabase
-          .from('players')
-          .select('stat_player_id,name,team,position')
-          .in('stat_player_id', statIds)
-          .limit(statIds.length),
-        supabase
-          .from('stats_homeruns')
-          .select('player_id,hr_total')
-          .eq('role', 'batting')
-          .eq('type', 'adj_xhr')
-          .eq('year', seasonUsed)
-          .in('player_id', statIds),
-        supabase
-          .from('stats_exit_velocity')
-          .select('player_id,attempts,brl_percent,ev95percent,avg_hit_speed,fbld')
-          .eq('role', 'batting')
-          .eq('season', seasonUsed)
-          .in('player_id', statIds),
-        supabase
-          .from('daily_hr_projections')
-          .select('player_id,hr_probability')
-          .eq('date', computedDateIso)
-          .in('player_id', statIds),
-        supabase
-          .from('bdl_players')
-          .select('bdl_id,stat_player_id')
-          .in('stat_player_id', statIds),
+      const [{ data: playersByStat }, { data: battersByBdl }] = await Promise.all([
+        statIds.length
+          ? supabase.from('players').select('stat_player_id,name,team').in('stat_player_id', statIds)
+          : Promise.resolve({ data: [] as { stat_player_id: string; name: string; team: string | null }[] }),
+        batterIds.length
+          ? supabase.from('bdl_players').select('bdl_id,full_name,team_abbrev').in('bdl_id', batterIds)
+          : Promise.resolve({ data: [] as { bdl_id: number; full_name: string | null }[] }),
       ])
 
-      const playerMap = new Map((players ?? []).map((p: any) => [String(p.stat_player_id), p]))
-      let hrMap = new Map((yearHrs ?? []).map((r: any) => [String(r.player_id), Number(r.hr_total) || 0]))
-      let batterMap = new Map(
-        (yearAtt ?? []).map((r: any) => [
-          String(r.player_id),
-          {
-            attempts: Number(r.attempts) || 0,
-            brl_percent: r.brl_percent != null ? Number(r.brl_percent) : 0,
-            ev95percent: r.ev95percent != null ? Number(r.ev95percent) : 0,
-            avg_hit_speed: r.avg_hit_speed != null ? Number(r.avg_hit_speed) : 0,
-            fbld: r.fbld != null ? Number(r.fbld) : 0,
-          },
+      const playerByStat = new Map(
+        (playersByStat ?? []).map((p: { stat_player_id: string; name: string; team: string | null }) => [
+          String(p.stat_player_id),
+          p,
         ]),
       )
-      const todayMap = new Map((todayProbs ?? []).map((r: any) => [String(r.player_id), r.hr_probability != null ? Number(r.hr_probability) : null]))
+      const nameByBdlBatter = new Map(
+        (battersByBdl ?? []).map((p: { bdl_id: number; full_name: string | null }) => [
+          Number(p.bdl_id),
+          String(p.full_name ?? ''),
+        ]),
+      )
 
-      // If daily_hr_projections isn't populated, we compute a simplified opponent-adjusted
-      // HR probability using our existing stats tables + the opposing pitcher's HR allowed.
-
-      // Prefer *current season* HR totals from BDL season stats when available.
-      const statToBdl = new Map((bdlXref ?? []).map((r: any) => [String(r.stat_player_id), Number(r.bdl_id)]))
-      const bdlIds = Array.from(new Set((bdlXref ?? []).map((r: any) => Number(r.bdl_id)).filter(Boolean)))
-
-      if (bdlIds.length) {
-        try {
-          const { data: bdlSeason } = await supabase
-            .from('bdl_season_stats')
-            .select('bdl_player_id,batting_hr,batting_ab')
-            .eq('season', seasonPrimary)
-            .in('bdl_player_id', bdlIds)
-
-          const hrByStat = new Map<string, number>()
-          const abByStat = new Map<string, number>()
-          for (const row of bdlSeason ?? []) {
-            const bdlId = Number((row as any).bdl_player_id)
-            const statId = (bdlXref ?? []).find((x: any) => Number(x.bdl_id) === bdlId)?.stat_player_id
-            if (!statId) continue
-            hrByStat.set(String(statId), Number((row as any).batting_hr) || 0)
-            abByStat.set(String(statId), Number((row as any).batting_ab) || 0)
-          }
-
-          for (const sid of statIds) {
-            if (hrByStat.has(sid)) hrMap.set(sid, hrByStat.get(sid) ?? 0)
-            const batter = batterMap.get(sid)
-            const ab = abByStat.get(sid)
-            if (batter && ab != null && Number.isFinite(ab)) batter.attempts = Number(ab) || 0
-          }
-
-          seasonUsed = seasonPrimary
-        } catch {
-          // ignore: fall back to Statcast-derived totals
-        }
+      type HrRow = {
+        id: number
+        game_date: string | null
+        stadium: string | null
+        home_team: string | null
+        away_team: string | null
+        batter_team: string | null
+        batter_name: string | null
+        pitcher_name: string | null
+        batter_home_away: string | null
+        pitcher_home_away: string | null
+        pitch_type: string | null
+        distance: number | null
+        today_probability: number | null
+        stat_player_id: string | null
       }
 
-      // Automatic 2026 -> 2025 fallback (matches ProjectionsPage behavior).
-      // If the target season's HR totals or AB inputs are missing, use 2025.
-      if (seasonUsed === 2026) {
-        const hasHrTotals = (yearHrs ?? []).some((r: any) => Number(r.hr_total) > 0)
-        const hasAbInputs = (yearAtt ?? []).some((r: any) => Number(r.attempts) > 0)
-        if (!hasHrTotals || !hasAbInputs) {
-          seasonUsed = 2025
-          const [{ data: yearHrsFallback }, { data: yearAttFallback }] = await Promise.all([
-            supabase
-              .from('stats_homeruns')
-              .select('player_id,hr_total')
-              .eq('role', 'batting')
-              .eq('type', 'adj_xhr')
-              .eq('year', seasonUsed)
-              .in('player_id', statIds),
-            supabase
-              .from('stats_exit_velocity')
-              .select('player_id,attempts,brl_percent,ev95percent,avg_hit_speed,fbld')
-              .eq('role', 'batting')
-              .eq('season', seasonUsed)
-              .in('player_id', statIds),
-          ])
+      const rowsUnsorted: HrRow[] = []
 
-          hrMap = new Map(
-            (yearHrsFallback ?? []).map((r: any) => [String(r.player_id), Number(r.hr_total) || 0]),
-          )
-          batterMap = new Map(
-            (yearAttFallback ?? []).map((r: any) => [
-              String(r.player_id),
-              {
-                attempts: Number(r.attempts) || 0,
-                brl_percent: r.brl_percent != null ? Number(r.brl_percent) : 0,
-                ev95percent: r.ev95percent != null ? Number(r.ev95percent) : 0,
-                avg_hit_speed: r.avg_hit_speed != null ? Number(r.avg_hit_speed) : 0,
-                fbld: r.fbld != null ? Number(r.fbld) : 0,
-              },
-            ]),
-          )
-        }
+      for (const ev of events) {
+        const gid = Number(ev.bdl_game_id ?? 0)
+        const meta = gameMeta.get(gid)
+        const gameDate =
+          (ev.game_date as string | null | undefined) ?? meta?.date ?? null
+        const stadium =
+          (ev.venue as string | null | undefined) ?? meta?.venue ?? null
+        const sid = ev.stat_player_id != null ? String(ev.stat_player_id) : null
+        const pRow = sid ? playerByStat.get(sid) : null
+        const batterName =
+          (pRow?.name as string | undefined) ??
+          nameByBdlBatter.get(Number(ev.bdl_batter_id ?? 0)) ??
+          null
+        const batterTeam =
+          (ev.batter_team_abbrev as string | null | undefined) ??
+          (pRow?.team as string | undefined) ??
+          null
+
+        rowsUnsorted.push({
+          id: Number(ev.id ?? 0),
+          game_date: gameDate,
+          stadium,
+          home_team: meta?.home ?? null,
+          away_team: meta?.away ?? null,
+          batter_team: batterTeam,
+          batter_name: batterName,
+          pitcher_name: (ev.pitcher_name as string | null) ?? null,
+          batter_home_away: (ev.batter_home_away as string | null) ?? null,
+          pitcher_home_away: (ev.pitcher_home_away as string | null) ?? null,
+          pitch_type: (ev.pitch_type as string | null) ?? null,
+          distance: ev.hit_distance != null ? Number(ev.hit_distance) : null,
+          today_probability: null,
+          stat_player_id: sid,
+        })
       }
 
-      const pitcherIds = Array.from(
+      const datesNeeded = Array.from(
         new Set(
-          statIds
-            .map((pid) => latestByPlayer.get(pid)?.bdl_pitcher_id ?? null)
-            .filter((x) => x != null),
+          rowsUnsorted
+            .map((r) => r.game_date)
+            .filter((d): d is string => Boolean(d)),
         ),
-      ) as number[]
-
-      const pitcherHrMap = new Map<string, number>()
-      if (pitcherIds.length) {
-        try {
-          const { data: pRows } = await supabase
-            .from('bdl_season_stats')
-            .select('bdl_player_id,pitching_hr')
-            .eq('season', seasonUsed)
-            .in('bdl_player_id', pitcherIds)
-          for (const pr of pRows ?? []) {
-            const key = String(pr.bdl_player_id)
-            pitcherHrMap.set(key, pr.pitching_hr != null ? Number(pr.pitching_hr) : 20)
-          }
-        } catch {
-          // ignore: simplified probability will use default pitcher factor
-        }
+      )
+      const probByDate = new Map<string, Map<string, number>>()
+      for (const d of datesNeeded) {
+        const needIds = rowsUnsorted
+          .filter((r) => r.game_date === d && r.stat_player_id)
+          .map((r) => r.stat_player_id!) as string[]
+        const m = await mergedHrProbabilityMapForDate(supabase, d, needIds)
+        probByDate.set(d, m)
       }
 
-      const rows = statIds.map((pid) => {
-        const p = playerMap.get(pid)
-        const latest = latestByPlayer.get(pid)
-        const hrTotal = hrMap.get(pid) ?? 0
-        const batter = batterMap.get(pid)
-        const attempts = batter?.attempts ?? 0
-        const hrRate = attempts > 0 ? hrTotal / attempts : null
-        let todayProb = todayMap.get(pid) ?? null
+      for (const r of rowsUnsorted) {
+        if (!r.stat_player_id || !r.game_date) continue
+        const m = probByDate.get(r.game_date)
+        const p = m?.get(r.stat_player_id)
+        if (p != null) r.today_probability = p
+      }
 
-        // Fallback: compute model-like probability using power score + pitcher factor.
-        // (No matchup pitch-usage component, because we don't have it here.)
-        if (todayProb == null) {
-          const brl = batter?.brl_percent ?? 0
-          const ev95 = batter?.ev95percent ?? 0
-          const avg = batter?.avg_hit_speed ?? 0
-          const fbld = batter?.fbld ?? 0
-
-          // If we have no meaningful batting input, leave as null.
-          if (attempts > 0 && (brl > 0 || ev95 > 0 || avg > 0 || fbld > 0 || hrTotal > 0)) {
-            const baseRate = hrTotal / attempts
-            const powerScore = 0.35 * brl + 0.25 * ev95 + 0.20 * (avg / 100) + 0.20 * fbld
-
-            const pitcherId = latest?.bdl_pitcher_id != null ? String(latest.bdl_pitcher_id) : null
-            const pitcherHr = pitcherId ? pitcherHrMap.get(pitcherId) ?? 20 : 20
-            const pitcherFactor = pitcherHr / 20
-
-            let prob = baseRate * powerScore * pitcherFactor
-            prob = Math.max(0.01, Math.min(0.6, prob))
-            todayProb = prob
-          }
-        }
-
-        return {
-          stat_player_id: pid,
-          player_name: p?.name ?? null,
-          team: p?.team ?? null,
-          position: p?.position ?? null,
-          opponent_pitcher: latest?.pitcher_name ?? null,
-          pitch_type: latest?.pitch_type ?? null,
-          distance: latest?.hit_distance ?? null,
-          hr_total_year: hrTotal,
-          hr_rate: hrRate, // HR / AB (attempts)
-          today_probability: todayProb,
-          today_pct: todayProb != null && Number.isFinite(todayProb) ? todayProb * 100 : null,
-        }
+      let rows = rowsUnsorted.filter((r) => {
+        if (qStadium && !(r.stadium ?? '').toLowerCase().includes(qStadium)) return false
+        if (qTeam && !(r.batter_team ?? '').toLowerCase().includes(qTeam)) return false
+        if (qPitcher && !(r.pitcher_name ?? '').toLowerCase().includes(qPitcher)) return false
+        if (qBatter && !(r.batter_name ?? '').toLowerCase().includes(qBatter)) return false
+        return true
       })
 
-      rows.sort((a, b) => {
-        const A = a.today_probability ?? -1
-        const B = b.today_probability ?? -1
-        if (A !== B) return B - A
-        return (b.hr_total_year ?? 0) - (a.hr_total_year ?? 0)
-      })
+      const cmp = (a: HrRow, b: HrRow): number => {
+        let va: string | number = ''
+        let vb: string | number = ''
+        switch (sortBy) {
+          case 'stadium':
+            va = (a.stadium ?? '').toLowerCase()
+            vb = (b.stadium ?? '').toLowerCase()
+            break
+          case 'team':
+            va = (a.batter_team ?? '').toLowerCase()
+            vb = (b.batter_team ?? '').toLowerCase()
+            break
+          case 'pitcher':
+            va = (a.pitcher_name ?? '').toLowerCase()
+            vb = (b.pitcher_name ?? '').toLowerCase()
+            break
+          case 'batter':
+            va = (a.batter_name ?? '').toLowerCase()
+            vb = (b.batter_name ?? '').toLowerCase()
+            break
+          case 'date':
+          default:
+            va = a.game_date ?? ''
+            vb = b.game_date ?? ''
+            break
+        }
+        if (va < vb) return sortDir === 'asc' ? -1 : 1
+        if (va > vb) return sortDir === 'asc' ? 1 : -1
+        return b.id - a.id
+      }
+      rows.sort(cmp)
 
       res.json({
         last_updated: new Date().toISOString(),
-        date: computedDateIso,
-        season: seasonUsed,
+        season,
         count: rows.length,
-        players: rows.slice(0, limit),
+        persisted:
+          'Each HR is stored in Supabase `bdl_hr_events` (enriched from `bdl_games`) for future reference.',
+        events: rows.slice(0, limit),
       })
     } catch (e) {
       console.error('[leaderboard/homers] failed:', e)

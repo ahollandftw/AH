@@ -22,6 +22,7 @@ export {
   formatProbability,
   groupProjectionsByTier,
   listDailyHrProjections,
+  mergedHrProbabilityMapForDate,
 } from './projections'
 
 export type { HrProbabilityInput, HrProbabilityResult } from './hrProbability'

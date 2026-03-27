@@ -1,6 +1,7 @@
 import { getServiceClient } from '../supabase.js'
 import { bdlFetch, bdlFetchAll, type BdlGame, type BdlPlay, type BdlPlateAppearance } from './client.js'
 import { syncGames, syncPlayerProps } from './sync.js'
+import { buildHrEventEnrichment } from './hrEventEnrichment.js'
 
 const POLL_INTERVAL_MS = 2 * 60 * 1000   // 2 minutes during active games
 const IDLE_INTERVAL_MS = 15 * 60 * 1000  // 15 minutes when no games active
@@ -119,6 +120,8 @@ async function pollGamePlays(bdlGameId: number, lastOrder: number): Promise<numb
     const pitchType = play.pitch_type ?? lastPitch?.pitch_type ?? lastPitch?.pitch_type_code ?? null
     const hitDistance = lastPitch?.hit_distance ?? distanceFromText ?? null
 
+    const enrich = await buildHrEventEnrichment(sb, bdlGameId, play.batter_id, play.pitcher_id ?? null)
+
     try {
       await sb.from('bdl_hr_events').upsert(
         {
@@ -133,6 +136,7 @@ async function pollGamePlays(bdlGameId: number, lastOrder: number): Promise<numb
           play_text: play.text,
           inning: play.inning,
           detected_at: new Date().toISOString(),
+          ...enrich,
         },
         { onConflict: 'bdl_game_id,play_order' },
       )
@@ -146,6 +150,7 @@ async function pollGamePlays(bdlGameId: number, lastOrder: number): Promise<numb
           play_text: play.text,
           inning: play.inning,
           detected_at: new Date().toISOString(),
+          ...enrich,
         },
         { onConflict: 'bdl_game_id,play_order' },
       )
@@ -166,10 +171,9 @@ async function pollGamePlays(bdlGameId: number, lastOrder: number): Promise<numb
 async function validatePicksForHr(statPlayerId: string, dateIso: string): Promise<string[]> {
   const sb = getServiceClient()
 
-  // Find all user picks for this player today that haven't been marked yet
   const { data: picks, error } = await sb
     .from('user_daily_picks')
-    .select('id, user_id')
+    .select('user_id')
     .eq('player_id', statPlayerId)
     .eq('pick_date', dateIso)
     .is('hit', null)
@@ -178,11 +182,17 @@ async function validatePicksForHr(statPlayerId: string, dateIso: string): Promis
 
   console.log(`[LIVE] marking ${picks.length} pick(s) as HIT for ${statPlayerId}`)
 
-  const pickIds = picks.map((p: { id: string }) => p.id)
-  await sb
+  const { error: upErr } = await sb
     .from('user_daily_picks')
     .update({ hit: true })
-    .in('id', pickIds)
+    .eq('player_id', statPlayerId)
+    .eq('pick_date', dateIso)
+    .is('hit', null)
+
+  if (upErr) {
+    console.error('[LIVE] mark hit update failed:', upErr.message)
+    return []
+  }
 
   // Send notifications to users who have hr_notifications enabled
   const userIds = [...new Set(picks.map((p: { user_id: string }) => p.user_id))]

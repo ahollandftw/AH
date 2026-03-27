@@ -114,7 +114,7 @@ security definer
 set search_path = public
 as $$
   select
-    us.user_id,
+    au.id as user_id,
     coalesce(nullif(us.display_name, ''), split_part(au.email, '@', 1)) as display_name,
     us.avatar_url,
     coalesce(sum(case when coalesce(psd.home_runs, 0) > 0 then 1 else 0 end), 0)::bigint as hits,
@@ -126,16 +126,15 @@ as $$
         2
       )
     end as hit_pct
-  from public.user_settings us
-  join auth.users au on au.id = us.user_id
-  left join public.user_daily_picks udp
-    on udp.user_id = us.user_id
+  from auth.users au
+  left join public.user_settings us on us.user_id = au.id
+  left join public.user_daily_picks udp on udp.user_id = au.id
   left join public.player_stats_daily psd
     on psd.player_id::text = udp.player_id
    and psd.date = udp.pick_date
-  where us.profile_visibility = 'public'
-  group by us.user_id, us.display_name, us.avatar_url, au.email
-  order by hit_pct desc, total_picks desc
+  group by au.id, us.display_name, us.avatar_url, au.email
+  order by hit_pct desc, total_picks desc,
+    coalesce(nullif(us.display_name, ''), split_part(au.email, '@', 1)) asc
   limit greatest(coalesce(limit_rows, 100), 1);
 $$;
 
@@ -154,22 +153,28 @@ set search_path = public
 as $$
   with allowed as (
     select 1
-    from public.user_settings us
-    where us.user_id = target_user_id
+    where exists (select 1 from auth.users au where au.id = target_user_id)
       and (
-        us.profile_visibility = 'public'
-        or auth.uid() = target_user_id
-        or (
-          us.profile_visibility = 'friends'
-          and exists (
-            select 1
-            from public.user_friendships f
-            where f.status = 'accepted'
-              and (
-                (f.user_id = auth.uid() and f.friend_user_id = target_user_id)
-                or (f.friend_user_id = auth.uid() and f.user_id = target_user_id)
+        auth.uid() = target_user_id
+        or exists (
+          select 1
+          from public.user_settings us
+          where us.user_id = target_user_id
+            and (
+              us.profile_visibility = 'public'
+              or (
+                us.profile_visibility = 'friends'
+                and exists (
+                  select 1
+                  from public.user_friendships f
+                  where f.status = 'accepted'
+                    and (
+                      (f.user_id = auth.uid() and f.friend_user_id = target_user_id)
+                      or (f.friend_user_id = auth.uid() and f.user_id = target_user_id)
+                    )
+                )
               )
-          )
+            )
         )
       )
   )

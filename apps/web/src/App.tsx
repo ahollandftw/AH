@@ -24,14 +24,14 @@ function Layout() {
   const fullLinks = [
     ['/dugout', 'Dugout', '⚾'],
     ['/projections', 'Projections', '📈'],
-    ['/stats', 'Stats', '📊'],
+    ['/stats', 'Homer Tracking', '📊'],
     ['/community', 'Leaderboard', '🏆'],
     ['/wall', 'Wall of Bang', '💥'],
   ] as const
   const menuLinks = [
     ['/dugout', 'Dugout'],
     ['/projections', 'Projections'],
-    ['/stats', 'Stats'],
+    ['/stats', 'Homer Tracking'],
     ['/community', 'Leaderboard'],
     ['/wall', 'Wall of Bang'],
     ['/friends', 'Friends'],

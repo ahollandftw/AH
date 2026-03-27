@@ -1,28 +1,13 @@
+/**
+ * Mirrors `packages/shared` matchup projection merge so the API can compile without
+ * pulling `@kinetic/shared` into NodeNext (extensionless import resolution).
+ */
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { fetchMaxBattingHomerunYear } from './statsQueries'
-import { getAppDisplayDateIso } from './displayDate'
-import {
-  calculateHrProbability,
-  formatAmericanOdds,
-  probToAmericanOdds,
-  probToTier,
-} from './hrProbability'
+import { calculateHrProbability } from './hrProbability.js'
 
-export type DailyProjection = {
+type DailyProjectionRow = {
   playerId: string
-  slug: string
-  name: string
-  team: string | null
-  position: string | null
-  opponentPitcher: string | null
-  opponentPitcherHand: string | null
   hrProbability: number | null
-  l7Hrs: number | null
-  tier: string | null
-  opponent: string | null
-  americanOdds: number | null
-  americanOddsStr: string | null
-  source?: 'daily_table' | 'hr_model'
 }
 
 function num(v: unknown): number | null {
@@ -57,17 +42,27 @@ function canonicalTeam(team: string | null | undefined): string | null {
   return TEAM_ALIASES[key] ?? key
 }
 
-/* ─── daily_hr_projections table path ────────────────────────────── */
+async function fetchMaxBattingHomerunYear(supabase: SupabaseClient) {
+  const { data, error } = await supabase
+    .from('stats_homeruns')
+    .select('year')
+    .eq('role', 'batting')
+    .eq('type', 'adj_xhr')
+    .order('year', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (error || data?.year == null) return null
+  return Number(data.year)
+}
 
 async function listDailyHrProjectionsFromTable(
   supabase: SupabaseClient,
   dateIso: string,
-): Promise<DailyProjection[]> {
+): Promise<DailyProjectionRow[]> {
   const { data, error } = await supabase
     .from('daily_hr_projections')
-    .select(
-      'player_id, opponent_pitcher, opponent_pitcher_hand, hr_probability, l7_hrs, tier, players:player_id (stat_player_id,slug,name,team,position)',
-    )
+    .select('player_id, hr_probability')
     .eq('date', dateIso)
     .order('hr_probability', { ascending: false, nullsFirst: false })
 
@@ -77,27 +72,11 @@ async function listDailyHrProjectionsFromTable(
     .map((row: any) => {
       const p = row.hr_probability != null ? Number(row.hr_probability) : null
       const prob = p != null && Number.isFinite(p) ? p : null
-      return {
-        playerId: row.players?.stat_player_id ?? row.player_id,
-        slug: row.players?.slug ?? '',
-        name: row.players?.name ?? 'Unknown',
-        team: canonicalTeam(row.players?.team) ?? row.players?.team ?? null,
-        position: row.players?.position ?? null,
-        opponentPitcher: row.opponent_pitcher ?? null,
-        opponentPitcherHand: row.opponent_pitcher_hand ?? null,
-        hrProbability: prob,
-        l7Hrs: row.l7_hrs ?? null,
-        tier: prob != null ? probToTier(prob) : (row.tier ?? null),
-        opponent: null,
-        americanOdds: prob != null ? probToAmericanOdds(prob) : null,
-        americanOddsStr: prob != null ? formatAmericanOdds(probToAmericanOdds(prob)) : null,
-        source: 'daily_table' as const,
-      }
+      const id = String(row.player_id ?? '')
+      return { playerId: id, hrProbability: prob }
     })
-    .filter((p: DailyProjection) => p.name !== 'Unknown')
+    .filter((r) => r.playerId && r.playerId !== 'undefined')
 }
-
-/* ─── Batch data helpers ─────────────────────────────────────────── */
 
 async function fetchAllBatterEV(supabase: SupabaseClient, season: number) {
   const { data } = await supabase
@@ -172,18 +151,34 @@ async function fetchAllPitcherArsenal(supabase: SupabaseClient, season: number) 
   }[]
 }
 
-/* ─── Matchup-based projection engine ────────────────────────────── */
+async function getGamesForDateRaw(supabase: SupabaseClient, dateIso: string) {
+  const { data: bdl, error: bdlErr } = await supabase
+    .from('bdl_games')
+    .select('home_team_abbrev,away_team_abbrev')
+    .eq('date', dateIso)
+  if (!bdlErr && bdl?.length) {
+    return bdl.map((g) => ({
+      home_team: g.home_team_abbrev,
+      away_team: g.away_team_abbrev,
+    })) as { home_team: string; away_team: string }[]
+  }
+  const { data, error } = await supabase
+    .from('schedule_games')
+    .select('home_team,away_team')
+    .eq('date', dateIso)
+  if (error || !data?.length) return []
+  return data as { home_team: string; away_team: string }[]
+}
 
 async function calculateMatchupProjections(
   supabase: SupabaseClient,
   dateIso: string,
-): Promise<DailyProjection[]> {
+): Promise<DailyProjectionRow[]> {
   const games = await getGamesForDateRaw(supabase, dateIso)
   if (!games.length) return []
 
   const teamsPlaying = new Set<string>()
   const opponentMap = new Map<string, string>()
-  const matchupDisplayMap = new Map<string, string>()
 
   for (const g of games) {
     const home = canonicalTeam(g.home_team) ?? g.home_team
@@ -192,8 +187,6 @@ async function calculateMatchupProjections(
     teamsPlaying.add(away)
     opponentMap.set(home, away)
     opponentMap.set(away, home)
-    matchupDisplayMap.set(home, `vs ${away}`)
-    matchupDisplayMap.set(away, `@ ${home}`)
   }
 
   const year = await fetchMaxBattingHomerunYear(supabase)
@@ -230,7 +223,6 @@ async function calculateMatchupProjections(
     bArsenalMap.get(r.player_id)!.push(r)
   }
 
-  // Team-level pitcher HR totals (average per pitcher on that team)
   const pitcherHrByTeam = new Map<string, number[]>()
   for (const r of pHrRows) {
     const t = canonicalTeam(r.team_abbrev) ?? r.team_abbrev
@@ -238,7 +230,6 @@ async function calculateMatchupProjections(
     pitcherHrByTeam.get(t)!.push(num(r.hr_total) ?? 0)
   }
 
-  // Team-level pitch mix: team → pitch_type → total raw pitches
   const teamPitchCounts = new Map<string, Map<string, number>>()
   for (const r of pArsenalRows) {
     const t = canonicalTeam(r.team_name_alt) ?? r.team_name_alt
@@ -247,7 +238,6 @@ async function calculateMatchupProjections(
     m.set(r.pitch_type, (m.get(r.pitch_type) ?? 0) + (num(r.pitches) ?? 0))
   }
 
-  // Convert raw counts → fractions (0-1) per team
   const teamPitchUsage = new Map<string, Map<string, number>>()
   for (const [t, pitchMap] of teamPitchCounts) {
     const total = Array.from(pitchMap.values()).reduce((a, b) => a + b, 0)
@@ -257,7 +247,7 @@ async function calculateMatchupProjections(
     teamPitchUsage.set(t, frac)
   }
 
-  const results: DailyProjection[] = []
+  const results: DailyProjectionRow[] = []
 
   for (const [playerId, ev] of evMap) {
     const player = playerMap.get(playerId)
@@ -277,7 +267,6 @@ async function calculateMatchupProjections(
 
     if (hr_total <= 0 && brl_percent <= 0) continue
 
-    // Pitcher factor from opposing team
     let pitcher_hr_total = 20
     if (oppTeam) {
       const hrs = pitcherHrByTeam.get(oppTeam)
@@ -286,7 +275,6 @@ async function calculateMatchupProjections(
       }
     }
 
-    // Matchup score: batter SLG vs each pitch weighted by opp team pitch usage
     let matchup_score = 0.4
     const bArsenal = bArsenalMap.get(playerId)
     const oppUsage = oppTeam ? teamPitchUsage.get(oppTeam) : null
@@ -316,63 +304,13 @@ async function calculateMatchupProjections(
 
     results.push({
       playerId,
-      slug: player.slug ?? '',
-      name: player.name ?? 'Unknown',
-      team: pTeam,
-      position: player.position ?? null,
-      opponentPitcher: null,
-      opponentPitcherHand: null,
       hrProbability: result.probability,
-      l7Hrs: null,
-      tier: result.tier,
-      opponent: matchupDisplayMap.get(pTeam) ?? null,
-      americanOdds: result.americanOdds,
-      americanOddsStr: result.americanOddsStr,
-      source: 'hr_model',
     })
   }
 
-  results.sort((a, b) => (b.hrProbability ?? 0) - (a.hrProbability ?? 0))
   return results
 }
 
-/* ─── Public API ─────────────────────────────────────────────────── */
-
-export async function listDailyHrProjections(
-  supabase: SupabaseClient,
-  dateIso?: string,
-): Promise<DailyProjection[]> {
-  const date = dateIso ?? getAppDisplayDateIso()
-
-  const fromDaily = await listDailyHrProjectionsFromTable(supabase, date)
-  if (fromDaily.length > 0) return fromDaily
-
-  return calculateMatchupProjections(supabase, date)
-}
-
-async function getGamesForDateRaw(supabase: SupabaseClient, dateIso: string) {
-  const { data: bdl, error: bdlErr } = await supabase
-    .from('bdl_games')
-    .select('home_team_abbrev,away_team_abbrev')
-    .eq('date', dateIso)
-  if (!bdlErr && bdl?.length) {
-    return bdl.map((g) => ({
-      home_team: g.home_team_abbrev,
-      away_team: g.away_team_abbrev,
-    })) as { home_team: string; away_team: string }[]
-  }
-  const { data, error } = await supabase
-    .from('schedule_games')
-    .select('home_team,away_team')
-    .eq('date', dateIso)
-  if (error || !data?.length) return []
-  return data as { home_team: string; away_team: string }[]
-}
-
-/**
- * Daily table first, then HR model for any player missing from `daily_hr_projections`.
- * Use for matchup "today%" when you need complete coverage.
- */
 export async function mergedHrProbabilityMapForDate(
   supabase: SupabaseClient,
   dateIso: string,
@@ -395,40 +333,6 @@ export async function mergedHrProbabilityMapForDate(
     if (!out.has(d.playerId) && d.hrProbability != null) {
       out.set(d.playerId, d.hrProbability)
     }
-  }
-  return out
-}
-
-export function formatProbability(p: number | null) {
-  if (p == null || Number.isNaN(p)) return '—'
-  return `${Math.round(p * 1000) / 10}%`
-}
-
-const TIER_ORDER = ['A+', 'A', 'B', 'C', 'D'] as const
-
-export function groupProjectionsByTier(
-  rows: DailyProjection[],
-): { tierKey: string; tierLabel: string; data: DailyProjection[] }[] {
-  const buckets = new Map<string, DailyProjection[]>()
-  for (const r of rows) {
-    const raw = (r.tier ?? '').trim().toUpperCase()
-    const key = TIER_ORDER.includes(raw as (typeof TIER_ORDER)[number])
-      ? raw
-      : 'OTHER'
-    if (!buckets.has(key)) buckets.set(key, [])
-    buckets.get(key)!.push(r)
-  }
-
-  const out: { tierKey: string; tierLabel: string; data: DailyProjection[] }[] = []
-  for (const t of TIER_ORDER) {
-    const data = buckets.get(t)
-    if (data?.length) {
-      out.push({ tierKey: t, tierLabel: `${t} Tier`, data })
-    }
-  }
-  const other = buckets.get('OTHER')
-  if (other?.length) {
-    out.push({ tierKey: 'OTHER', tierLabel: 'Other', data: other })
   }
   return out
 }

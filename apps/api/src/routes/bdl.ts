@@ -12,6 +12,7 @@ import { startLiveMonitor, stopLiveMonitor } from '../bdl/liveMonitor.js'
 import { calculateEdge, calculateEdgesForDate } from '../bdl/edge.js'
 import { getServiceClient } from '../supabase.js'
 import { bdlFetch, bdlFetchAll, type BdlPlay, type BdlPlateAppearance } from '../bdl/client.js'
+import { buildHrEventEnrichment } from '../bdl/hrEventEnrichment.js'
 
 export function registerBdlRoutes(app: Express) {
   const canonTeam = (team: string): string => {
@@ -305,7 +306,7 @@ export function registerBdlRoutes(app: Express) {
             .maybeSingle(),
           sb
             .from('stats_exit_velocity')
-            .select('avg_hit_speed,ev95percent,brl_percent,fbld,attempts,hard_hit_percent')
+            .select('avg_hit_speed,ev95percent,brl_percent,fbld,attempts')
             .eq('role', 'batting')
             .eq('player_id', statPlayerId)
             .eq('season', season)
@@ -326,7 +327,7 @@ export function registerBdlRoutes(app: Express) {
       if (!batterHr && !batterEv?.avg_hit_speed && season !== 2025) {
         const [hrFb, evFb] = await Promise.all([
           sb.from('stats_homeruns').select('hr_total').eq('role', 'batting').eq('type', 'adj_xhr').eq('player_id', statPlayerId).eq('year', 2025).maybeSingle(),
-          sb.from('stats_exit_velocity').select('avg_hit_speed,ev95percent,brl_percent,fbld,attempts,hard_hit_percent').eq('role', 'batting').eq('player_id', statPlayerId).eq('season', 2025).maybeSingle(),
+          sb.from('stats_exit_velocity').select('avg_hit_speed,ev95percent,brl_percent,fbld,attempts').eq('role', 'batting').eq('player_id', statPlayerId).eq('season', 2025).maybeSingle(),
         ])
         if (hrFb.data?.hr_total || evFb.data?.avg_hit_speed) {
           batterHr = hrFb.data?.hr_total ?? null
@@ -351,7 +352,7 @@ export function registerBdlRoutes(app: Express) {
             pitcherStatId
               ? sb
                   .from('stats_pitch_arsenal')
-                  .select('pitch_type,pitch_name,pitch_usage,slg,ba,woba')
+                  .select('pitch_type,pitch_name,pitch_usage,slg,ba,woba,est_slg,est_woba')
                   .eq('role', 'pitching')
                   .eq('player_id', pitcherStatId)
                   .eq('season', usedSeason)
@@ -387,13 +388,55 @@ export function registerBdlRoutes(app: Express) {
               batter_iso: batterIso,
               batter_slg: b?.slg != null ? Number(b.slg) : null,
               batter_ba: b?.ba != null ? Number(b.ba) : null,
+              batter_est_slg: b?.est_slg != null ? Number(b.est_slg) : null,
+              batter_est_woba: b?.est_woba != null ? Number(b.est_woba) : null,
               pitcher_slg_allowed: pitcherSlgAllowed,
               pitcher_ba_allowed: p?.ba != null ? Number(p.ba) : null,
+              pitcher_est_slg_allowed: p?.est_slg != null ? Number(p.est_slg) : null,
+              pitcher_est_woba_allowed: p?.est_woba != null ? Number(p.est_woba) : null,
             }
           })
         }
       } catch {
         pitchTypeMatchup = []
+      }
+
+      // Pitcher Statcast mirrors (role=pitching) — same categories as batter where the schema has them.
+      let pitcherEv: Record<string, unknown> | null = null
+      let pitcherHrM: Record<string, unknown> | null = null
+      try {
+        if (best?.pitcher_bdl_id) {
+          const { data: pitX } = await sb
+            .from('bdl_players')
+            .select('stat_player_id')
+            .eq('bdl_id', best.pitcher_bdl_id)
+            .maybeSingle()
+          const pitcherStatId = (pitX as { stat_player_id?: string | null })?.stat_player_id ?? null
+          if (pitcherStatId) {
+            const [evRes, hrRes] = await Promise.all([
+              sb
+                .from('stats_exit_velocity')
+                .select('avg_hit_speed,ev95percent,brl_percent,fbld')
+                .eq('role', 'pitching')
+                .eq('player_id', pitcherStatId)
+                .eq('season', usedSeason)
+                .maybeSingle(),
+              sb
+                .from('stats_homeruns')
+                .select('hr_total,xhr')
+                .eq('role', 'pitching')
+                .eq('type', 'adj_xhr')
+                .eq('player_id', pitcherStatId)
+                .eq('year', usedSeason)
+                .maybeSingle(),
+            ])
+            pitcherEv = (evRes.data as Record<string, unknown>) ?? null
+            pitcherHrM = (hrRes.data as Record<string, unknown>) ?? null
+          }
+        }
+      } catch {
+        pitcherEv = null
+        pitcherHrM = null
       }
 
       // Derived “model” stats we can compute today
@@ -438,13 +481,71 @@ export function registerBdlRoutes(app: Express) {
           batter_avg_hit_speed: batterEv?.avg_hit_speed ?? null,
           batter_ev95: batterEv?.ev95percent ?? null,
           batter_barrel: batterEv?.brl_percent ?? null,
-          batter_hard_hit: batterEv?.hard_hit_percent ?? null,
+          batter_hard_hit: null,
           batter_fbld: batterEv?.fbld ?? null,
           batter_attempts: batterEv?.attempts ?? null,
           batter_iso: batterIso,
           batter_bb_pct: batterBbPct,
           batter_k_pct: batterKPct,
           batter_season_hr: batterSeason?.batting_hr ?? null,
+          pitcher_avg_hit_speed_allowed: pitcherEv?.avg_hit_speed ?? null,
+          pitcher_ev95_allowed: pitcherEv?.ev95percent ?? null,
+          pitcher_barrel_allowed: pitcherEv?.brl_percent ?? null,
+          pitcher_hard_hit_allowed: null,
+          pitcher_fbld_allowed: pitcherEv?.fbld ?? null,
+          pitcher_hr_statcast: pitcherHrM?.hr_total ?? null,
+          pitcher_xhr_statcast: pitcherHrM?.xhr ?? null,
+          /** Structured to match the HR matchup checklist (null = not in our CSV schema). */
+          matchup_framework: {
+            power: {
+              batter_iso: batterIso,
+              batter_hr_fb: null,
+              pitcher_iso_allowed: null,
+              pitcher_hr_fb_allowed: null,
+            },
+            contact_quality: {
+              batter_barrel_pct: batterEv?.brl_percent ?? null,
+              batter_hard_hit_pct: null,
+              batter_avg_ev: batterEv?.avg_hit_speed ?? null,
+              pitcher_barrel_pct_allowed: pitcherEv?.brl_percent ?? null,
+              pitcher_hard_hit_pct_allowed: null,
+              pitcher_avg_ev_allowed: pitcherEv?.avg_hit_speed ?? null,
+            },
+            launch_profile: {
+              batter_fb_pct: batterEv?.fbld ?? null,
+              batter_pull_pct: null,
+              pitcher_fb_pct_allowed: pitcherEv?.fbld ?? null,
+              pitcher_pull_contact_pct: null,
+            },
+            plate_skills: {
+              batter_k_pct: batterKPct,
+              batter_bb_pct: batterBbPct,
+              pitcher_k_pct_implied: pitcherStatsRes.data?.pitching_k_per_9 ?? null,
+              pitcher_bb_per_9_implied:
+                pitcherStatsRes.data?.pitching_bb != null &&
+                pitcherStatsRes.data?.pitching_ip != null
+                  ? (Number(pitcherStatsRes.data.pitching_bb) /
+                      Math.max(0.1, Number(pitcherStatsRes.data.pitching_ip))) *
+                    9
+                  : null,
+            },
+            expected_metrics: {
+              batter_xslg_proxy: null,
+              batter_xwoba_proxy: null,
+              pitcher_xslg_allowed_proxy: null,
+              pitcher_xwoba_allowed_proxy: null,
+            },
+            pitch_type_edge: pitchTypeMatchup,
+            splits: {
+              vs_hand: null,
+              home_away: null,
+              last_15: null,
+            },
+          },
+          data_gaps: [
+            'HR/FB%, pull%, and granular xSLG/xwOBA are not columns in the imported Statcast CSVs; use barrel %, FB%, and pitch-type est_slg / est_woba rows where present.',
+            'Handedness, home/away, and rolling 15-day form need a separate feed or Statcast query pipeline.',
+          ],
           season: usedSeason,
         },
       })
@@ -610,6 +711,8 @@ export function registerBdlRoutes(app: Express) {
           const pitchType = play.pitch_type ?? lastPitch?.pitch_type ?? lastPitch?.pitch_type_code ?? null
           const hitDistance = lastPitch?.hit_distance ?? distanceFromText ?? null
 
+          const enrich = await buildHrEventEnrichment(sb, gameId, play.batter_id, play.pitcher_id ?? null)
+
           try {
             await sb.from('bdl_hr_events').upsert(
               {
@@ -624,6 +727,7 @@ export function registerBdlRoutes(app: Express) {
                 play_text: play.text,
                 inning: play.inning,
                 detected_at: new Date().toISOString(),
+                ...enrich,
               },
               { onConflict: 'bdl_game_id,play_order' },
             )
@@ -637,6 +741,7 @@ export function registerBdlRoutes(app: Express) {
                 play_text: play.text,
                 inning: play.inning,
                 detected_at: new Date().toISOString(),
+                ...enrich,
               },
               { onConflict: 'bdl_game_id,play_order' },
             )
@@ -649,6 +754,35 @@ export function registerBdlRoutes(app: Express) {
       res.json({ ok: true, date: date || null, scannedGames, inserted })
     } catch (e) {
       console.error('[bdl/hr-events/refresh-today] failed:', e)
+      res
+        .status(500)
+        .json({ error: e instanceof Error ? (e.stack ?? e.message) : String(e) })
+    }
+  })
+
+  /** Fill game_date / venue / H–A flags for rows inserted before enrichment existed. */
+  app.post('/bdl/hr-events/backfill-enrichment', async (_req, res) => {
+    try {
+      const sb = getServiceClient()
+      const { data: events, error } = await sb
+        .from('bdl_hr_events')
+        .select('id,bdl_game_id,bdl_batter_id,bdl_pitcher_id')
+        .limit(5000)
+      if (error) throw error
+      let updated = 0
+      for (const ev of events ?? []) {
+        const enrich = await buildHrEventEnrichment(
+          sb,
+          Number(ev.bdl_game_id),
+          Number(ev.bdl_batter_id),
+          ev.bdl_pitcher_id != null ? Number(ev.bdl_pitcher_id) : null,
+        )
+        await sb.from('bdl_hr_events').update(enrich).eq('id', ev.id)
+        updated++
+      }
+      res.json({ ok: true, updated })
+    } catch (e) {
+      console.error('[bdl/hr-events/backfill-enrichment] failed:', e)
       res
         .status(500)
         .json({ error: e instanceof Error ? (e.stack ?? e.message) : String(e) })

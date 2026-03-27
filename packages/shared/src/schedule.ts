@@ -13,6 +13,25 @@ export async function getGamesForDate(
   supabase: SupabaseClient,
   dateIso: string,
 ): Promise<ScheduleGame[]> {
+  // Prefer BallDontLie-synced rows so each date matches the live API slate (CSV schedule can drift).
+  const { data: bdl, error: bdlErr } = await supabase
+    .from('bdl_games')
+    .select('bdl_game_id,date,home_team_abbrev,away_team_abbrev')
+    .eq('date', dateIso)
+    .order('bdl_game_id')
+
+  if (!bdlErr && bdl?.length) {
+    const n = bdl.length
+    return (bdl as any[]).map((r) => ({
+      gameId: String(r.bdl_game_id),
+      date: r.date,
+      homeTeam: r.home_team_abbrev,
+      awayTeam: r.away_team_abbrev,
+      slateType: null,
+      gamesOnDate: n,
+    }))
+  }
+
   const { data, error } = await supabase
     .from('schedule_games')
     .select('game_id,date,home_team,away_team,slate_type,games_on_date')
@@ -30,19 +49,23 @@ export async function getGamesForDate(
   }))
 }
 
-/** Sorted YYYY-MM-DD values that exist in schedule_games. */
+/** Sorted YYYY-MM-DD values that exist in synced games or the static schedule. */
 export async function getScheduleDates(
   supabase: SupabaseClient,
 ): Promise<string[]> {
-  const { data, error } = await supabase
-    .from('schedule_games')
-    .select('date')
-    .order('date', { ascending: true })
-
-  if (error || !data?.length) return []
   const out = new Set<string>()
-  for (const r of data as { date: string }[]) out.add(r.date)
-  return [...out]
+  const [{ data: bdlDates, error: bdlErr }, { data: schedDates, error: schedErr }] =
+    await Promise.all([
+      supabase.from('bdl_games').select('date').order('date', { ascending: true }),
+      supabase.from('schedule_games').select('date').order('date', { ascending: true }),
+    ])
+  if (!bdlErr && bdlDates?.length) {
+    for (const r of bdlDates as { date: string }[]) out.add(r.date)
+  }
+  if (!schedErr && schedDates?.length) {
+    for (const r of schedDates as { date: string }[]) out.add(r.date)
+  }
+  return [...out].sort()
 }
 
 /**

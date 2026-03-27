@@ -110,6 +110,12 @@ alter table public.bdl_hr_events add column if not exists bdl_pitcher_id integer
 alter table public.bdl_hr_events add column if not exists pitcher_name text;
 alter table public.bdl_hr_events add column if not exists pitch_type text;
 alter table public.bdl_hr_events add column if not exists hit_distance integer;
+alter table public.bdl_hr_events add column if not exists game_date date;
+alter table public.bdl_hr_events add column if not exists venue text;
+alter table public.bdl_hr_events add column if not exists batter_team_abbrev text;
+alter table public.bdl_hr_events add column if not exists pitcher_team_abbrev text;
+alter table public.bdl_hr_events add column if not exists batter_home_away text;
+alter table public.bdl_hr_events add column if not exists pitcher_home_away text;
 
 -- ─── Extend user_settings for sportsbook + notifications ────────────
 alter table public.user_settings
