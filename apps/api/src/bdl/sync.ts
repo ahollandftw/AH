@@ -31,6 +31,26 @@ function todayET(): string {
   return `${y}-${m}-${dd}`
 }
 
+/**
+ * Derive the Eastern Time calendar date from a UTC timestamp string.
+ * A West Coast game starting 7 PM PT (10 PM ET) on 3/26 has start_time_utc
+ * ~03:00 UTC on 3/27 — but it belongs on the 3/26 slate in ET.
+ * Falls back to `fallback` when the input is null/unparseable.
+ */
+function etDateFromUtc(utcStr: string | null | undefined, fallback: string): string {
+  if (!utcStr) return fallback
+  try {
+    const d = new Date(new Date(utcStr).toLocaleString('en-US', { timeZone: 'America/New_York' }))
+    if (isNaN(d.getTime())) return fallback
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, '0')
+    const dd = String(d.getDate()).padStart(2, '0')
+    return `${y}-${m}-${dd}`
+  } catch {
+    return fallback
+  }
+}
+
 /* ─── 1. Sync active players + build cross-reference ──────────────── */
 
 export async function syncActivePlayers(): Promise<{ synced: number; matched: number }> {
@@ -187,9 +207,13 @@ export async function syncGames(
   const rows = games.map((g) => {
     const status = g.status ?? 'Scheduled'
     if (/progress|live/i.test(status)) active++
+    // Use the game's actual ET date derived from its start time, not the date we
+    // requested — a late West Coast game may end after midnight UTC which would
+    // otherwise bump it onto the next calendar day.
+    const gameDate = etDateFromUtc(g.date, date)
     return {
       bdl_game_id: g.id,
-      date,
+      date: gameDate,
       start_time_utc: g.date ?? null,
       home_team_abbrev: g.home_team?.abbreviation ?? '',
       away_team_abbrev: g.away_team?.abbreviation ?? '',
