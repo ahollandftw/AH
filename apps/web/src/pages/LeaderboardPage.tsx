@@ -24,7 +24,6 @@ type HomersResponse = {
   last_updated: string
   season: number
   count: number
-  persisted: string
   events: HrEventRow[]
 }
 
@@ -98,26 +97,22 @@ export default function LeaderboardPage() {
         Last updated:{' '}
         {data?.last_updated ? new Date(data.last_updated).toLocaleString() : '—'}
       </p>
-      <p className="lb-meta" style={{ maxWidth: 640 }}>
-        {data?.persisted ??
-          'Home runs detected from BallDontLie are persisted in `bdl_hr_events` for future reference.'}
-      </p>
 
-      <div className="lb-toolbar" style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 12 }}>
-        <label>
-          Season{' '}
+      <div className="lb-toolbar lb-toolbar--sort">
+        <label className="lb-field">
+          <span className="lb-fieldLabel">Season</span>
           <input
+            className="lb-input"
             type="number"
             value={season}
             min={2020}
             max={2035}
             onChange={(e) => setSeason(Number(e.target.value) || season)}
-            style={{ width: 72 }}
           />
         </label>
-        <label>
-          Sort{' '}
-          <select value={sort} onChange={(e) => setSort(e.target.value as SortKey)}>
+        <label className="lb-field">
+          <span className="lb-fieldLabel">Sort</span>
+          <select className="lb-select" value={sort} onChange={(e) => setSort(e.target.value as SortKey)}>
             <option value="date">Date</option>
             <option value="stadium">Stadium</option>
             <option value="team">Team</option>
@@ -125,43 +120,65 @@ export default function LeaderboardPage() {
             <option value="batter">Batter</option>
           </select>
         </label>
-        <label>
-          Dir{' '}
-          <select value={dir} onChange={(e) => setDir(e.target.value as 'asc' | 'desc')}>
-            <option value="desc">Desc</option>
-            <option value="asc">Asc</option>
+        <label className="lb-field">
+          <span className="lb-fieldLabel">Direction</span>
+          <select className="lb-select" value={dir} onChange={(e) => setDir(e.target.value as 'asc' | 'desc')}>
+            <option value="desc">Newest first</option>
+            <option value="asc">Oldest first</option>
           </select>
         </label>
       </div>
 
-      <div className="lb-toolbar" style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 14 }}>
-        <input
-          placeholder="Filter stadium"
-          value={stadium}
-          onChange={(e) => setStadium(e.target.value)}
-          style={{ minWidth: 140 }}
-        />
-        <input
-          placeholder="Filter team"
-          value={team}
-          onChange={(e) => setTeam(e.target.value)}
-          style={{ minWidth: 120 }}
-        />
-        <input
-          placeholder="Filter pitcher"
-          value={pitcher}
-          onChange={(e) => setPitcher(e.target.value)}
-          style={{ minWidth: 120 }}
-        />
-        <input
-          placeholder="Filter batter"
-          value={batter}
-          onChange={(e) => setBatter(e.target.value)}
-          style={{ minWidth: 120 }}
-        />
-        <button type="button" className="lb-tab" onClick={() => void load()}>
-          Apply
-        </button>
+      <div className="lb-filtersCard">
+        <div className="lb-filtersTitle">Filter results</div>
+        <div className="lb-toolbar lb-toolbar--filters">
+          <label className="lb-field lb-field--grow">
+            <span className="lb-fieldLabel">Stadium</span>
+            <input
+              className="lb-input"
+              placeholder="Contains…"
+              value={stadium}
+              onChange={(e) => setStadium(e.target.value)}
+              autoComplete="off"
+            />
+          </label>
+          <label className="lb-field lb-field--grow">
+            <span className="lb-fieldLabel">Team</span>
+            <input
+              className="lb-input"
+              placeholder="e.g. NYY, SF"
+              value={team}
+              onChange={(e) => setTeam(e.target.value)}
+              autoComplete="off"
+            />
+          </label>
+          <label className="lb-field lb-field--grow">
+            <span className="lb-fieldLabel">Pitcher</span>
+            <input
+              className="lb-input"
+              placeholder="Last name…"
+              value={pitcher}
+              onChange={(e) => setPitcher(e.target.value)}
+              autoComplete="off"
+            />
+          </label>
+          <label className="lb-field lb-field--grow">
+            <span className="lb-fieldLabel">Batter</span>
+            <input
+              className="lb-input"
+              placeholder="Last name…"
+              value={batter}
+              onChange={(e) => setBatter(e.target.value)}
+              autoComplete="off"
+            />
+          </label>
+          <div className="lb-field lb-field--btn">
+            <span className="lb-fieldLabel lb-fieldLabel--ghost">Apply</span>
+            <button type="button" className="lb-btnApply" onClick={() => void load()}>
+              Apply filters
+            </button>
+          </div>
+        </div>
       </div>
 
       {err ? <p className="lb-err">{err}</p> : null}
@@ -175,37 +192,59 @@ export default function LeaderboardPage() {
       ) : (
         <div className="lb-tableWrap">
           <table className="lb-table">
+            <colgroup>
+              <col className="lb-col-date" />
+              <col className="lb-col-stadium" />
+              <col className="lb-col-abbr" />
+              <col className="lb-col-abbr" />
+              <col className="lb-col-team" />
+              <col className="lb-col-name" />
+              <col className="lb-col-name" />
+              <col className="lb-col-ha" />
+              <col className="lb-col-ha" />
+              <col className="lb-col-pitch" />
+              <col className="lb-col-dist" />
+              <col className="lb-col-pct" />
+            </colgroup>
             <thead>
               <tr>
                 <th scope="col">Date</th>
-                <th scope="col">Stadium (home park)</th>
+                <th scope="col">Stadium</th>
                 <th scope="col">Home</th>
                 <th scope="col">Away</th>
                 <th scope="col">Batter team</th>
                 <th scope="col">Batter</th>
                 <th scope="col">Pitcher</th>
-                <th scope="col">Batter home/away</th>
-                <th scope="col">Pitcher home/away</th>
-                <th scope="col">Pitch type</th>
+                <th scope="col">Bat H/A</th>
+                <th scope="col">Pit H/A</th>
+                <th scope="col">Pitch</th>
                 <th scope="col">Dist.</th>
-                <th scope="col">Matchup today%</th>
+                <th scope="col">Today %</th>
               </tr>
             </thead>
             <tbody>
               {(data?.events ?? []).map((p) => (
                 <tr key={p.id}>
-                  <td>{p.game_date ?? '—'}</td>
-                  <td>{p.stadium ?? '—'}</td>
-                  <td>{p.home_team ?? '—'}</td>
-                  <td>{p.away_team ?? '—'}</td>
-                  <td>{p.batter_team ?? '—'}</td>
-                  <td>{p.batter_name ?? '—'}</td>
-                  <td>{p.pitcher_name ?? '—'}</td>
-                  <td>{p.batter_home_away ?? '—'}</td>
-                  <td>{p.pitcher_home_away ?? '—'}</td>
-                  <td>{p.pitch_type ?? '—'}</td>
-                  <td>{p.distance != null ? `${p.distance} ft` : '—'}</td>
-                  <td>{p.today_probability != null ? fmtPct(p.today_probability) : '—'}</td>
+                  <td className="lb-cell-mono">{p.game_date ?? '—'}</td>
+                  <td className="lb-cell-stadium" title={p.stadium ?? undefined}>
+                    {p.stadium ?? '—'}
+                  </td>
+                  <td className="lb-cell-abbr">{p.home_team ?? '—'}</td>
+                  <td className="lb-cell-abbr">{p.away_team ?? '—'}</td>
+                  <td className="lb-cell-abbr">{p.batter_team ?? '—'}</td>
+                  <td title={p.batter_name ?? undefined}>{p.batter_name ?? '—'}</td>
+                  <td title={p.pitcher_name ?? undefined}>{p.pitcher_name ?? '—'}</td>
+                  <td className="lb-cell-center">{p.batter_home_away ?? '—'}</td>
+                  <td className="lb-cell-center">{p.pitcher_home_away ?? '—'}</td>
+                  <td className="lb-cell-pitch" title={p.pitch_type ?? undefined}>
+                    {p.pitch_type ?? '—'}
+                  </td>
+                  <td className="lb-cell-mono lb-cell-center">
+                    {p.distance != null ? `${p.distance}′` : '—'}
+                  </td>
+                  <td className="lb-cell-mono lb-cell-pct">
+                    {p.today_probability != null ? fmtPct(p.today_probability) : '—'}
+                  </td>
                 </tr>
               ))}
             </tbody>

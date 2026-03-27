@@ -279,9 +279,38 @@ export default function FriendsPage() {
   return (
     <div className="pg">
       <h1 className="pg-title">Friends</h1>
-      <p className="pg-sub">Search by display name to add and view friends.</p>
       <p className="pg-sub">Notifications: {unreadCount} unread</p>
       {msg ? <p className="pg-sub">{msg}</p> : null}
+
+      <section className="fr-addSection" aria-labelledby="fr-add-heading">
+        <h2 id="fr-add-heading" className="fr-addHeading">
+          Add a friend
+        </h2>
+        <p className="fr-addHelp">
+          Each person sets a <strong>display name</strong> under Account. Type at least <strong>2 letters</strong> of
+          their name below — matching profiles appear, then tap <strong>Add</strong> to send a request.
+        </p>
+        <label className="fr-addLabel" htmlFor="fr-search">
+          Search by display name
+        </label>
+        <div className="fr-searchRow">
+          <input
+            id="fr-search"
+            className="fr-searchInput"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Start typing a name…"
+            autoComplete="off"
+          />
+        </div>
+        {query.trim().length > 0 && query.trim().length < 2 ? (
+          <p className="fr-addHint">Type one more character to search.</p>
+        ) : null}
+        {query.trim().length >= 2 && results.length === 0 ? (
+          <p className="fr-addHint">No profiles match that name. Check spelling or ask them which display name they use.</p>
+        ) : null}
+      </section>
+
       {notifications.length ? (
         <div className="pg-focusCard" style={{ marginBottom: 12 }}>
           <div className="pg-focusLine" style={{ marginBottom: 8 }}>
@@ -299,17 +328,12 @@ export default function FriendsPage() {
         </div>
       ) : null}
 
-      <div className="wl-addRow">
-        <input
-          className="wl-input"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search display name"
-        />
-      </div>
-
       {results.length > 0 ? (
-        <div className="pg-cards" style={{ marginBottom: 16 }}>
+        <>
+          <h2 className="pg-sectionTitle" style={{ marginTop: 0 }}>
+            People matching “{query.trim()}”
+          </h2>
+          <div className="pg-cards" style={{ marginBottom: 16 }}>
           {results.map((r) => (
             <div key={r.user_id} className="pg-card">
               <div className="pg-info">
@@ -326,7 +350,8 @@ export default function FriendsPage() {
               </button>
             </div>
           ))}
-        </div>
+          </div>
+        </>
       ) : null}
 
       <h2 className="pg-sectionTitle">My friend activity</h2>

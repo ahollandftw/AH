@@ -10,7 +10,8 @@ import {
   type ScheduleGame,
 } from '@kinetic/shared'
 import { useWebAuth } from '../auth/WebAuthProvider.tsx'
-import { normalizeTeamCode, paletteForTeam } from '../theme/teamPalette'
+import { normalizeTeamCode, paletteForTeam, teamAbbrevContrastStyle } from '../theme/teamPalette'
+import { bdlRowMatchesCalendarDay } from '../utils/bdlCalendarDay'
 import hrIcon96 from '../../../../data/icons8-home-run-96.png'
 import hrIcon64 from '../../../../data/icons8-home-run-64.png'
 
@@ -63,7 +64,12 @@ export default function DugoutPage() {
     void getScheduleDates(supabase).then((dates) => {
       if (!dates.length) return
       setAvailableDates(dates)
-      setDisplayDate((d) => (dates.includes(d) ? d : dates[0]))
+      setDisplayDate((d) => {
+        if (dates.includes(d)) return d
+        const today = getAppDisplayDateIso()
+        if (dates.includes(today)) return today
+        return dates[dates.length - 1] ?? d
+      })
     })
   }, [supabase])
 
@@ -83,13 +89,7 @@ export default function DugoutPage() {
         setGames(sched)
         const raw = (live.data ?? []) as any[]
         const dayIso = displayDate
-        setLiveGames(
-          raw.filter((lg) => {
-            const d = lg.date
-            if (d == null) return true
-            return String(d).slice(0, 10) === dayIso
-          }),
-        )
+        setLiveGames(raw.filter((lg) => bdlRowMatchesCalendarDay(lg, dayIso)))
       })
       .finally(() => setLoading(false))
   }, [supabase, displayDate])
@@ -104,11 +104,7 @@ export default function DugoutPage() {
         .then(({ data }) => {
           const raw = (data ?? []) as any[]
           const dayIso = displayDate
-          setLiveGames(raw.filter((lg) => {
-            const d = lg.date
-            if (d == null) return true
-            return String(d).slice(0, 10) === dayIso
-          }))
+          setLiveGames(raw.filter((lg) => bdlRowMatchesCalendarDay(lg, dayIso)))
         })
     }, 60000)
     return () => clearInterval(id)
@@ -471,11 +467,16 @@ export default function DugoutPage() {
                 {visibleGames.map((g) => {
                   const pairKey = [normalizeTeamCode(g.homeTeam) ?? g.homeTeam, normalizeTeamCode(g.awayTeam) ?? g.awayTeam].sort().join('|')
                   const live =
-                    liveGames.find((lg) => String(lg.bdl_game_id ?? '') === g.gameId) ??
                     liveGames.find(
                       (lg) =>
+                        String(lg.bdl_game_id ?? '') === g.gameId &&
+                        bdlRowMatchesCalendarDay(lg, displayDate),
+                    ) ??
+                    liveGames.find(
+                      (lg) =>
+                        bdlRowMatchesCalendarDay(lg, displayDate) &&
                         [normalizeTeamCode(lg.home_team_abbrev) ?? lg.home_team_abbrev, normalizeTeamCode(lg.away_team_abbrev) ?? lg.away_team_abbrev].sort().join('|') ===
-                        pairKey,
+                          pairKey,
                     ) ??
                     null
                   const status = String(live?.status ?? '').toLowerCase()
@@ -499,6 +500,7 @@ export default function DugoutPage() {
                           <div className="pg-gameCenter">
                             <Link
                               className="pg-link pg-gameTeams"
+                              style={{ color: 'var(--color-text)', textShadow: '0 1px 2px rgba(0,0,0,0.75)' }}
                               to={toProjections({ date: displayDate })}
                             >
                               {g.awayTeam} @ {g.homeTeam}
@@ -534,14 +536,14 @@ export default function DugoutPage() {
                                     </thead>
                                     <tbody>
                                       <tr>
-                                        <td>{g.awayTeam}</td>
+                                        <td className="pg-scoreboardTeamAbbrev">{g.awayTeam}</td>
                                         {cols.map((i) => <td key={i}>{i < awayInn.length ? awayInn[i] : '-'}</td>)}
                                         <td className="pg-scoreboard-totals">{live?.away_score ?? 0}</td>
                                         <td className="pg-scoreboard-totals">{live?.away_hits ?? 0}</td>
                                         <td className="pg-scoreboard-totals">{live?.away_errors ?? 0}</td>
                                       </tr>
                                       <tr>
-                                        <td>{g.homeTeam}</td>
+                                        <td className="pg-scoreboardTeamAbbrev">{g.homeTeam}</td>
                                         {cols.map((i) => <td key={i}>{i < homeInn.length ? homeInn[i] : '-'}</td>)}
                                         <td className="pg-scoreboard-totals">{live?.home_score ?? 0}</td>
                                         <td className="pg-scoreboard-totals">{live?.home_hits ?? 0}</td>
@@ -648,7 +650,7 @@ export default function DugoutPage() {
                               <Link
                                 className="pg-link pg-teamLink"
                                 to={toProjections({ date: displayDate, team: g.awayTeam })}
-                                style={{ color: awayPalette.primary }}
+                                style={teamAbbrevContrastStyle(awayPalette)}
                               >
                                 {g.awayTeam}
                               </Link>
@@ -695,7 +697,7 @@ export default function DugoutPage() {
                               <Link
                                 className="pg-link pg-teamLink"
                                 to={toProjections({ date: displayDate, team: g.homeTeam })}
-                                style={{ color: homePalette.primary }}
+                                style={teamAbbrevContrastStyle(homePalette)}
                               >
                                 {g.homeTeam}
                               </Link>

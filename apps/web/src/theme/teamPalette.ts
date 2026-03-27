@@ -1,3 +1,5 @@
+import type { CSSProperties } from 'react'
+
 export type TeamPalette = {
   primary: string
   secondary: string
@@ -71,6 +73,15 @@ export function paletteForTeam(team: string | null | undefined): TeamPalette {
   const code = normalizeTeamCode(team)
   if (!code) return DEFAULT_THEME
   return T[code] ?? DEFAULT_THEME
+}
+
+/** Team abbrev on dark dugout cards — `primary` is often navy; use palette `text` + shadow for readability. */
+export function teamAbbrevContrastStyle(p: TeamPalette): CSSProperties {
+  return {
+    color: p.text,
+    textShadow: `0 0 1px ${p.bg}, 0 1px 3px rgba(0,0,0,0.9)`,
+    fontWeight: 800,
+  }
 }
 
 export const FAVORITE_TEAM_OPTIONS = [

@@ -386,6 +386,85 @@ body,
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 28%, transparent);
 }
 
+/* Friends — add-a-friend panel (obvious entry point) */
+.fr-addSection {
+  margin: 0 0 22px;
+  padding: 16px 18px 18px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 38%, transparent);
+  background: linear-gradient(
+    165deg,
+    color-mix(in srgb, var(--color-surface) 78%, transparent),
+    color-mix(in srgb, var(--color-bg) 70%, transparent)
+  );
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22);
+}
+
+.fr-addHeading {
+  margin: 0 0 10px;
+  font-size: 1.05rem;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-text);
+}
+
+.fr-addHelp {
+  margin: 0 0 14px;
+  font-size: 0.9rem;
+  line-height: 1.55;
+  color: color-mix(in srgb, var(--color-secondary) 88%, transparent);
+  max-width: 44rem;
+}
+
+.fr-addLabel {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-secondary) 72%, transparent);
+  margin-bottom: 8px;
+}
+
+.fr-searchRow {
+  display: flex;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.fr-searchInput {
+  flex: 1;
+  min-width: 0;
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--color-surface) 82%, transparent),
+    color-mix(in srgb, var(--color-bg) 75%, var(--color-surface))
+  );
+  border: 1px solid color-mix(in srgb, var(--color-primary) 35%, transparent);
+  color: var(--color-text);
+  border-radius: 10px;
+  font-size: 1rem;
+  padding: 12px 14px;
+  outline: none;
+}
+
+.fr-searchInput:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 28%, transparent);
+}
+
+.fr-searchInput::placeholder {
+  color: color-mix(in srgb, var(--color-muted) 90%, transparent);
+}
+
+.fr-addHint {
+  margin: 10px 0 0;
+  font-size: 0.85rem;
+  color: color-mix(in srgb, var(--color-muted) 96%, transparent);
+  font-style: italic;
+}
+
 .acc-select option {
   color: #091326;
   background: #eef3ff;
@@ -742,7 +821,6 @@ body,
 }
 
 .pg-teamLink {
-  color: color-mix(in srgb, var(--color-primary) 70%, var(--color-secondary));
   font-weight: 800;
   letter-spacing: 0.02em;
 }
@@ -775,6 +853,12 @@ body,
   font-size: 1.05rem;
   font-weight: 900;
   letter-spacing: 0.02em;
+}
+
+.pg-scoreboardTeamAbbrev {
+  color: var(--color-text);
+  font-weight: 800;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);
 }
 
 .pg-weather {
@@ -1322,7 +1406,8 @@ body,
   text-transform: uppercase;
   letter-spacing: 0.08em;
   font-size: 0.68rem;
-  color: color-mix(in srgb, var(--color-primary) 55%, var(--color-secondary));
+  color: var(--color-text);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
   margin-bottom: 8px;
 }
 

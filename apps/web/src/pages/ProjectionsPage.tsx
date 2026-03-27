@@ -12,6 +12,7 @@ import {
 } from '@kinetic/shared'
 import { useWebAuth } from '../auth/WebAuthProvider.tsx'
 import { normalizeTeamCode } from '../theme/teamPalette'
+import { bdlRowMatchesCalendarDay } from '../utils/bdlCalendarDay'
 
 function tierColor(k: string): string {
   switch (k) {
@@ -67,7 +68,12 @@ export default function ProjectionsPage() {
     void getScheduleDates(supabase).then((dates) => {
       if (!dates.length) return
       setAvailableDates(dates)
-      setDisplayDate((d) => (dates.includes(d) ? d : dates[0]))
+      setDisplayDate((d) => {
+        if (dates.includes(d)) return d
+        const today = getAppDisplayDateIso()
+        if (dates.includes(today)) return today
+        return dates[dates.length - 1] ?? d
+      })
     })
   }, [supabase])
 
@@ -87,13 +93,7 @@ export default function ProjectionsPage() {
         setGames(sched)
         const raw = (live.data ?? []) as any[]
         const dayIso = displayDate
-        setLiveGames(
-          raw.filter((lg) => {
-            const d = lg.date
-            if (d == null) return true
-            return String(d).slice(0, 10) === dayIso
-          }),
-        )
+        setLiveGames(raw.filter((lg) => bdlRowMatchesCalendarDay(lg, dayIso)))
       })
       .finally(() => setLoading(false))
   }, [supabase, displayDate])
@@ -108,13 +108,7 @@ export default function ProjectionsPage() {
         .then(({ data }) => {
           const raw = (data ?? []) as any[]
           const dayIso = displayDate
-          setLiveGames(
-            raw.filter((lg) => {
-              const d = lg.date
-              if (d == null) return true
-              return String(d).slice(0, 10) === dayIso
-            }),
-          )
+          setLiveGames(raw.filter((lg) => bdlRowMatchesCalendarDay(lg, dayIso)))
         })
     }, 60000)
     return () => clearInterval(id)
