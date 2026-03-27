@@ -66,6 +66,9 @@ export default function DugoutPage() {
   // { [statPlayerId]: americanOdds number }
   const [playerOdds, setPlayerOdds] = useState<Record<string, number | null>>({})
   const [defaultSportsbook, setDefaultSportsbook] = useState<string>('draftkings')
+  type CachedLineupTeam = { players: { full_name: string; stat_player_id: string | null; position: string | null; batting_order: number | null }[]; source: 'confirmed' | 'yesterday' | 'none'; team: string }
+  const [cachedLineups, setCachedLineups] = useState<Record<string, { home: CachedLineupTeam; away: CachedLineupTeam }>>({})
+
 
   useEffect(() => {
     if (!supabase) return
@@ -97,22 +100,30 @@ export default function DugoutPage() {
   useEffect(() => {
     if (!supabase) return
     setLoading(true)
-    void Promise.all([
-      listDailyHrProjections(supabase, displayDate),
-      getGamesForDate(supabase, displayDate),
+    const dayIso = displayDate
+
+    // Load games first (fast, reliable), then projections separately so a
+    // projection failure doesn't prevent games from rendering.
+    const gamesP = Promise.all([
+      getGamesForDate(supabase, dayIso),
       supabase
         .from('bdl_games')
         .select('bdl_game_id,date,start_time_utc,home_team_abbrev,away_team_abbrev,status,home_score,away_score,home_hits,away_hits,home_errors,away_errors,home_inning_scores,away_inning_scores,current_period,scoring_summary')
-        .eq('date', displayDate),
-    ])
-      .then(([proj, sched, live]) => {
-        setRows(proj)
-        setGames(sched)
-        const raw = (live.data ?? []) as any[]
-        const dayIso = displayDate
-        setLiveGames(raw.filter((lg) => bdlRowMatchesCalendarDay(lg, dayIso)))
+        .eq('date', dayIso),
+    ]).then(([sched, live]) => {
+      setGames(sched)
+      const raw = (live.data ?? []) as any[]
+      setLiveGames(raw.filter((lg) => bdlRowMatchesCalendarDay(lg, dayIso)))
+    })
+
+    const projP = listDailyHrProjections(supabase, dayIso)
+      .then((proj) => setRows(proj))
+      .catch((err) => {
+        console.error('[DugoutPage] projection load failed:', err)
+        setRows([])
       })
-      .finally(() => setLoading(false))
+
+    void Promise.all([gamesP, projP]).finally(() => setLoading(false))
   }, [supabase, displayDate])
 
   // Fetch probable pitchers from BDL for this date
@@ -226,6 +237,38 @@ export default function DugoutPage() {
       displayDate.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0) % sorted.length
     return [sorted[idx]]
   }, [displayDate, games, hasSubscription, liveGames])
+
+  // Fetch cached lineups (confirmed or yesterday's projected) for all visible games
+  useEffect(() => {
+    const base = import.meta.env.VITE_API_BASE_URL ?? ''
+    if (!base || visibleGames.length === 0) {
+      setCachedLineups({})
+      return
+    }
+    const ac = new AbortController()
+    void (async () => {
+      const next: Record<string, { home: CachedLineupTeam; away: CachedLineupTeam }> = {}
+      await Promise.all(
+        visibleGames.map(async (g) => {
+          const home = normalizeTeamCode(g.homeTeam) ?? g.homeTeam
+          const away = normalizeTeamCode(g.awayTeam) ?? g.awayTeam
+          try {
+            const r = await fetch(
+              `${base}/bdl/cached-lineups?date=${displayDate}&home_team=${home}&away_team=${away}`,
+              { signal: ac.signal },
+            )
+            if (!r.ok) return
+            const json = await r.json()
+            if (json?.data) {
+              next[`${away}@${home}`] = json.data
+            }
+          } catch { /* aborted or network error */ }
+        }),
+      )
+      setCachedLineups(next)
+    })()
+    return () => ac.abort()
+  }, [displayDate, visibleGames])
 
   useEffect(() => {
     const base = import.meta.env.VITE_API_BASE_URL ?? ''
@@ -730,132 +773,159 @@ export default function DugoutPage() {
                           </div>
                         ) : (
                         <div className="pg-batterRow">
-                          <div className="pg-batterCol pg-batterCol--left">
-                            <div className="pg-batterTop">
-                              <span
-                                className="pg-avatar"
-                                aria-hidden="true"
-                                style={{
-                                  background: `linear-gradient(140deg, ${awayPalette.primary}, ${awayPalette.secondary})`,
-                                  color: awayPalette.bg,
-                                }}
-                              >
-                                {initials(awayTop?.name)}
-                              </span>
-                              <Link
-                                className="pg-link pg-teamLink"
-                                to={toProjections({ date: displayDate, team: g.awayTeam })}
-                                style={teamAbbrevContrastStyle(awayPalette)}
-                              >
-                                {g.awayTeam}
-                              </Link>
-                            </div>
-                            <div>
-                              {awayTop ? (
-                                <div className="pg-pickPlayerRow">
-                                  <button
-                                    type="button"
-                                    className={`pg-targetBtn ${Object.prototype.hasOwnProperty.call(pickState, awayTop.playerId) ? 'is-selected' : ''}`}
-                                    disabled={pickBusy === awayTop.playerId}
-                                    onClick={() => void togglePick(awayTop.playerId)}
-                                  >
-                                    🎯
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="pg-playerSelect"
-                                    onClick={() => void openMatchup(awayTop)}
-                                  >
-                                    {awayTop.name}
-                                  </button>
+                          {(() => {
+                            const lineupKey = `${awayKey}@${homeKey}`
+                            const cached = cachedLineups[lineupKey]
+                            const awayLeadoff = cached?.away?.players?.[0] ?? null
+                            const homeLeadoff = cached?.home?.players?.[0] ?? null
+                            const awayLineupSource = cached?.away?.source ?? 'none'
+                            const homeLineupSource = cached?.home?.source ?? 'none'
+                            const awayName = awayTop?.name ?? awayLeadoff?.full_name ?? null
+                            const homeName = homeTop?.name ?? homeLeadoff?.full_name ?? null
+                            const awayIsProjected = !awayTop && !!awayLeadoff
+                            const homeIsProjected = !homeTop && !!homeLeadoff
+
+                            return (
+                              <>
+                                <div className="pg-batterCol pg-batterCol--left">
+                                  <div className="pg-batterTop">
+                                    <span
+                                      className="pg-avatar"
+                                      aria-hidden="true"
+                                      style={{
+                                        background: `linear-gradient(140deg, ${awayPalette.primary}, ${awayPalette.secondary})`,
+                                        color: awayPalette.bg,
+                                      }}
+                                    >
+                                      {initials(awayName)}
+                                    </span>
+                                    <Link
+                                      className="pg-link pg-teamLink"
+                                      to={toProjections({ date: displayDate, team: g.awayTeam })}
+                                      style={teamAbbrevContrastStyle(awayPalette)}
+                                    >
+                                      {g.awayTeam}
+                                    </Link>
+                                  </div>
+                                  <div>
+                                    {awayTop ? (
+                                      <div className="pg-pickPlayerRow">
+                                        <button
+                                          type="button"
+                                          className={`pg-targetBtn ${Object.prototype.hasOwnProperty.call(pickState, awayTop.playerId) ? 'is-selected' : ''}`}
+                                          disabled={pickBusy === awayTop.playerId}
+                                          onClick={() => void togglePick(awayTop.playerId)}
+                                        >
+                                          🎯
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className="pg-playerSelect"
+                                          onClick={() => void openMatchup(awayTop)}
+                                        >
+                                          {awayTop.name}
+                                        </button>
+                                      </div>
+                                    ) : awayName ? (
+                                      <div className="pg-pickPlayerRow">
+                                        <span className="pg-lineupName pg-lineupName--plain">{awayName}</span>
+                                        {awayIsProjected && <span className="pg-lineupBadge">{awayLineupSource === 'yesterday' ? 'Yesterday' : 'Projected'}</span>}
+                                      </div>
+                                    ) : (
+                                      <span className="pg-gamePick--muted">—</span>
+                                    )}
+                                  </div>
+                                  <div className="pg-batterProb">
+                                    <span style={{ color: awayPalette.primary }}>
+                                      {awayTop ? formatProbability(awayTop.hrProbability) : '—'}
+                                    </span>
+                                    {awayTop?.americanOddsStr ? (
+                                      <span className="pg-batterOdds">{awayTop.americanOddsStr}</span>
+                                    ) : null}
+                                    {awayTop && playerOdds[awayTop.playerId] != null ? (
+                                      <span className="pg-batterBookOdds" title={`${defaultSportsbook} HR odds`}>
+                                        {defaultSportsbook.charAt(0).toUpperCase() + defaultSportsbook.slice(1)}{' '}
+                                        {playerOdds[awayTop.playerId]! >= 0 ? `+${playerOdds[awayTop.playerId]}` : String(playerOdds[awayTop.playerId])}
+                                      </span>
+                                    ) : null}
+                                    {awayTop && Object.prototype.hasOwnProperty.call(pickState, awayTop.playerId) ? (
+                                      <span className={`pg-pickState ${String(pickState[awayTop.playerId] ?? 'pending')}`}>
+                                        {pickStatusLabel(pickState[awayTop.playerId])}
+                                      </span>
+                                    ) : null}
+                                  </div>
                                 </div>
-                              ) : (
-                                <span className="pg-gamePick--muted">—</span>
-                              )}
-                            </div>
-                            <div className="pg-batterProb">
-                              <span style={{ color: awayPalette.primary }}>
-                                {awayTop ? formatProbability(awayTop.hrProbability) : '—'}
-                              </span>
-                              {awayTop?.americanOddsStr ? (
-                                <span className="pg-batterOdds">{awayTop.americanOddsStr}</span>
-                              ) : null}
-                              {awayTop && playerOdds[awayTop.playerId] != null ? (
-                                <span className="pg-batterBookOdds" title={`${defaultSportsbook} HR odds`}>
-                                  {defaultSportsbook.charAt(0).toUpperCase() + defaultSportsbook.slice(1)}{' '}
-                                  {playerOdds[awayTop.playerId]! >= 0 ? `+${playerOdds[awayTop.playerId]}` : String(playerOdds[awayTop.playerId])}
-                                </span>
-                              ) : null}
-                              {awayTop && Object.prototype.hasOwnProperty.call(pickState, awayTop.playerId) ? (
-                                <span className={`pg-pickState ${String(pickState[awayTop.playerId] ?? 'pending')}`}>
-                                  {pickStatusLabel(pickState[awayTop.playerId])}
-                                </span>
-                              ) : null}
-                            </div>
-                          </div>
-                          <div className="pg-batterCol pg-batterCol--right">
-                            <div className="pg-batterTop pg-batterTop--right">
-                              <Link
-                                className="pg-link pg-teamLink"
-                                to={toProjections({ date: displayDate, team: g.homeTeam })}
-                                style={teamAbbrevContrastStyle(homePalette)}
-                              >
-                                {g.homeTeam}
-                              </Link>
-                              <span
-                                className="pg-avatar"
-                                aria-hidden="true"
-                                style={{
-                                  background: `linear-gradient(140deg, ${homePalette.primary}, ${homePalette.secondary})`,
-                                  color: homePalette.bg,
-                                }}
-                              >
-                                {initials(homeTop?.name)}
-                              </span>
-                            </div>
-                            <div>
-                              {homeTop ? (
-                                <div className="pg-pickPlayerRow pg-pickPlayerRow--right">
-                                  <button
-                                    type="button"
-                                    className="pg-playerSelect"
-                                    onClick={() => void openMatchup(homeTop)}
-                                  >
-                                    {homeTop.name}
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className={`pg-targetBtn ${Object.prototype.hasOwnProperty.call(pickState, homeTop.playerId) ? 'is-selected' : ''}`}
-                                    disabled={pickBusy === homeTop.playerId}
-                                    onClick={() => void togglePick(homeTop.playerId)}
-                                  >
-                                    🎯
-                                  </button>
+                                <div className="pg-batterCol pg-batterCol--right">
+                                  <div className="pg-batterTop pg-batterTop--right">
+                                    <Link
+                                      className="pg-link pg-teamLink"
+                                      to={toProjections({ date: displayDate, team: g.homeTeam })}
+                                      style={teamAbbrevContrastStyle(homePalette)}
+                                    >
+                                      {g.homeTeam}
+                                    </Link>
+                                    <span
+                                      className="pg-avatar"
+                                      aria-hidden="true"
+                                      style={{
+                                        background: `linear-gradient(140deg, ${homePalette.primary}, ${homePalette.secondary})`,
+                                        color: homePalette.bg,
+                                      }}
+                                    >
+                                      {initials(homeName)}
+                                    </span>
+                                  </div>
+                                  <div>
+                                    {homeTop ? (
+                                      <div className="pg-pickPlayerRow pg-pickPlayerRow--right">
+                                        <button
+                                          type="button"
+                                          className="pg-playerSelect"
+                                          onClick={() => void openMatchup(homeTop)}
+                                        >
+                                          {homeTop.name}
+                                        </button>
+                                        <button
+                                          type="button"
+                                          className={`pg-targetBtn ${Object.prototype.hasOwnProperty.call(pickState, homeTop.playerId) ? 'is-selected' : ''}`}
+                                          disabled={pickBusy === homeTop.playerId}
+                                          onClick={() => void togglePick(homeTop.playerId)}
+                                        >
+                                          🎯
+                                        </button>
+                                      </div>
+                                    ) : homeName ? (
+                                      <div className="pg-pickPlayerRow pg-pickPlayerRow--right">
+                                        <span className="pg-lineupName pg-lineupName--plain">{homeName}</span>
+                                        {homeIsProjected && <span className="pg-lineupBadge">{homeLineupSource === 'yesterday' ? 'Yesterday' : 'Projected'}</span>}
+                                      </div>
+                                    ) : (
+                                      <span className="pg-gamePick--muted">—</span>
+                                    )}
+                                  </div>
+                                  <div className="pg-batterProb">
+                                    <span style={{ color: homePalette.primary }}>
+                                      {homeTop ? formatProbability(homeTop.hrProbability) : '—'}
+                                    </span>
+                                    {homeTop?.americanOddsStr ? (
+                                      <span className="pg-batterOdds">{homeTop.americanOddsStr}</span>
+                                    ) : null}
+                                    {homeTop && playerOdds[homeTop.playerId] != null ? (
+                                      <span className="pg-batterBookOdds" title={`${defaultSportsbook} HR odds`}>
+                                        {defaultSportsbook.charAt(0).toUpperCase() + defaultSportsbook.slice(1)}{' '}
+                                        {playerOdds[homeTop.playerId]! >= 0 ? `+${playerOdds[homeTop.playerId]}` : String(playerOdds[homeTop.playerId])}
+                                      </span>
+                                    ) : null}
+                                    {homeTop && Object.prototype.hasOwnProperty.call(pickState, homeTop.playerId) ? (
+                                      <span className={`pg-pickState ${String(pickState[homeTop.playerId] ?? 'pending')}`}>
+                                        {pickStatusLabel(pickState[homeTop.playerId])}
+                                      </span>
+                                    ) : null}
+                                  </div>
                                 </div>
-                              ) : (
-                                <span className="pg-gamePick--muted">—</span>
-                              )}
-                            </div>
-                            <div className="pg-batterProb">
-                              <span style={{ color: homePalette.primary }}>
-                                {homeTop ? formatProbability(homeTop.hrProbability) : '—'}
-                              </span>
-                              {homeTop?.americanOddsStr ? (
-                                <span className="pg-batterOdds">{homeTop.americanOddsStr}</span>
-                              ) : null}
-                              {homeTop && playerOdds[homeTop.playerId] != null ? (
-                                <span className="pg-batterBookOdds" title={`${defaultSportsbook} HR odds`}>
-                                  {defaultSportsbook.charAt(0).toUpperCase() + defaultSportsbook.slice(1)}{' '}
-                                  {playerOdds[homeTop.playerId]! >= 0 ? `+${playerOdds[homeTop.playerId]}` : String(playerOdds[homeTop.playerId])}
-                                </span>
-                              ) : null}
-                              {homeTop && Object.prototype.hasOwnProperty.call(pickState, homeTop.playerId) ? (
-                                <span className={`pg-pickState ${String(pickState[homeTop.playerId] ?? 'pending')}`}>
-                                  {pickStatusLabel(pickState[homeTop.playerId])}
-                                </span>
-                              ) : null}
-                            </div>
-                          </div>
+                              </>
+                            )
+                          })()}
                         </div>
                         )}
                       </div>
@@ -977,14 +1047,17 @@ export default function DugoutPage() {
                                 )
                               }
 
-                              // Projected fallback (from daily_hr_projections)
+                              // Projected fallback — try daily projections first, then cached lineups
                               const toTeamKey = (t: string | null | undefined) => normalizeTeamCode(t ?? '') ?? t ?? ''
-                              const awayKey = normalizeTeamCode(g.awayTeam) ?? g.awayTeam
-                              const homeKey = normalizeTeamCode(g.homeTeam) ?? g.homeTeam
-                              const awayLineup = rows.filter((p) => toTeamKey(p.team) === awayKey).slice().sort((a, b) => (b.hrProbability ?? -1) - (a.hrProbability ?? -1))
-                              const homeLineup = rows.filter((p) => toTeamKey(p.team) === homeKey).slice().sort((a, b) => (b.hrProbability ?? -1) - (a.hrProbability ?? -1))
+                              const detailAwayKey = normalizeTeamCode(g.awayTeam) ?? g.awayTeam
+                              const detailHomeKey = normalizeTeamCode(g.homeTeam) ?? g.homeTeam
+                              const awayLineup = rows.filter((p) => toTeamKey(p.team) === detailAwayKey).slice().sort((a, b) => (b.hrProbability ?? -1) - (a.hrProbability ?? -1))
+                              const homeLineup = rows.filter((p) => toTeamKey(p.team) === detailHomeKey).slice().sort((a, b) => (b.hrProbability ?? -1) - (a.hrProbability ?? -1))
 
-                              if (!awayLineup.length && !homeLineup.length) {
+                              const detailLineupKey = `${detailAwayKey}@${detailHomeKey}`
+                              const detailCached = cachedLineups[detailLineupKey]
+
+                              if (!awayLineup.length && !homeLineup.length && !detailCached) {
                                 return (
                                   <div className="pg-sub" style={{ marginTop: 12 }}>
                                     Lineup not posted yet.{bdlGameIdStr && bdlLineup === null ? ' BDL returned no lineup for this game.' : ''}
@@ -992,37 +1065,77 @@ export default function DugoutPage() {
                                 )
                               }
 
-                              const renderProjTeam = (lineup: typeof awayLineup, teamCode: string) => (
-                                <div className="pg-lineupTeam">
-                                  <div className="pg-lineupTeamTitle">{teamCode} <span className="pg-lineupBadge">Projected</span></div>
-                                  {lineup.map((p, idx) => {
-                                    const hasPick = Object.prototype.hasOwnProperty.call(pickState, p.playerId)
-                                    return (
-                                      <div key={p.playerId} className="pg-lineupRow">
-                                        <span className="pg-lineupOrder">{ordinal(idx + 1)}</span>
-                                        <span className="pg-lineupPos">{String(p.position ?? '—').toUpperCase().slice(0, 3)}</span>
-                                        <button type="button" className="pg-lineupName" onClick={() => void openMatchup(p)}>
-                                          {p.name}
-                                        </button>
-                                        <span className="pg-lineupProj">{formatProbability(p.hrProbability)}</span>
-                                        <button
-                                          type="button"
-                                          className={`pg-targetBtn ${hasPick ? 'is-selected' : ''}`}
-                                          disabled={pickBusy === p.playerId}
-                                          onClick={() => void togglePick(p.playerId)}
-                                        >
-                                          🎯
-                                        </button>
-                                      </div>
-                                    )
-                                  })}
-                                </div>
-                              )
+                              if (awayLineup.length || homeLineup.length) {
+                                const renderProjTeam = (lineup: typeof awayLineup, teamCode: string) => (
+                                  <div className="pg-lineupTeam">
+                                    <div className="pg-lineupTeamTitle">{teamCode} <span className="pg-lineupBadge">Projected</span></div>
+                                    {lineup.map((p, idx) => {
+                                      const hasPick = Object.prototype.hasOwnProperty.call(pickState, p.playerId)
+                                      return (
+                                        <div key={p.playerId} className="pg-lineupRow">
+                                          <span className="pg-lineupOrder">{ordinal(idx + 1)}</span>
+                                          <span className="pg-lineupPos">{String(p.position ?? '—').toUpperCase().slice(0, 3)}</span>
+                                          <button type="button" className="pg-lineupName" onClick={() => void openMatchup(p)}>
+                                            {p.name}
+                                          </button>
+                                          <span className="pg-lineupProj">{formatProbability(p.hrProbability)}</span>
+                                          <button
+                                            type="button"
+                                            className={`pg-targetBtn ${hasPick ? 'is-selected' : ''}`}
+                                            disabled={pickBusy === p.playerId}
+                                            onClick={() => void togglePick(p.playerId)}
+                                          >
+                                            🎯
+                                          </button>
+                                        </div>
+                                      )
+                                    })}
+                                  </div>
+                                )
+
+                                return (
+                                  <div className="pg-lineupGrid" style={{ marginTop: 12 }}>
+                                    {renderProjTeam(awayLineup, g.awayTeam)}
+                                    {renderProjTeam(homeLineup, g.homeTeam)}
+                                  </div>
+                                )
+                              }
+
+                              // Fall back to cached lineups (yesterday's or confirmed)
+                              const renderCachedTeam = (team: CachedLineupTeam, teamCode: string) => {
+                                if (!team?.players?.length) return null
+                                const badgeLabel = team.source === 'confirmed' ? 'Confirmed' : team.source === 'yesterday' ? "Yesterday's Lineup" : 'Projected'
+                                return (
+                                  <div className="pg-lineupTeam">
+                                    <div className="pg-lineupTeamTitle">{teamCode} <span className="pg-lineupBadge">{badgeLabel}</span></div>
+                                    {team.players
+                                      .filter((p: any) => p.batting_order != null && p.batting_order > 0)
+                                      .map((p: any, idx: number) => {
+                                        const proj = p.stat_player_id ? rows.find((r) => r.playerId === p.stat_player_id) : null
+                                        return (
+                                          <div key={p.bdl_player_id ?? idx} className="pg-lineupRow">
+                                            <span className="pg-lineupOrder">{ordinal(idx + 1)}</span>
+                                            <span className="pg-lineupPos">{String(p.position ?? '—').toUpperCase().slice(0, 3)}</span>
+                                            {proj ? (
+                                              <button type="button" className="pg-lineupName" onClick={() => void openMatchup(proj)}>
+                                                {p.full_name ?? proj.name}
+                                              </button>
+                                            ) : (
+                                              <span className="pg-lineupName pg-lineupName--plain">{p.full_name ?? '—'}</span>
+                                            )}
+                                            <span className="pg-lineupProj">{proj ? formatProbability(proj.hrProbability) : '—'}</span>
+                                            <span style={{ width: 32 }} />
+                                          </div>
+                                        )
+                                      })}
+                                  </div>
+                                )
+                              }
 
                               return (
                                 <div className="pg-lineupGrid" style={{ marginTop: 12 }}>
-                                  {renderProjTeam(awayLineup, g.awayTeam)}
-                                  {renderProjTeam(homeLineup, g.homeTeam)}
+                                  {detailCached?.away ? renderCachedTeam(detailCached.away, g.awayTeam) : null}
+                                  {detailCached?.home ? renderCachedTeam(detailCached.home, g.homeTeam) : null}
                                 </div>
                               )
                             })()}

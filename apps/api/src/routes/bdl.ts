@@ -970,4 +970,67 @@ export function registerBdlRoutes(app: Express) {
       res.status(500).json({ error: e instanceof Error ? e.message : String(e) })
     }
   })
+
+  /**
+   * Cached lineups: returns today's confirmed lineup if available,
+   * otherwise yesterday's lineup as a projected fallback.
+   * Query: ?date=YYYY-MM-DD&home_team=XXX&away_team=YYY
+   */
+  app.get('/bdl/cached-lineups', async (req, res) => {
+    try {
+      const date = String(req.query.date ?? '').trim()
+      const homeTeam = String(req.query.home_team ?? '').trim().toUpperCase()
+      const awayTeam = String(req.query.away_team ?? '').trim().toUpperCase()
+      if (!date) { res.status(400).json({ error: 'date required' }); return }
+
+      const sb = getServiceClient()
+
+      const fetchTeamLineup = async (team: string, side: string) => {
+        // Try today's confirmed lineup first
+        const { data: today } = await sb
+          .from('bdl_lineups')
+          .select('bdl_player_id, stat_player_id, full_name, position, batting_order, is_confirmed')
+          .eq('date', date)
+          .eq('team_abbrev', team)
+          .order('batting_order', { ascending: true })
+
+        if (today?.length) {
+          return { players: today, source: 'confirmed' as const }
+        }
+
+        // Fall back to the most recent previous lineup for this team
+        const { data: prev } = await sb
+          .from('bdl_lineups')
+          .select('bdl_player_id, stat_player_id, full_name, position, batting_order, is_confirmed, date')
+          .eq('team_abbrev', team)
+          .eq('is_confirmed', true)
+          .lt('date', date)
+          .order('date', { ascending: false })
+          .limit(20)
+
+        if (prev?.length) {
+          const latestDate = (prev[0] as any).date
+          const latest = prev.filter((r: any) => r.date === latestDate)
+          return { players: latest, source: 'yesterday' as const }
+        }
+
+        return { players: [], source: 'none' as const }
+      }
+
+      const [home, away] = await Promise.all([
+        homeTeam ? fetchTeamLineup(homeTeam, 'home') : Promise.resolve({ players: [], source: 'none' as const }),
+        awayTeam ? fetchTeamLineup(awayTeam, 'away') : Promise.resolve({ players: [], source: 'none' as const }),
+      ])
+
+      res.json({
+        data: {
+          home: { ...home, team: homeTeam },
+          away: { ...away, team: awayTeam },
+        },
+      })
+    } catch (e) {
+      console.error('[bdl/cached-lineups] failed:', e)
+      res.status(500).json({ error: e instanceof Error ? e.message : String(e) })
+    }
+  })
 }
