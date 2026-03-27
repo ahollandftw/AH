@@ -1,8 +1,9 @@
 /**
- * Pure HR probability calculation engine.
- * No database dependencies — takes raw numeric inputs and returns
- * probability, American odds, and tier grade.
+ * HR helpers + legacy input shape bridged to the logistic model in `./models/hr`.
  */
+
+import { computeGameHrProbability } from './models/hr/hrProbability.js'
+import { expectedPaFromLineupSlot } from './models/hr/expectedPA.js'
 
 export type HrProbabilityInput = {
   brl_percent: number
@@ -29,8 +30,6 @@ export type HrProbabilityResult = {
 
 const LEAGUE_AVG_HR_TOTAL = 20
 const LEAGUE_AVG_MATCHUP = 0.400
-const MIN_PROB = 0.01
-const MAX_PROB = 0.60
 
 export function calcPowerScore(
   brl_percent: number,
@@ -87,7 +86,12 @@ export function probToTier(prob: number): string {
   return 'D'
 }
 
+/**
+ * Bridges legacy scalar inputs to the logistic model using coarse z-scales
+ * (no league table; use `computeGameHrProbability` with real z when possible).
+ */
 export function calculateHrProbability(input: HrProbabilityInput): HrProbabilityResult {
+  const baseHrRate = calcBaseHrRate(input.hr_total, input.attempts)
   const powerScore = calcPowerScore(
     input.brl_percent,
     input.ev95percent,
@@ -96,11 +100,26 @@ export function calculateHrProbability(input: HrProbabilityInput): HrProbability
   )
   const pitcherFactor = calcPitcherFactor(input.pitcher_hr_total)
   const normalizedMatchup = calcNormalizedMatchup(input.matchup_score)
-  const baseHrRate = calcBaseHrRate(input.hr_total, input.attempts)
 
-  let probability = baseHrRate * powerScore * pitcherFactor * normalizedMatchup
-  probability = Math.max(MIN_PROB, Math.min(MAX_PROB, probability))
+  const zHrPerPa = (baseHrRate - 0.035) / 0.025
+  const zPower = (powerScore - 22) / 8
+  const zPitcher = (input.pitcher_hr_total - 20) / 12
+  const zMatchup = (input.matchup_score - 0.4) / 0.1
 
+  const out = computeGameHrProbability({
+    features: {
+      zHrPerPa: Number.isFinite(zHrPerPa) ? zHrPerPa : null,
+      zPower: Number.isFinite(zPower) ? zPower : null,
+      zPitcher: Number.isFinite(zPitcher) ? zPitcher : null,
+      zMatchup: Number.isFinite(zMatchup) ? zMatchup : null,
+      zPark: null,
+      zHandedness: null,
+      zWeather: null,
+    },
+    expectedPa: expectedPaFromLineupSlot(undefined),
+  })
+
+  const probability = out.probability
   const americanOdds = probToAmericanOdds(probability)
 
   return {
@@ -108,7 +127,7 @@ export function calculateHrProbability(input: HrProbabilityInput): HrProbability
     probabilityPct: `${Math.round(probability * 1000) / 10}%`,
     americanOdds,
     americanOddsStr: formatAmericanOdds(americanOdds),
-    tier: probToTier(probability),
+    tier: out.tier,
     powerScore,
     pitcherFactor,
     normalizedMatchup,

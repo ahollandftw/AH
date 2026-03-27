@@ -1,12 +1,10 @@
+/**
+ * HR matchup engine (logistic + z-scores). Kept in sync with
+ * `packages/shared/src/projections.ts` — update both when changing the model.
+ */
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { fetchMaxBattingHomerunYear } from './statsQueries'
-import { getAppDisplayDateIso } from './displayDate'
-import {
-  formatAmericanOdds,
-  probToAmericanOdds,
-  probToTier,
-} from './hrProbability'
-import { getBallparkForHomeTeam } from './mlbBallparks'
+import { fetchMaxBattingHomerunYear } from './statsHomerunYear.js'
+import { getBallparkForHomeTeam } from './mlbBallparks.js'
 import { computeGameHrProbability } from './models/hr/hrProbability.js'
 import { expectedPaFromLineupSlot } from './models/hr/expectedPA.js'
 import { meanStd, zScore } from './models/hr/normalize.js'
@@ -16,6 +14,26 @@ import {
   type RawBatterPowerParts,
   type RawPitcherParts,
 } from './models/hr/features.js'
+
+function probToAmericanOdds(prob: number): number {
+  if (prob <= 0) return 9999
+  if (prob >= 1) return -9999
+  if (prob >= 0.5) return Math.round(-(prob / (1 - prob)) * 100)
+  return Math.round(((1 - prob) / prob) * 100)
+}
+
+function formatAmericanOdds(odds: number): string {
+  return odds >= 0 ? `+${odds}` : `${odds}`
+}
+
+function probToTier(prob: number): string {
+  const pct = prob * 100
+  if (pct >= 25) return 'A+'
+  if (pct >= 20) return 'A'
+  if (pct >= 15) return 'B'
+  if (pct >= 10) return 'C'
+  return 'D'
+}
 
 export type DailyProjection = {
   playerId: string
@@ -637,20 +655,6 @@ async function calculateMatchupProjections(
   return results
 }
 
-/* ─── Public API ─────────────────────────────────────────────────── */
-
-export async function listDailyHrProjections(
-  supabase: SupabaseClient,
-  dateIso?: string,
-): Promise<DailyProjection[]> {
-  const date = dateIso ?? getAppDisplayDateIso()
-
-  const fromDaily = await listDailyHrProjectionsFromTable(supabase, date)
-  if (fromDaily.length > 0) return fromDaily
-
-  return calculateMatchupProjections(supabase, date)
-}
-
 async function getGamesForDateRaw(supabase: SupabaseClient, dateIso: string) {
   const { data: bdl, error: bdlErr } = await supabase
     .from('bdl_games')
@@ -670,66 +674,4 @@ async function getGamesForDateRaw(supabase: SupabaseClient, dateIso: string) {
   return data as { home_team: string; away_team: string }[]
 }
 
-/**
- * Daily table first, then HR model for any player missing from `daily_hr_projections`.
- * Use for matchup "today%" when you need complete coverage.
- */
-export async function mergedHrProbabilityMapForDate(
-  supabase: SupabaseClient,
-  dateIso: string,
-  playerIdsHint?: Iterable<string>,
-): Promise<Map<string, number>> {
-  const out = new Map<string, number>()
-  const fromDaily = await listDailyHrProjectionsFromTable(supabase, dateIso)
-  for (const d of fromDaily) {
-    if (d.hrProbability != null) out.set(d.playerId, d.hrProbability)
-  }
-
-  const hint = playerIdsHint ? new Set(playerIdsHint) : null
-  const needCalc =
-    !fromDaily.length ||
-    (hint != null && [...hint].some((id) => !out.has(id)))
-  if (!needCalc) return out
-
-  const fromCalc = await calculateMatchupProjections(supabase, dateIso)
-  for (const d of fromCalc) {
-    if (!out.has(d.playerId) && d.hrProbability != null) {
-      out.set(d.playerId, d.hrProbability)
-    }
-  }
-  return out
-}
-
-export function formatProbability(p: number | null) {
-  if (p == null || Number.isNaN(p)) return '—'
-  return `${Math.round(p * 1000) / 10}%`
-}
-
-const TIER_ORDER = ['A+', 'A', 'B', 'C', 'D'] as const
-
-export function groupProjectionsByTier(
-  rows: DailyProjection[],
-): { tierKey: string; tierLabel: string; data: DailyProjection[] }[] {
-  const buckets = new Map<string, DailyProjection[]>()
-  for (const r of rows) {
-    const raw = (r.tier ?? '').trim().toUpperCase()
-    const key = TIER_ORDER.includes(raw as (typeof TIER_ORDER)[number])
-      ? raw
-      : 'OTHER'
-    if (!buckets.has(key)) buckets.set(key, [])
-    buckets.get(key)!.push(r)
-  }
-
-  const out: { tierKey: string; tierLabel: string; data: DailyProjection[] }[] = []
-  for (const t of TIER_ORDER) {
-    const data = buckets.get(t)
-    if (data?.length) {
-      out.push({ tierKey: t, tierLabel: `${t} Tier`, data })
-    }
-  }
-  const other = buckets.get('OTHER')
-  if (other?.length) {
-    out.push({ tierKey: 'OTHER', tierLabel: 'Other', data: other })
-  }
-  return out
-}
+export { calculateMatchupProjections, listDailyHrProjectionsFromTable }

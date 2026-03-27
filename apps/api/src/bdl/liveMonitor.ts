@@ -120,7 +120,7 @@ async function pollGamePlays(bdlGameId: number, lastOrder: number): Promise<numb
     const pitchType = play.pitch_type ?? lastPitch?.pitch_type ?? lastPitch?.pitch_type_code ?? null
     const hitDistance = lastPitch?.hit_distance ?? distanceFromText ?? null
 
-    const enrich = await buildHrEventEnrichment(sb, bdlGameId, play.batter_id, play.pitcher_id ?? null)
+    const enrich = await buildHrEventEnrichment(sb, bdlGameId, play.batter_id, play.pitcher_id ?? null, statId)
 
     try {
       await sb.from('bdl_hr_events').upsert(

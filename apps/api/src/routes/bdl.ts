@@ -761,7 +761,7 @@ export function registerBdlRoutes(app: Express) {
           const pitchType = play.pitch_type ?? lastPitch?.pitch_type ?? lastPitch?.pitch_type_code ?? null
           const hitDistance = lastPitch?.hit_distance ?? distanceFromText ?? null
 
-          const enrich = await buildHrEventEnrichment(sb, gameId, play.batter_id, play.pitcher_id ?? null)
+          const enrich = await buildHrEventEnrichment(sb, gameId, play.batter_id, play.pitcher_id ?? null, statId)
 
           try {
             await sb.from('bdl_hr_events').upsert(
@@ -816,7 +816,7 @@ export function registerBdlRoutes(app: Express) {
       const sb = getServiceClient()
       const { data: events, error } = await sb
         .from('bdl_hr_events')
-        .select('id,bdl_game_id,bdl_batter_id,bdl_pitcher_id')
+        .select('id,bdl_game_id,bdl_batter_id,bdl_pitcher_id,stat_player_id')
         .limit(5000)
       if (error) throw error
       let updated = 0
@@ -826,6 +826,7 @@ export function registerBdlRoutes(app: Express) {
           Number(ev.bdl_game_id),
           Number(ev.bdl_batter_id),
           ev.bdl_pitcher_id != null ? Number(ev.bdl_pitcher_id) : null,
+          ev.stat_player_id ?? null,
         )
         await sb.from('bdl_hr_events').update(enrich).eq('id', ev.id)
         updated++
