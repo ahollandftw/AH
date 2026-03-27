@@ -27,9 +27,30 @@ function utcToETDateIso(utcStr: string): string | null {
   }
 }
 
-/** Stable pair key for deduplication (order-independent). */
+/**
+ * Canonical team abbreviation — collapses known aliases so the same franchise
+ * isn't counted twice (e.g. the Athletics were "OAK" in the CSV schedule but
+ * appear as "ATH" in the BDL feed after their relocation).
+ */
+const TEAM_CANON: Record<string, string> = {
+  OAK: 'ATH',
+  TB: 'TBR',
+  WAS: 'WSN', WSH: 'WSN',
+  AZ: 'ARI',
+  KC: 'KCR',
+  SF: 'SFG',
+  SD: 'SDP',
+  CWS: 'CHW',
+  LAA: 'LAA',
+}
+function canonTeam(t: string): string {
+  const u = t.toUpperCase()
+  return TEAM_CANON[u] ?? u
+}
+
+/** Stable pair key for deduplication (order-independent, alias-normalised). */
 function teamPairKey(a: string, b: string): string {
-  return [a.toUpperCase(), b.toUpperCase()].sort().join('|')
+  return [canonTeam(a), canonTeam(b)].sort().join('|')
 }
 
 export async function getGamesForDate(

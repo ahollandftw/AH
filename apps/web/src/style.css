@@ -139,6 +139,29 @@ body,
 .topBanner-side--right {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+}
+
+.topBanner-signOutBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 28%, transparent);
+  background: color-mix(in srgb, var(--color-surface) 55%, transparent);
+  color: var(--color-muted);
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+  flex-shrink: 0;
+}
+
+.topBanner-signOutBtn:hover {
+  border-color: color-mix(in srgb, var(--color-primary) 55%, transparent);
+  color: var(--color-text);
+  background: color-mix(in srgb, var(--color-surface) 80%, transparent);
 }
 
 .topBanner-logoLink {
@@ -1039,6 +1062,15 @@ body,
   font-weight: 700;
   color: var(--color-muted);
   margin-top: 1px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pg-batterBookOdds {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: color-mix(in srgb, var(--color-primary) 75%, var(--color-secondary));
+  margin-top: 2px;
   font-variant-numeric: tabular-nums;
 }
 

@@ -840,6 +840,43 @@ export function registerBdlRoutes(app: Express) {
     }
   })
 
+  /* ── Probable pitchers for a date ───────────────────────────────── */
+  app.get('/bdl/probable-pitchers', async (req, res) => {
+    try {
+      const date = String(req.query.date ?? '').trim()
+      if (!date) { res.status(400).json({ error: 'date required' }); return }
+
+      type BdlProbablePitcherEntry = {
+        game_id: number
+        home_probable_pitcher?: { id: number; full_name: string } | null
+        away_probable_pitcher?: { id: number; full_name: string } | null
+      }
+      type BdlProbablePitchersResponse = { data?: BdlProbablePitcherEntry[] }
+
+      let raw: BdlProbablePitchersResponse
+      try {
+        raw = await bdlFetch<BdlProbablePitchersResponse>('/mlb/v1/probable_pitchers', { 'dates[]': date })
+      } catch {
+        res.json({ data: [] })
+        return
+      }
+
+      const entries = raw?.data ?? []
+      // Index by bdl_game_id for easy lookup
+      const out: Record<number, { home: string | null; away: string | null }> = {}
+      for (const e of entries) {
+        out[e.game_id] = {
+          home: e.home_probable_pitcher?.full_name ?? null,
+          away: e.away_probable_pitcher?.full_name ?? null,
+        }
+      }
+      res.json({ data: out })
+    } catch (e) {
+      console.error('[bdl/probable-pitchers] failed:', e)
+      res.status(500).json({ error: e instanceof Error ? e.message : String(e) })
+    }
+  })
+
   /* ── Lineup: fetch from BDL and cross-ref to stat_player_id ─────── */
   app.get('/bdl/lineup', async (req, res) => {
     try {

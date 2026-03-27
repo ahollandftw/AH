@@ -61,6 +61,11 @@ export default function DugoutPage() {
   type LineupPlayer = { bdl_player_id: number | null; stat_player_id: string | null; full_name: string | null; position: string | null; batting_order: number | null }
   const [lineupByGame, setLineupByGame] = useState<Record<string, { home: LineupPlayer[]; away: LineupPlayer[] } | null>>({})
   const [lineupLoadingFor, setLineupLoadingFor] = useState<string | null>(null)
+  // { [bdlGameId]: { home: pitcherName|null, away: pitcherName|null } }
+  const [probablePitchers, setProbablePitchers] = useState<Record<string, { home: string | null; away: string | null }>>({})
+  // { [statPlayerId]: americanOdds number }
+  const [playerOdds, setPlayerOdds] = useState<Record<string, number | null>>({})
+  const [defaultSportsbook, setDefaultSportsbook] = useState<string>('draftkings')
 
   useEffect(() => {
     if (!supabase) return
@@ -75,6 +80,19 @@ export default function DugoutPage() {
       })
     })
   }, [supabase])
+
+  // Load user's preferred sportsbook
+  useEffect(() => {
+    if (!supabase || !session?.user.id) return
+    void supabase
+      .from('user_settings')
+      .select('default_sportsbook')
+      .eq('user_id', session.user.id)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (data?.default_sportsbook) setDefaultSportsbook(String(data.default_sportsbook))
+      })
+  }, [supabase, session?.user.id])
 
   useEffect(() => {
     if (!supabase) return
@@ -97,6 +115,18 @@ export default function DugoutPage() {
       .finally(() => setLoading(false))
   }, [supabase, displayDate])
 
+  // Fetch probable pitchers from BDL for this date
+  useEffect(() => {
+    const base = import.meta.env.VITE_API_BASE_URL ?? ''
+    if (!base) return
+    void fetch(`${base}/bdl/probable-pitchers?date=${displayDate}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((json: { data?: Record<string, { home: string | null; away: string | null }> } | null) => {
+        if (json?.data) setProbablePitchers(json.data)
+      })
+      .catch(() => {})
+  }, [displayDate])
+
   useEffect(() => {
     if (!supabase) return
     const id = setInterval(() => {
@@ -112,6 +142,52 @@ export default function DugoutPage() {
     }, 60000)
     return () => clearInterval(id)
   }, [displayDate, supabase])
+
+  // Fetch HR odds for top-projected batters from the user's preferred sportsbook
+  useEffect(() => {
+    if (!supabase || !liveGames.length || !rows.length) { setPlayerOdds({}); return }
+    const bdlGameIds = liveGames.map((g: any) => g.bdl_game_id).filter(Boolean) as number[]
+    if (!bdlGameIds.length) return
+
+    // Collect all top-projected stat_player_ids visible in the game cards
+    const topStatIds = [...new Set(rows.map((r) => r.playerId))]
+    if (!topStatIds.length) return
+
+    void (async () => {
+      // Cross-ref stat_player_id → bdl_player_id
+      const { data: xref } = await supabase
+        .from('bdl_players')
+        .select('bdl_id,stat_player_id')
+        .in('stat_player_id', topStatIds.slice(0, 100))
+      const statToBdl = new Map<string, number>(
+        (xref ?? []).map((r: any) => [String(r.stat_player_id), Number(r.bdl_id)])
+      )
+      const bdlPlayerIds = [...statToBdl.values()].filter(Boolean)
+      if (!bdlPlayerIds.length) return
+
+      // Fetch HR milestone/over props from the user's sportsbook
+      const { data: props } = await supabase
+        .from('bdl_player_props')
+        .select('bdl_player_id,milestone_odds,over_odds,vendor')
+        .in('bdl_game_id', bdlGameIds)
+        .in('bdl_player_id', bdlPlayerIds)
+        .eq('prop_type', 'home_runs')
+        .ilike('vendor', defaultSportsbook)
+
+      if (!props?.length) return
+      const bdlToStat = new Map<number, string>()
+      for (const [sid, bid] of statToBdl) bdlToStat.set(bid, sid)
+
+      const next: Record<string, number | null> = {}
+      for (const p of props as any[]) {
+        const sid = bdlToStat.get(Number(p.bdl_player_id))
+        if (!sid) continue
+        const odds = p.milestone_odds ?? p.over_odds ?? null
+        if (odds != null) next[sid] = Number(odds)
+      }
+      setPlayerOdds(next)
+    })()
+  }, [supabase, liveGames, rows, defaultSportsbook])
 
   const topByTeam = useMemo(() => {
     const m = new Map<string, DailyProjection>()
@@ -704,6 +780,12 @@ export default function DugoutPage() {
                               {awayTop?.americanOddsStr ? (
                                 <span className="pg-batterOdds">{awayTop.americanOddsStr}</span>
                               ) : null}
+                              {awayTop && playerOdds[awayTop.playerId] != null ? (
+                                <span className="pg-batterBookOdds" title={`${defaultSportsbook} HR odds`}>
+                                  {defaultSportsbook.charAt(0).toUpperCase() + defaultSportsbook.slice(1)}{' '}
+                                  {playerOdds[awayTop.playerId]! >= 0 ? `+${playerOdds[awayTop.playerId]}` : String(playerOdds[awayTop.playerId])}
+                                </span>
+                              ) : null}
                               {awayTop && Object.prototype.hasOwnProperty.call(pickState, awayTop.playerId) ? (
                                 <span className={`pg-pickState ${String(pickState[awayTop.playerId] ?? 'pending')}`}>
                                   {pickStatusLabel(pickState[awayTop.playerId])}
@@ -761,6 +843,12 @@ export default function DugoutPage() {
                               {homeTop?.americanOddsStr ? (
                                 <span className="pg-batterOdds">{homeTop.americanOddsStr}</span>
                               ) : null}
+                              {homeTop && playerOdds[homeTop.playerId] != null ? (
+                                <span className="pg-batterBookOdds" title={`${defaultSportsbook} HR odds`}>
+                                  {defaultSportsbook.charAt(0).toUpperCase() + defaultSportsbook.slice(1)}{' '}
+                                  {playerOdds[homeTop.playerId]! >= 0 ? `+${playerOdds[homeTop.playerId]}` : String(playerOdds[homeTop.playerId])}
+                                </span>
+                              ) : null}
                               {homeTop && Object.prototype.hasOwnProperty.call(pickState, homeTop.playerId) ? (
                                 <span className={`pg-pickState ${String(pickState[homeTop.playerId] ?? 'pending')}`}>
                                   {pickStatusLabel(pickState[homeTop.playerId])}
@@ -789,15 +877,25 @@ export default function DugoutPage() {
                       {isExpanded ? (
                         <div className="pg-detailWrap">
                           <div className="pg-gameRows">
-                            {/* Probable pitchers */}
-                            <div className="pg-gameLine">
-                              <span className="pg-gameLabel">Probable pitchers</span>
-                              <span className="pg-gameValue">
-                                {g.awayTeam}: {homeTop?.opponentPitcher ? `${homeTop.opponentPitcher}${homeTop.opponentPitcherHand ? ` (${homeTop.opponentPitcherHand})` : ''}` : '—'}
-                                {' · '}
-                                {g.homeTeam}: {awayTop?.opponentPitcher ? `${awayTop.opponentPitcher}${awayTop.opponentPitcherHand ? ` (${awayTop.opponentPitcherHand})` : ''}` : '—'}
-                              </span>
-                            </div>
+                            {/* Probable pitchers — BDL feed takes priority, fallback to projection data */}
+                            {(() => {
+                              const bdlPitchers = live?.bdl_game_id ? probablePitchers[String(live.bdl_game_id)] : null
+                              // BDL: home pitcher faces away batters; away pitcher faces home batters
+                              const awayTeamPitcher = bdlPitchers?.home ?? homeTop?.opponentPitcher
+                              const awayTeamPitcherHand = bdlPitchers ? null : homeTop?.opponentPitcherHand
+                              const homeTeamPitcher = bdlPitchers?.away ?? awayTop?.opponentPitcher
+                              const homeTeamPitcherHand = bdlPitchers ? null : awayTop?.opponentPitcherHand
+                              return (
+                                <div className="pg-gameLine">
+                                  <span className="pg-gameLabel">Probable pitchers{bdlPitchers ? ' ✓' : ''}</span>
+                                  <span className="pg-gameValue">
+                                    {g.awayTeam}: {awayTeamPitcher ? `${awayTeamPitcher}${awayTeamPitcherHand ? ` (${awayTeamPitcherHand})` : ''}` : '—'}
+                                    {' · '}
+                                    {g.homeTeam}: {homeTeamPitcher ? `${homeTeamPitcher}${homeTeamPitcherHand ? ` (${homeTeamPitcherHand})` : ''}` : '—'}
+                                  </span>
+                                </div>
+                              )
+                            })()}
 
                             {/* Lineup — BDL official when available, projected fallback */}
                             {(() => {
