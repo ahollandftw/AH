@@ -9,7 +9,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getServiceClient } from './supabase.js'
 import { config } from './config.js'
-import { bdlFetch } from './bdl/client.js'
+import { bdlFetch, type BdlGame } from './bdl/client.js'
 import {
   getBallparkForHomeTeam,
   normalizeMlbHomeTeam,
@@ -71,6 +71,26 @@ function num(v: unknown): number | null {
 function todayET(): string {
   const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }))
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function plusOneDay(dateIso: string): string {
+  const d = new Date(`${dateIso}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + 1)
+  return d.toISOString().slice(0, 10)
+}
+
+function etDateFromUtc(utcStr: string | null | undefined, fallback: string): string {
+  if (!utcStr) return fallback
+  try {
+    const d = new Date(new Date(utcStr).toLocaleString('en-US', { timeZone: 'America/New_York' }))
+    if (isNaN(d.getTime())) return fallback
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, '0')
+    const dd = String(d.getDate()).padStart(2, '0')
+    return `${y}-${m}-${dd}`
+  } catch {
+    return fallback
+  }
 }
 
 /* ─── Data fetching ──────────────────────────────────────────────── */
@@ -193,8 +213,19 @@ type BdlProbablePitcherEntry = {
 async function fetchBdlProbablePitchers(date: string): Promise<Map<number, { home: number | null; away: number | null }>> {
   const map = new Map<number, { home: number | null; away: number | null }>()
   try {
-    const res = await bdlFetch<{ data?: BdlProbablePitcherEntry[] }>('/mlb/v1/probable_pitchers', { 'dates[]': date })
-    for (const e of res.data ?? []) {
+    const [gamesToday, gamesNext, probToday, probNext] = await Promise.all([
+      bdlFetch<{ data?: BdlGame[] }>('/mlb/v1/games', { 'dates[]': date, season_type: 'regular', per_page: 100 }),
+      bdlFetch<{ data?: BdlGame[] }>('/mlb/v1/games', { 'dates[]': plusOneDay(date), season_type: 'regular', per_page: 100 }),
+      bdlFetch<{ data?: BdlProbablePitcherEntry[] }>('/mlb/v1/probable_pitchers', { 'dates[]': date }),
+      bdlFetch<{ data?: BdlProbablePitcherEntry[] }>('/mlb/v1/probable_pitchers', { 'dates[]': plusOneDay(date) }),
+    ])
+    const validGameIds = new Set(
+      [...(gamesToday.data ?? []), ...(gamesNext.data ?? [])]
+        .filter((g) => etDateFromUtc(g.date, date) === date)
+        .map((g) => Number(g.id)),
+    )
+    for (const e of [...(probToday.data ?? []), ...(probNext.data ?? [])]) {
+      if (!validGameIds.has(Number(e.game_id))) continue
       map.set(e.game_id, {
         home: e.home_probable_pitcher?.id ?? null,
         away: e.away_probable_pitcher?.id ?? null,

@@ -16,6 +16,24 @@ import { buildHrEventEnrichment } from '../bdl/hrEventEnrichment.js'
 import { syncLineupForGame } from '../bdl/lineupSync.js'
 
 export function registerBdlRoutes(app: Express) {
+  const plusOneDay = (dateIso: string): string => {
+    const d = new Date(`${dateIso}T00:00:00Z`)
+    d.setUTCDate(d.getUTCDate() + 1)
+    return d.toISOString().slice(0, 10)
+  }
+  const etDateFromUtc = (utcStr: string | null | undefined, fallback: string): string => {
+    if (!utcStr) return fallback
+    try {
+      const d = new Date(new Date(utcStr).toLocaleString('en-US', { timeZone: 'America/New_York' }))
+      if (isNaN(d.getTime())) return fallback
+      const y = d.getFullYear()
+      const m = String(d.getMonth() + 1).padStart(2, '0')
+      const dd = String(d.getDate()).padStart(2, '0')
+      return `${y}-${m}-${dd}`
+    } catch {
+      return fallback
+    }
+  }
   const canonTeam = (team: string): string => {
     const t = team.trim().toUpperCase()
     if (t === 'TB' || t === 'TBR') return 'TBR'
@@ -42,10 +60,13 @@ export function registerBdlRoutes(app: Express) {
   }
   async function syncLiveLineupForMatchup(date: string, homeTeam: string, awayTeam: string): Promise<boolean> {
     try {
-      const games = await bdlFetchAll<BdlGame>('/mlb/v1/games', {
-        'dates[]': date,
-        season_type: 'regular',
-      })
+      const allGames = await Promise.all([
+        bdlFetchAll<BdlGame>('/mlb/v1/games', { 'dates[]': date, season_type: 'regular' }),
+        bdlFetchAll<BdlGame>('/mlb/v1/games', { 'dates[]': plusOneDay(date), season_type: 'regular' }),
+      ])
+      const games = allGames
+        .flat()
+        .filter((g) => etDateFromUtc(g.date, date) === date)
       const match = games.find((g) =>
         canonTeam(g.home_team?.abbreviation ?? '') === canonTeam(homeTeam)
         && canonTeam(g.away_team?.abbreviation ?? '') === canonTeam(awayTeam),
@@ -901,7 +922,20 @@ export function registerBdlRoutes(app: Express) {
 
       let raw: BdlProbablePitchersResponse
       try {
-        raw = await bdlFetch<BdlProbablePitchersResponse>('/mlb/v1/probable_pitchers', { 'dates[]': date })
+        const [gamesRaw, nextGamesRaw, probRaw, nextProbRaw] = await Promise.all([
+          bdlFetchAll<BdlGame>('/mlb/v1/games', { 'dates[]': date, season_type: 'regular' }),
+          bdlFetchAll<BdlGame>('/mlb/v1/games', { 'dates[]': plusOneDay(date), season_type: 'regular' }),
+          bdlFetch<BdlProbablePitchersResponse>('/mlb/v1/probable_pitchers', { 'dates[]': date }),
+          bdlFetch<BdlProbablePitchersResponse>('/mlb/v1/probable_pitchers', { 'dates[]': plusOneDay(date) }),
+        ])
+        const validGameIds = new Set(
+          [...gamesRaw, ...nextGamesRaw]
+            .filter((g) => etDateFromUtc(g.date, date) === date)
+            .map((g) => Number(g.id)),
+        )
+        raw = {
+          data: [...(probRaw.data ?? []), ...(nextProbRaw.data ?? [])].filter((e) => validGameIds.has(Number(e.game_id))),
+        }
       } catch {
         res.json({ data: [] })
         return

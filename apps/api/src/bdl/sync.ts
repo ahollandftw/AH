@@ -31,6 +31,12 @@ function todayET(): string {
   return `${y}-${m}-${dd}`
 }
 
+function plusOneDay(dateIso: string): string {
+  const d = new Date(`${dateIso}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + 1)
+  return d.toISOString().slice(0, 10)
+}
+
 /**
  * Derive the Eastern Time calendar date from a UTC timestamp string.
  * A West Coast game starting 7 PM PT (10 PM ET) on 3/26 has start_time_utc
@@ -49,6 +55,22 @@ function etDateFromUtc(utcStr: string | null | undefined, fallback: string): str
   } catch {
     return fallback
   }
+}
+
+async function fetchGamesForEtDate(dateIso: string): Promise<BdlGame[]> {
+  const dateCandidates = [dateIso, plusOneDay(dateIso)]
+  const out = new Map<number, BdlGame>()
+  for (const apiDate of dateCandidates) {
+    const games = await bdlFetchAll<BdlGame>('/mlb/v1/games', {
+      'dates[]': apiDate,
+      season_type: 'regular',
+    })
+    for (const g of games) {
+      if (etDateFromUtc(g.date, dateIso) !== dateIso) continue
+      out.set(g.id, g)
+    }
+  }
+  return [...out.values()]
 }
 
 /* ─── 1. Sync active players + build cross-reference ──────────────── */
@@ -196,10 +218,7 @@ export async function syncGames(
   const date = dateIso ?? todayET()
   console.log(`[BDL] syncing games for ${date}…`)
 
-  const games = await bdlFetchAll<BdlGame>('/mlb/v1/games', {
-    'dates[]': date,
-    season_type: 'regular',
-  })
+  const games = await fetchGamesForEtDate(date)
 
   const sb = supabase()
   let active = 0
