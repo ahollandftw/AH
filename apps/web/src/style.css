@@ -1380,8 +1380,9 @@ body,
 }
 
 .pg-scoringPlay--hr {
-  background: color-mix(in srgb, var(--color-primary) 14%, transparent);
-  border-left: 3px solid var(--color-primary);
+  background: rgba(30, 255, 165, 0.10);
+  border-left: 3px solid rgba(70, 255, 170, 0.92);
+  box-shadow: inset 0 0 0 1px rgba(70, 255, 170, 0.12);
 }
 
 .pg-scoringPlayIcon {
@@ -1402,22 +1403,22 @@ body,
 }
 
 .pg-scoringPlaysTitle {
-  color: #ff4b4b;
+  color: rgba(70, 255, 170, 0.95);
   font-weight: 900;
   letter-spacing: 0.05em;
 }
 
 .pg-scoringPlayText {
-  color: var(--color-text);
-  font-weight: 500;
+  color: rgba(220, 255, 236, 0.98);
+  font-weight: 700;
 }
 
 .pg-scoringPlayInning {
   margin-left: auto;
   flex-shrink: 0;
-  color: color-mix(in srgb, var(--color-primary) 50%, var(--color-secondary));
+  color: rgba(120, 255, 190, 0.9);
   font-size: 0.7rem;
-  font-weight: 600;
+  font-weight: 800;
   text-transform: uppercase;
 }
 
@@ -1453,6 +1454,12 @@ body,
   margin-bottom: 6px;
 }
 
+.pg-lineupRow--homer {
+  border-color: rgba(70, 255, 170, 0.5);
+  background: rgba(30, 255, 165, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(70, 255, 170, 0.10);
+}
+
 .pg-lineupOrder {
   width: 36px;
   flex-shrink: 0;
@@ -1486,6 +1493,10 @@ body,
   text-overflow: ellipsis;
 }
 
+.pg-lineupName--homer {
+  color: rgba(220, 255, 236, 0.98);
+}
+
 .pg-lineupProj {
   width: 80px;
   flex-shrink: 0;
@@ -1493,6 +1504,10 @@ body,
   font-weight: 900;
   color: color-mix(in srgb, var(--color-primary) 65%, var(--color-secondary));
   font-size: 0.78rem;
+}
+
+.pg-lineupProj--homer {
+  color: rgba(70, 255, 170, 0.95);
 }
 
 .acc-toggleLabel {

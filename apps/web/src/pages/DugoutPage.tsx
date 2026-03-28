@@ -60,6 +60,31 @@ function formatEtTime(utc: string | null | undefined): string {
   })
 }
 
+function extractHomerHitters(scoringSummary: any): Set<string> {
+  const out = new Set<string>()
+  const plays = Array.isArray(scoringSummary) ? scoringSummary : []
+  for (const p of plays) {
+    const txt = String(p?.play ?? '').trim()
+    const lower = txt.toLowerCase()
+    if (!/home run|homer|grand slam/i.test(lower)) continue
+    const beforeHomered = txt.split(/\bhomered\b/i)[0]?.trim()
+    if (beforeHomered) out.add(beforeHomered.toLowerCase())
+  }
+  return out
+}
+
+function didPlayerHomer(fullName: string | null | undefined, homerHitters: Set<string>): boolean {
+  const name = String(fullName ?? '').trim().toLowerCase()
+  if (!name) return false
+  for (const hitter of homerHitters) {
+    if (!hitter) continue
+    if (name === hitter) return true
+    if (name.endsWith(hitter)) return true
+    if (hitter.endsWith(name)) return true
+  }
+  return false
+}
+
 export default function DugoutPage() {
   const { supabase, hasSubscription, session } = useWebAuth()
   const [loading, setLoading] = useState(true)
@@ -617,6 +642,7 @@ export default function DugoutPage() {
                   const homeNorm = normalizeTeamCode(g.homeTeam) ?? g.homeTeam
                   const wxLine = formatBallparkWx(weatherByHome[homeNorm])
                   const lineupCacheKey = live?.bdl_game_id ? `game:${live.bdl_game_id}` : `pair:${displayDate}:${awayKey}:${homeKey}`
+                  const homerHitters = extractHomerHitters(live?.scoring_summary)
                   return (
                     <div
                       key={g.gameId}
@@ -681,12 +707,12 @@ export default function DugoutPage() {
                                 </div>
                               )
                             })()}
-                            <div className="pg-label pg-scoringPlaysTitle" style={{ marginTop: 10 }}>Scoring Plays</div>
+                            <div className="pg-label pg-scoringPlaysTitle" style={{ marginTop: 10 }}>Homers</div>
                             {(() => {
                               const playsAll = Array.isArray(live?.scoring_summary) ? [...live.scoring_summary].reverse() : []
                               const isHr = (txt: string) => /home run|homer|grand slam/i.test(txt)
                               const hrPlays = playsAll.filter((p: any) => isHr(String(p?.play ?? '')))
-                              if (!hrPlays.length) return <div className="pg-sub">No home runs yet.</div>
+                              if (!hrPlays.length) return <div className="pg-sub">No homers yet.</div>
                               return (
                                 <div className="pg-scoringPlays">
                                   {hrPlays.map((p: any, i: number) => {
@@ -965,22 +991,23 @@ export default function DugoutPage() {
                                           ? rows.find((r) => r.playerId === p.stat_player_id)
                                           : null
                                         const hasPick = proj && Object.prototype.hasOwnProperty.call(pickState, proj.playerId)
+                                        const isHomer = didPlayerHomer(p.full_name ?? proj?.name, homerHitters)
                                         return (
-                                          <div key={p.bdl_player_id ?? idx} className="pg-lineupRow">
+                                          <div key={p.bdl_player_id ?? idx} className={`pg-lineupRow ${isHomer ? 'pg-lineupRow--homer' : ''}`}>
                                             <span className="pg-lineupOrder">{ordinal(idx + 1)}</span>
                                             <span className="pg-lineupPos">{String(p.position ?? '—').toUpperCase().slice(0, 3)}</span>
                                             {proj ? (
                                               <button
                                                 type="button"
-                                                className="pg-lineupName"
+                                                className={`pg-lineupName ${isHomer ? 'pg-lineupName--homer' : ''}`}
                                                 onClick={() => void openMatchup(proj)}
                                               >
                                                 {p.full_name ?? proj.name}
                                               </button>
                                             ) : (
-                                              <span className="pg-lineupName pg-lineupName--plain">{p.full_name ?? '—'}</span>
+                                              <span className={`pg-lineupName pg-lineupName--plain ${isHomer ? 'pg-lineupName--homer' : ''}`}>{p.full_name ?? '—'}</span>
                                             )}
-                                            <span className="pg-lineupProj">
+                                            <span className={`pg-lineupProj ${isHomer ? 'pg-lineupProj--homer' : ''}`}>
                                               {proj ? formatProbability(proj.hrProbability) : '—'}
                                             </span>
                                             {proj ? (
@@ -1036,14 +1063,15 @@ export default function DugoutPage() {
                                   <div className="pg-lineupTeamTitle">{teamCode} <span className="pg-lineupBadge">Projected</span></div>
                                   {lineup.map((p, idx) => {
                                     const hasPick = Object.prototype.hasOwnProperty.call(pickState, p.playerId)
+                                    const isHomer = didPlayerHomer(p.name, homerHitters)
                                     return (
-                                      <div key={p.playerId} className="pg-lineupRow">
+                                      <div key={p.playerId} className={`pg-lineupRow ${isHomer ? 'pg-lineupRow--homer' : ''}`}>
                                         <span className="pg-lineupOrder">{ordinal(idx + 1)}</span>
                                         <span className="pg-lineupPos">{String(p.position ?? '—').toUpperCase().slice(0, 3)}</span>
-                                        <button type="button" className="pg-lineupName" onClick={() => void openMatchup(p)}>
+                                        <button type="button" className={`pg-lineupName ${isHomer ? 'pg-lineupName--homer' : ''}`} onClick={() => void openMatchup(p)}>
                                           {p.name}
                                         </button>
-                                        <span className="pg-lineupProj">{formatProbability(p.hrProbability)}</span>
+                                        <span className={`pg-lineupProj ${isHomer ? 'pg-lineupProj--homer' : ''}`}>{formatProbability(p.hrProbability)}</span>
                                         <button
                                           type="button"
                                           className={`pg-targetBtn ${hasPick ? 'is-selected' : ''}`}
