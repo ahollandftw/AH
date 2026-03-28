@@ -7,10 +7,6 @@ export function registerWeatherRoutes(app: Express) {
   /** Single ballpark: ?home_team=ATL */
   app.get('/bdl/weather', async (req, res) => {
     try {
-      if (!config.openWeatherApiKey()) {
-        res.status(503).json({ error: 'Weather not configured (OPENWEATHER_API_KEY)' })
-        return
-      }
       const home = String(req.query.home_team ?? '').trim()
       if (!home) {
         res.status(400).json({ error: 'home_team required' })
@@ -19,6 +15,17 @@ export function registerWeatherRoutes(app: Express) {
       const park = getBallparkForHomeTeam(home)
       if (!park) {
         res.status(404).json({ error: 'Unknown home_team ballpark' })
+        return
+      }
+      if (!config.openWeatherApiKey()) {
+        res.json({
+          ok: false,
+          home_team: normalizeMlbHomeTeam(home),
+          stadium: park.stadium,
+          lat: park.lat,
+          lon: park.lon,
+          error: 'OPENWEATHER_API_KEY not configured',
+        })
         return
       }
       const weather = await fetchOneCallWeather(park.lat, park.lon)
@@ -38,10 +45,6 @@ export function registerWeatherRoutes(app: Express) {
   /** Batch by home teams on the slate: ?homes=ATL,NYM,KCR */
   app.get('/bdl/weather/slate', async (req, res) => {
     try {
-      if (!config.openWeatherApiKey()) {
-        res.status(503).json({ error: 'Weather not configured (OPENWEATHER_API_KEY)' })
-        return
-      }
       const homesRaw = String(req.query.homes ?? '').trim()
       if (!homesRaw) {
         res.status(400).json({
@@ -60,6 +63,15 @@ export function registerWeatherRoutes(app: Express) {
         const norm = normalizeMlbHomeTeam(h)
         if (!park) {
           return { home_team: norm, stadium: null, error: 'unknown_team' }
+        }
+        if (!config.openWeatherApiKey()) {
+          return {
+            home_team: norm,
+            stadium: park.stadium,
+            lat: park.lat,
+            lon: park.lon,
+            error: 'OPENWEATHER_API_KEY not configured',
+          }
         }
         try {
           const weather = await fetchOneCallWeather(park.lat, park.lon)

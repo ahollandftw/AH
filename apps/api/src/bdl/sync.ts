@@ -31,12 +31,6 @@ function todayET(): string {
   return `${y}-${m}-${dd}`
 }
 
-function plusOneDay(dateIso: string): string {
-  const d = new Date(`${dateIso}T00:00:00Z`)
-  d.setUTCDate(d.getUTCDate() + 1)
-  return d.toISOString().slice(0, 10)
-}
-
 /**
  * Derive the Eastern Time calendar date from a UTC timestamp string.
  * A West Coast game starting 7 PM PT (10 PM ET) on 3/26 has start_time_utc
@@ -55,22 +49,6 @@ function etDateFromUtc(utcStr: string | null | undefined, fallback: string): str
   } catch {
     return fallback
   }
-}
-
-async function fetchGamesForEtDate(dateIso: string): Promise<BdlGame[]> {
-  const dateCandidates = [dateIso, plusOneDay(dateIso)]
-  const out = new Map<number, BdlGame>()
-  for (const apiDate of dateCandidates) {
-    const games = await bdlFetchAll<BdlGame>('/mlb/v1/games', {
-      'dates[]': apiDate,
-      season_type: 'regular',
-    })
-    for (const g of games) {
-      if (etDateFromUtc(g.date, dateIso) !== dateIso) continue
-      out.set(g.id, g)
-    }
-  }
-  return [...out.values()]
 }
 
 /* ─── 1. Sync active players + build cross-reference ──────────────── */
@@ -218,7 +196,10 @@ export async function syncGames(
   const date = dateIso ?? todayET()
   console.log(`[BDL] syncing games for ${date}…`)
 
-  const games = await fetchGamesForEtDate(date)
+  const games = await bdlFetchAll<BdlGame>('/mlb/v1/games', {
+    'dates[]': date,
+    season_type: 'regular',
+  })
 
   const sb = supabase()
   let active = 0
@@ -510,15 +491,6 @@ export async function runDailySync(): Promise<Record<string, unknown>> {
   // Bulk BvP matchup sync for all today's batters
   const matchups = await syncMatchupsForTodayGames()
 
-  // Sync any available lineups for today's games
-  let lineupsSynced = 0
-  try {
-    const { syncAllLineupsForDate } = await import('./lineupSync.js')
-    lineupsSynced = await syncAllLineupsForDate(today)
-  } catch (e) {
-    console.error('[daily-sync] lineup sync failed:', e)
-  }
-
   // Run the HR projection engine and persist results for fast frontend reads
   let projections: { computed: number; saved: number } = { computed: 0, saved: 0 }
   try {
@@ -528,5 +500,5 @@ export async function runDailySync(): Promise<Record<string, unknown>> {
     console.error('[daily-sync] HR projection engine failed:', e)
   }
 
-  return { players, games, seasonStats, propsTotal, matchups, lineupsSynced, projections }
+  return { players, games, seasonStats, propsTotal, matchups, projections }
 }

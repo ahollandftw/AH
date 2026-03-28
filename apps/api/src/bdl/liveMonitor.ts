@@ -2,7 +2,6 @@ import { getServiceClient } from '../supabase.js'
 import { bdlFetch, bdlFetchAll, type BdlGame, type BdlPlay, type BdlPlateAppearance } from './client.js'
 import { syncGames, syncPlayerProps } from './sync.js'
 import { buildHrEventEnrichment } from './hrEventEnrichment.js'
-import { syncLineupsForUpcomingGames } from './lineupSync.js'
 
 const POLL_INTERVAL_MS = 2 * 60 * 1000   // 2 minutes during active games
 const IDLE_INTERVAL_MS = 15 * 60 * 1000  // 15 minutes when no games active
@@ -308,13 +307,6 @@ async function pollCycle() {
 
   // Refresh game statuses from API
   await syncGames(today)
-
-  // Sync lineups for games starting within the next 75 minutes
-  try {
-    await syncLineupsForUpcomingGames(75)
-  } catch (e) {
-    console.error('[LIVE] lineup sync failed:', e)
-  }
 
   const sb = getServiceClient()
   const { data: games } = await sb

@@ -11,29 +11,11 @@ import {
 import { startLiveMonitor, stopLiveMonitor } from '../bdl/liveMonitor.js'
 import { calculateEdge, calculateEdgesForDate } from '../bdl/edge.js'
 import { getServiceClient } from '../supabase.js'
-import { bdlFetch, bdlFetchAll, type BdlGame, type BdlPlay, type BdlPlateAppearance } from '../bdl/client.js'
+import { bdlFetch, bdlFetchAll, type BdlPlay, type BdlPlateAppearance } from '../bdl/client.js'
 import { buildHrEventEnrichment } from '../bdl/hrEventEnrichment.js'
-import { syncLineupForGame } from '../bdl/lineupSync.js'
+import { getBestLineupForGame, getResolvedGamesForDate } from '../bdl/lineups.js'
 
 export function registerBdlRoutes(app: Express) {
-  const plusOneDay = (dateIso: string): string => {
-    const d = new Date(`${dateIso}T00:00:00Z`)
-    d.setUTCDate(d.getUTCDate() + 1)
-    return d.toISOString().slice(0, 10)
-  }
-  const etDateFromUtc = (utcStr: string | null | undefined, fallback: string): string => {
-    if (!utcStr) return fallback
-    try {
-      const d = new Date(new Date(utcStr).toLocaleString('en-US', { timeZone: 'America/New_York' }))
-      if (isNaN(d.getTime())) return fallback
-      const y = d.getFullYear()
-      const m = String(d.getMonth() + 1).padStart(2, '0')
-      const dd = String(d.getDate()).padStart(2, '0')
-      return `${y}-${m}-${dd}`
-    } catch {
-      return fallback
-    }
-  }
   const canonTeam = (team: string): string => {
     const t = team.trim().toUpperCase()
     if (t === 'TB' || t === 'TBR') return 'TBR'
@@ -46,41 +28,10 @@ export function registerBdlRoutes(app: Express) {
     if (t === 'CWS' || t === 'CHW') return 'CHW'
     return t
   }
-  const teamVariants = (team: string): string[] => {
-    const canon = canonTeam(team)
-    if (canon === 'TBR') return ['TBR', 'TB']
-    if (canon === 'WSN') return ['WSN', 'WSH', 'WAS']
-    if (canon === 'ARI') return ['ARI', 'AZ']
-    if (canon === 'KCR') return ['KCR', 'KC']
-    if (canon === 'SFG') return ['SFG', 'SF']
-    if (canon === 'SDP') return ['SDP', 'SD']
-    if (canon === 'ATH') return ['ATH', 'OAK']
-    if (canon === 'CHW') return ['CHW', 'CWS']
-    return [canon]
-  }
-  async function syncLiveLineupForMatchup(date: string, homeTeam: string, awayTeam: string): Promise<boolean> {
-    try {
-      const allGames = await Promise.all([
-        bdlFetchAll<BdlGame>('/mlb/v1/games', { 'dates[]': date, season_type: 'regular' }),
-        bdlFetchAll<BdlGame>('/mlb/v1/games', { 'dates[]': plusOneDay(date), season_type: 'regular' }),
-      ])
-      const games = allGames
-        .flat()
-        .filter((g) => etDateFromUtc(g.date, date) === date)
-      const match = games.find((g) =>
-        canonTeam(g.home_team?.abbreviation ?? '') === canonTeam(homeTeam)
-        && canonTeam(g.away_team?.abbreviation ?? '') === canonTeam(awayTeam),
-      )
-      if (!match?.id) return false
-      return syncLineupForGame(
-        match.id,
-        date,
-        match.home_team?.abbreviation ?? homeTeam,
-        match.away_team?.abbreviation ?? awayTeam,
-      )
-    } catch {
-      return false
-    }
+  const shiftIsoDate = (dateIso: string, days: number) => {
+    const d = new Date(`${dateIso}T12:00:00Z`)
+    d.setUTCDate(d.getUTCDate() + days)
+    return d.toISOString().slice(0, 10)
   }
   /* ── Daily sync (called by cron or manually) ─────────────────── */
 
@@ -218,6 +169,18 @@ export function registerBdlRoutes(app: Express) {
       res.json({ ok: true, ...result })
     } catch (e) {
       console.error('[bdl/sync/projections] failed:', e)
+      res.status(500).json({ error: e instanceof Error ? e.message : String(e) })
+    }
+  })
+
+  app.post('/bdl/sync/projections/upcoming', async (req, res) => {
+    try {
+      const { runUpcomingLineupRefresh } = await import('../hrEngine.js')
+      const windowMinutes = Number(req.body?.window_minutes ?? 60) || 60
+      const result = await runUpcomingLineupRefresh(windowMinutes)
+      res.json({ ok: true, ...result })
+    } catch (e) {
+      console.error('[bdl/sync/projections/upcoming] failed:', e)
       res.status(500).json({ error: e instanceof Error ? e.message : String(e) })
     }
   })
@@ -920,31 +883,27 @@ export function registerBdlRoutes(app: Express) {
       }
       type BdlProbablePitchersResponse = { data?: BdlProbablePitcherEntry[] }
 
-      let raw: BdlProbablePitchersResponse
-      try {
-        const [gamesRaw, nextGamesRaw, probRaw, nextProbRaw] = await Promise.all([
-          bdlFetchAll<BdlGame>('/mlb/v1/games', { 'dates[]': date, season_type: 'regular' }),
-          bdlFetchAll<BdlGame>('/mlb/v1/games', { 'dates[]': plusOneDay(date), season_type: 'regular' }),
-          bdlFetch<BdlProbablePitchersResponse>('/mlb/v1/probable_pitchers', { 'dates[]': date }),
-          bdlFetch<BdlProbablePitchersResponse>('/mlb/v1/probable_pitchers', { 'dates[]': plusOneDay(date) }),
-        ])
-        const validGameIds = new Set(
-          [...gamesRaw, ...nextGamesRaw]
-            .filter((g) => etDateFromUtc(g.date, date) === date)
-            .map((g) => Number(g.id)),
-        )
-        raw = {
-          data: [...(probRaw.data ?? []), ...(nextProbRaw.data ?? [])].filter((e) => validGameIds.has(Number(e.game_id))),
-        }
-      } catch {
-        res.json({ data: [] })
+      const sb = getServiceClient()
+      const resolvedGames = await getResolvedGamesForDate(sb, date)
+      const validGameIds = new Set(resolvedGames.map((g) => Number(g.bdl_game_id)))
+      if (!validGameIds.size) {
+        res.json({ data: {} })
         return
       }
 
-      const entries = raw?.data ?? []
-      // Index by bdl_game_id for easy lookup
+      let entries: BdlProbablePitcherEntry[] = []
+      for (const d of [date, shiftIsoDate(date, -1), shiftIsoDate(date, 1)]) {
+        try {
+          const raw = await bdlFetch<BdlProbablePitchersResponse>('/mlb/v1/probable_pitchers', { 'dates[]': d })
+          entries.push(...(raw?.data ?? []))
+        } catch {
+          // ignore split-date misses from BDL and keep scanning adjacent days
+        }
+      }
+
       const out: Record<number, { home: string | null; away: string | null }> = {}
       for (const e of entries) {
+        if (!validGameIds.has(Number(e.game_id))) continue
         out[e.game_id] = {
           home: e.home_probable_pitcher?.full_name ?? null,
           away: e.away_probable_pitcher?.full_name ?? null,
@@ -960,174 +919,46 @@ export function registerBdlRoutes(app: Express) {
   /* ── Lineup: fetch from BDL and cross-ref to stat_player_id ─────── */
   app.get('/bdl/lineup', async (req, res) => {
     try {
-      const bdlGameId = Number(req.query.game_id ?? 0)
-      if (!bdlGameId) {
-        res.status(400).json({ error: 'game_id required' })
+      const bdlGameId = Number(req.query.game_id ?? 0) || null
+      const date = String(req.query.date ?? '').trim()
+      const homeTeam = String(req.query.home_team ?? '').trim()
+      const awayTeam = String(req.query.away_team ?? '').trim()
+
+      if (!bdlGameId && (!date || !homeTeam || !awayTeam)) {
+        res.status(400).json({ error: 'game_id or date+home_team+away_team required' })
         return
       }
-
-      // BDL returns lineups keyed by team; structure: { data: { home: [...], away: [...] } }
-      type BdlLineupEntry = {
-        game_id: number
-        player: {
-          id: number
-          full_name: string
-          position: string
-          team?: { abbreviation?: string | null } | null
-        }
-        team?: { abbreviation?: string | null } | null
-        batting_order: number | null
-        position: string | null
-        is_probable_pitcher?: boolean | null
-      }
-      type BdlLineupResponse = {
-        data?: BdlLineupEntry[]
-      }
-
-      let bdlLineup: BdlLineupResponse
-      try {
-        bdlLineup = await bdlFetch<BdlLineupResponse>('/mlb/v1/lineups', { game_id: bdlGameId })
-      } catch (fetchErr) {
-        // BDL returns 404/400 for games with no lineup posted yet
-        res.json({ data: null, reason: 'Lineup not posted yet' })
-        return
-      }
-
-      const entries = (bdlLineup?.data ?? []).filter((e) => Number(e.game_id ?? 0) === bdlGameId)
-      const { data: gameRow } = await getServiceClient()
-        .from('bdl_games')
-        .select('home_team_abbrev,away_team_abbrev')
-        .eq('bdl_game_id', bdlGameId)
-        .maybeSingle()
-      const homeTeam = canonTeam(String((gameRow as any)?.home_team_abbrev ?? ''))
-      const awayTeam = canonTeam(String((gameRow as any)?.away_team_abbrev ?? ''))
-      const homeEntries: BdlLineupEntry[] = entries.filter(
-        (e) => canonTeam(String(e.team?.abbreviation ?? e.player?.team?.abbreviation ?? '')) === homeTeam,
-      )
-      const awayEntries: BdlLineupEntry[] = entries.filter(
-        (e) => canonTeam(String(e.team?.abbreviation ?? e.player?.team?.abbreviation ?? '')) === awayTeam,
-      )
-
-      if (!homeEntries.length && !awayEntries.length) {
-        res.json({ data: null, reason: 'Lineup not posted yet' })
-        return
-      }
-
-      // Cross-reference BDL player IDs → stat_player_id
-      const allBdlIds = [
-        ...new Set([
-          ...homeEntries.map((e) => e.player?.id).filter(Boolean),
-          ...awayEntries.map((e) => e.player?.id).filter(Boolean),
-        ]),
-      ] as number[]
-
       const sb = getServiceClient()
-      const { data: xref } = allBdlIds.length
-        ? await sb.from('bdl_players').select('bdl_id,stat_player_id,full_name').in('bdl_id', allBdlIds)
-        : { data: [] as any[] }
+      let resolvedHome = homeTeam
+      let resolvedAway = awayTeam
 
-      const xrefMap = new Map<number, { stat_player_id: string | null; full_name: string | null }>(
-        (xref ?? []).map((r: any) => [Number(r.bdl_id), { stat_player_id: r.stat_player_id ?? null, full_name: r.full_name ?? null }]),
-      )
-
-      const mapEntry = (e: BdlLineupEntry) => {
-        const xr = xrefMap.get(Number(e.player?.id ?? 0))
-        return {
-          bdl_player_id: e.player?.id ?? null,
-          stat_player_id: xr?.stat_player_id ?? null,
-          full_name: e.player?.full_name ?? xr?.full_name ?? null,
-          position: e.position ?? e.player?.position ?? null,
-          batting_order: e.batting_order ?? null,
-        }
+      let resolvedDate = date
+      if ((!resolvedHome || !resolvedAway || !resolvedDate) && bdlGameId) {
+        const { data: game } = await sb
+          .from('bdl_games')
+          .select('home_team_abbrev,away_team_abbrev,date')
+          .eq('bdl_game_id', bdlGameId)
+          .maybeSingle()
+        resolvedHome = game?.home_team_abbrev ?? resolvedHome
+        resolvedAway = game?.away_team_abbrev ?? resolvedAway
+        resolvedDate = game?.date ?? resolvedDate
       }
 
-      const sortByOrder = (a: ReturnType<typeof mapEntry>, b: ReturnType<typeof mapEntry>) => {
-        if (a.batting_order == null) return 1
-        if (b.batting_order == null) return -1
-        return a.batting_order - b.batting_order
-      }
-
-      res.json({
-        data: {
-          home: homeEntries.map(mapEntry).sort(sortByOrder),
-          away: awayEntries.map(mapEntry).sort(sortByOrder),
-        },
+      const best = await getBestLineupForGame(sb, {
+        dateIso: resolvedDate,
+        gameId: bdlGameId,
+        homeTeam: resolvedHome,
+        awayTeam: resolvedAway,
       })
+
+      if (!best.home.length && !best.away.length) {
+        res.json({ data: null, reason: 'No official or recent lineup found' })
+        return
+      }
+
+      res.json({ data: best })
     } catch (e) {
       console.error('[bdl/lineup] failed:', e)
-      res.status(500).json({ error: e instanceof Error ? e.message : String(e) })
-    }
-  })
-
-  /**
-   * Cached lineups: returns today's confirmed lineup if available,
-   * otherwise yesterday's lineup as a projected fallback.
-   * Query: ?date=YYYY-MM-DD&home_team=XXX&away_team=YYY
-   */
-  app.get('/bdl/cached-lineups', async (req, res) => {
-    try {
-      const date = String(req.query.date ?? '').trim()
-      const homeTeam = String(req.query.home_team ?? '').trim().toUpperCase()
-      const awayTeam = String(req.query.away_team ?? '').trim().toUpperCase()
-      if (!date) { res.status(400).json({ error: 'date required' }); return }
-
-      const sb = getServiceClient()
-
-      const fetchTeamLineup = async (team: string) => {
-        // Try today's confirmed lineup first
-        const { data: today } = await sb
-          .from('bdl_lineups')
-          .select('bdl_player_id, stat_player_id, full_name, position, batting_order, is_confirmed')
-          .eq('date', date)
-          .in('team_abbrev', teamVariants(team))
-          .eq('is_confirmed', true)
-          .order('batting_order', { ascending: true })
-
-        if (today?.length) {
-          return { players: today, source: 'confirmed' as const }
-        }
-
-        // Fall back to the most recent previous lineup for this team
-        const { data: prev } = await sb
-          .from('bdl_lineups')
-          .select('bdl_player_id, stat_player_id, full_name, position, batting_order, is_confirmed, date')
-          .in('team_abbrev', teamVariants(team))
-          .eq('is_confirmed', true)
-          .lt('date', date)
-          .order('date', { ascending: false })
-          .limit(20)
-
-        if (prev?.length) {
-          const latestDate = (prev[0] as any).date
-          const latest = prev.filter((r: any) => r.date === latestDate)
-          return { players: latest, source: 'yesterday' as const }
-        }
-
-        return { players: [], source: 'none' as const }
-      }
-
-      let [home, away] = await Promise.all([
-        homeTeam ? fetchTeamLineup(homeTeam) : Promise.resolve({ players: [], source: 'none' as const }),
-        awayTeam ? fetchTeamLineup(awayTeam) : Promise.resolve({ players: [], source: 'none' as const }),
-      ])
-
-      const needsTodayLineup =
-        date && homeTeam && awayTeam && (home.source !== 'confirmed' || away.source !== 'confirmed')
-      if (needsTodayLineup) {
-        const synced = await syncLiveLineupForMatchup(date, homeTeam, awayTeam)
-        if (synced) {
-          ;[home, away] = await Promise.all([fetchTeamLineup(homeTeam), fetchTeamLineup(awayTeam)])
-        }
-      }
-
-      res.json({
-        data: {
-          home: { ...home, team: homeTeam },
-          away: { ...away, team: awayTeam },
-        },
-      })
-    } catch (e) {
-      console.error('[bdl/cached-lineups] failed:', e)
       res.status(500).json({ error: e instanceof Error ? e.message : String(e) })
     }
   })

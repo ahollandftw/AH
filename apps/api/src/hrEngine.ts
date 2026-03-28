@@ -9,11 +9,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getServiceClient } from './supabase.js'
 import { config } from './config.js'
-import { bdlFetch, type BdlGame } from './bdl/client.js'
+import { bdlFetch } from './bdl/client.js'
+import { getBestLineupForGame, getResolvedGamesForDate } from './bdl/lineups.js'
 import {
   getBallparkForHomeTeam,
-  normalizeMlbHomeTeam,
-  BALLPARKS,
   type BallparkInfo,
 } from './weather/mlbBallparks.js'
 import { fetchOneCallWeather, type OneCallPayload } from './weather/openWeather.js'
@@ -27,7 +26,6 @@ import {
   zLineupSpot,
   zRecentForm,
   expectedPaForSpot,
-  adjustedCoefficients,
   type BatterFeatureInput,
   type WeatherInput,
   type Hand,
@@ -73,59 +71,42 @@ function todayET(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-function plusOneDay(dateIso: string): string {
-  const d = new Date(`${dateIso}T00:00:00Z`)
-  d.setUTCDate(d.getUTCDate() + 1)
-  return d.toISOString().slice(0, 10)
-}
-
-function etDateFromUtc(utcStr: string | null | undefined, fallback: string): string {
-  if (!utcStr) return fallback
+function etDateFromUtc(utcStr: string | null | undefined): string | null {
+  if (!utcStr) return null
   try {
     const d = new Date(new Date(utcStr).toLocaleString('en-US', { timeZone: 'America/New_York' }))
-    if (isNaN(d.getTime())) return fallback
-    const y = d.getFullYear()
-    const m = String(d.getMonth() + 1).padStart(2, '0')
-    const dd = String(d.getDate()).padStart(2, '0')
-    return `${y}-${m}-${dd}`
+    if (Number.isNaN(d.getTime())) return null
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
   } catch {
-    return fallback
+    return null
   }
 }
 
 /* ─── Data fetching ──────────────────────────────────────────────── */
 
 async function fetchGames(sb: SupabaseClient, date: string) {
-  const [{ data: bdl }, { data: sched }] = await Promise.all([
-    sb
-      .from('bdl_games')
-      .select('bdl_game_id, home_team_abbrev, away_team_abbrev')
-      .eq('date', date),
-    sb
-      .from('schedule_games')
-      .select('home_team, away_team')
-      .eq('date', date),
-  ])
-
-  const pairKey = (home: string, away: string) => [canon(home), canon(away)].sort().join('|')
-  const merged = new Map<string, { bdl_game_id: number; home_team_abbrev: string; away_team_abbrev: string }>()
-
-  for (const g of (sched ?? []) as any[]) {
-    merged.set(pairKey(g.home_team, g.away_team), {
-      bdl_game_id: 0,
-      home_team_abbrev: g.home_team,
-      away_team_abbrev: g.away_team,
-    })
-  }
-  for (const g of (bdl ?? []) as any[]) {
-    merged.set(pairKey(g.home_team_abbrev, g.away_team_abbrev), {
-      bdl_game_id: Number(g.bdl_game_id ?? 0),
+  const resolved = await getResolvedGamesForDate(sb, date)
+  const byPair = new Map<string, { bdl_game_id: number; home_team_abbrev: string; away_team_abbrev: string }>()
+  for (const g of resolved) {
+    byPair.set(`${canon(g.away_team_abbrev)}|${canon(g.home_team_abbrev)}`, {
+      bdl_game_id: g.bdl_game_id,
       home_team_abbrev: g.home_team_abbrev,
       away_team_abbrev: g.away_team_abbrev,
     })
   }
-
-  return [...merged.values()]
+  const { data: sched } = await sb
+    .from('schedule_games')
+    .select('home_team, away_team')
+    .eq('date', date)
+  return (sched ?? []).map((g: any) => {
+    const key = `${canon(g.away_team)}|${canon(g.home_team)}`
+    const resolvedGame = byPair.get(key)
+    return {
+      bdl_game_id: resolvedGame?.bdl_game_id ?? 0,
+      home_team_abbrev: resolvedGame?.home_team_abbrev ?? g.home_team,
+      away_team_abbrev: resolvedGame?.away_team_abbrev ?? g.away_team,
+    }
+  })
 }
 
 async function fetchPlayers(sb: SupabaseClient) {
@@ -187,11 +168,19 @@ async function fetchBdlPlayers(sb: SupabaseClient) {
 
 async function fetchBdlSeasonStats(sb: SupabaseClient, season: number) {
   const { data } = await sb.from('bdl_season_stats')
-    .select('bdl_player_id, pitching_hr, pitching_ip, pitching_era, pitching_k_per_9')
-    .eq('season', season).gt('pitching_ip', 0).limit(2000)
+    .select('bdl_player_id, batting_ab, batting_bb, batting_hr, batting_avg, batting_slg, pitching_hr, pitching_ip, pitching_era, pitching_k_per_9')
+    .eq('season', season).limit(5000)
   return (data ?? []) as {
-    bdl_player_id: number; pitching_hr: number | null; pitching_ip: number | null;
-    pitching_era: number | null; pitching_k_per_9: number | null
+    bdl_player_id: number
+    batting_ab: number | null
+    batting_bb: number | null
+    batting_hr: number | null
+    batting_avg: number | null
+    batting_slg: number | null
+    pitching_hr: number | null
+    pitching_ip: number | null
+    pitching_era: number | null
+    pitching_k_per_9: number | null
   }[]
 }
 
@@ -210,66 +199,36 @@ type BdlProbablePitcherEntry = {
   away_probable_pitcher?: { id: number; full_name: string } | null
 }
 
-async function fetchBdlProbablePitchers(date: string): Promise<Map<number, { home: number | null; away: number | null }>> {
+function shiftIsoDate(dateIso: string, days: number): string {
+  const d = new Date(`${dateIso}T12:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + days)
+  return d.toISOString().slice(0, 10)
+}
+
+async function fetchBdlProbablePitchers(
+  sb: SupabaseClient,
+  date: string,
+): Promise<Map<number, { home: number | null; away: number | null }>> {
   const map = new Map<number, { home: number | null; away: number | null }>()
-  try {
-    const [gamesToday, gamesNext, probToday, probNext] = await Promise.all([
-      bdlFetch<{ data?: BdlGame[] }>('/mlb/v1/games', { 'dates[]': date, season_type: 'regular', per_page: 100 }),
-      bdlFetch<{ data?: BdlGame[] }>('/mlb/v1/games', { 'dates[]': plusOneDay(date), season_type: 'regular', per_page: 100 }),
-      bdlFetch<{ data?: BdlProbablePitcherEntry[] }>('/mlb/v1/probable_pitchers', { 'dates[]': date }),
-      bdlFetch<{ data?: BdlProbablePitcherEntry[] }>('/mlb/v1/probable_pitchers', { 'dates[]': plusOneDay(date) }),
-    ])
-    const validGameIds = new Set(
-      [...(gamesToday.data ?? []), ...(gamesNext.data ?? [])]
-        .filter((g) => etDateFromUtc(g.date, date) === date)
-        .map((g) => Number(g.id)),
-    )
-    for (const e of [...(probToday.data ?? []), ...(probNext.data ?? [])]) {
-      if (!validGameIds.has(Number(e.game_id))) continue
-      map.set(e.game_id, {
-        home: e.home_probable_pitcher?.id ?? null,
-        away: e.away_probable_pitcher?.id ?? null,
-      })
+  const resolvedGames = await getResolvedGamesForDate(sb, date)
+  const validGameIds = new Set(resolvedGames.map((g) => Number(g.bdl_game_id)))
+  if (!validGameIds.size) return map
+
+  for (const d of [date, shiftIsoDate(date, -1), shiftIsoDate(date, 1)]) {
+    try {
+      const res = await bdlFetch<{ data?: BdlProbablePitcherEntry[] }>('/mlb/v1/probable_pitchers', { 'dates[]': d })
+      for (const e of res.data ?? []) {
+        if (!validGameIds.has(Number(e.game_id))) continue
+        map.set(e.game_id, {
+          home: e.home_probable_pitcher?.id ?? null,
+          away: e.away_probable_pitcher?.id ?? null,
+        })
+      }
+    } catch (e) {
+      console.warn('[hr-engine] probable pitchers fetch failed:', e)
     }
-  } catch (e) {
-    console.warn('[hr-engine] probable pitchers fetch failed:', e)
   }
   return map
-}
-
-type BdlLineupEntry = {
-  game_id: number
-  batting_order: number | null
-  player: {
-    id: number
-    first_name?: string
-    last_name?: string
-    team?: { abbreviation?: string | null } | null
-  }
-  team?: { abbreviation?: string | null } | null
-}
-
-async function fetchBdlLineup(
-  gameId: number,
-  homeTeam: string,
-  awayTeam: string,
-): Promise<{ home: BdlLineupEntry[]; away: BdlLineupEntry[] } | null> {
-  try {
-    const res = await bdlFetch<{ data?: BdlLineupEntry[] }>(
-      `/mlb/v1/lineups`, { game_id: String(gameId) },
-    )
-    const entries = (res.data ?? []).filter((e) => Number(e.game_id ?? 0) === gameId)
-    return {
-      home: entries.filter(
-        (e) => canon(String(e.team?.abbreviation ?? e.player?.team?.abbreviation ?? '')) === canon(homeTeam),
-      ),
-      away: entries.filter(
-        (e) => canon(String(e.team?.abbreviation ?? e.player?.team?.abbreviation ?? '')) === canon(awayTeam),
-      ),
-    }
-  } catch {
-    return null
-  }
 }
 
 /* ─── Weather → WeatherInput conversion ─────────────────────────── */
@@ -364,17 +323,7 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
   if (!games.length) { console.log('[hr-engine] No games today'); return [] }
   console.log(`[hr-engine] ${games.length} games, ${evRows.length} EV rows, ${pArsenalRows.length} pitcher arsenal rows`)
 
-  const probPitchers = await fetchBdlProbablePitchers(date)
-
-  const lineupsByGame = new Map<number, { home: BdlLineupEntry[]; away: BdlLineupEntry[] }>()
-  for (const g of games) {
-    if (g.bdl_game_id) {
-      const lu = await fetchBdlLineup(g.bdl_game_id, g.home_team_abbrev, g.away_team_abbrev)
-      if (lu && (lu.home.length > 0 || lu.away.length > 0)) {
-        lineupsByGame.set(g.bdl_game_id, lu)
-      }
-    }
-  }
+  const probPitchers = await fetchBdlProbablePitchers(sb, date)
 
   // Fetch weather for each unique home team
   const homeTeams = [...new Set(games.map((g) => canon(g.home_team_abbrev)).filter(Boolean))] as string[]
@@ -391,6 +340,8 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
       }
     })
     await Promise.all(tasks)
+  } else {
+    console.warn('[hr-engine] OPENWEATHER_API_KEY not configured; weather feature omitted for all games')
   }
 
   /* ─── Index data ──────────────────────────────────────────────── */
@@ -495,23 +446,24 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
     return (hr / (s.pitching_ip as number)) * 9
   }
 
-  const gameContexts: GameCtx[] = games.map((g) => {
+  const gameContexts: GameCtx[] = await Promise.all(games.map(async (g) => {
     const home = canon(g.home_team_abbrev)!
     const away = canon(g.away_team_abbrev)!
     const pp = probPitchers.get(g.bdl_game_id)
+    const bestLineup = await getBestLineupForGame(sb, {
+      dateIso: date,
+      gameId: g.bdl_game_id || null,
+      homeTeam: home,
+      awayTeam: away,
+    })
 
     const lineupHome = new Map<string, number>()
     const lineupAway = new Map<string, number>()
-    const lu = lineupsByGame.get(g.bdl_game_id)
-    if (lu) {
-      for (const entry of lu.home) {
-        const sid = resolveStatIdFromBdl(entry.player.id)
-        if (sid && entry.batting_order != null) lineupHome.set(sid, entry.batting_order)
-      }
-      for (const entry of lu.away) {
-        const sid = resolveStatIdFromBdl(entry.player.id)
-        if (sid && entry.batting_order != null) lineupAway.set(sid, entry.batting_order)
-      }
+    for (const entry of bestLineup.home) {
+      if (entry.stat_player_id) lineupHome.set(entry.stat_player_id, entry.batting_order ?? 0)
+    }
+    for (const entry of bestLineup.away) {
+      if (entry.stat_player_id) lineupAway.set(entry.stat_player_id, entry.batting_order ?? 0)
     }
 
     return {
@@ -531,7 +483,7 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
       lineupHome,
       lineupAway,
     }
-  })
+  }))
 
   /* ─── Build team → game context map ───────────────────────────── */
 
@@ -543,9 +495,29 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
 
   /* ─── Project each batter ─────────────────────────────────────── */
 
+  const teamsPlaying = new Set<string>()
+  for (const ctx of gameContexts) {
+    teamsPlaying.add(ctx.homeTeam)
+    teamsPlaying.add(ctx.awayTeam)
+  }
+
+  const rosterPlayerIds = new Set<string>()
+  for (const bp of bdlPlayers) {
+    const team = canon(bp.team_abbrev)
+    if (team && teamsPlaying.has(team) && bp.stat_player_id) {
+      rosterPlayerIds.add(bp.stat_player_id)
+    }
+  }
+  for (const p of players) {
+    const team = canon(p.team)
+    if (team && teamsPlaying.has(team)) {
+      rosterPlayerIds.add(p.stat_player_id)
+    }
+  }
+
   const results: EngineProjection[] = []
 
-  for (const [playerId, ev] of evMap) {
+  for (const playerId of rosterPlayerIds) {
     const player = playerMap.get(playerId)
     if (!player) continue
     const pTeam = canon(player.team)
@@ -555,15 +527,28 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
 
     const { ctx, side } = gm
     const oppTeam = side === 'home' ? ctx.awayTeam : ctx.homeTeam
-
+    const ev = evMap.get(playerId)
     const hr = hrMap.get(playerId)
-    const attempts = num((ev as any).attempts) ?? 0
-    const hrTotal = num((hr as any)?.hr_total) ?? 0
-    const brlPct = num((ev as any).brl_percent) ?? 0
-    if (hrTotal <= 0 && brlPct <= 0) continue
+    const bdlInfo = bdlByStatId.get(playerId)
+    const seasonBatting = bdlInfo ? bdlStatsById.get(bdlInfo.bdl_id) : null
+
+    const positionRaw = String(bdlInfo?.position ?? player.position ?? '').toUpperCase()
+    if (positionRaw === 'P' || positionRaw === 'SP' || positionRaw === 'RP') continue
+
+    const seasonPa =
+      (seasonBatting?.batting_ab ?? 0) +
+      (seasonBatting?.batting_bb ?? 0)
+    const attempts = num((ev as any)?.attempts) ?? (seasonPa > 0 ? seasonPa : 0)
+    const hrTotal = num((hr as any)?.hr_total) ?? seasonBatting?.batting_hr ?? 0
+    const brlPct = num((ev as any)?.brl_percent) ?? 0
+    if (attempts <= 0 && hrTotal <= 0 && brlPct <= 0) continue
 
     const hrPerPaVal = attempts > 0 ? hrTotal / attempts : null
-    if (hrPerPaVal == null) continue
+    const isoVal =
+      seasonBatting?.batting_slg != null && seasonBatting?.batting_avg != null
+        ? Number(seasonBatting.batting_slg) - Number(seasonBatting.batting_avg)
+        : null
+    if (hrPerPaVal == null && brlPct <= 0 && isoVal == null) continue
 
     // Determine opposing pitcher info
     const oppPitcherStatId = side === 'home' ? ctx.awayPitcherStatId : ctx.homePitcherStatId
@@ -572,7 +557,6 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
     const oppPitcherHrPer9 = side === 'home' ? ctx.awayPitcherHrPer9 : ctx.homePitcherHrPer9
 
     // Batter hand from BDL
-    const bdlInfo = bdlByStatId.get(playerId)
     const { bats: batterHand } = parseBatsThrows(bdlInfo?.bats_throws)
 
     // Lineup position
@@ -581,6 +565,7 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
 
     // Batted ball splits for handedness
     const bb = bbByPlayer.get(playerId)
+    const baseHrRate = hrPerPaVal ?? 0
     const isoRaw = num((ev as any).avg_hit_speed) != null
       ? null
       : null
@@ -590,21 +575,21 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
       const hrl = num(bb.lhp['HR/FB'])
       const fbl = num(bb.lhp['FB%'])
       if (hrl != null && fbl != null && fbl > 0) {
-        hrPerPaVsL = (hrl / 100) * (fbl / 100) * hrPerPaVal / 0.036 * 0.036
+        hrPerPaVsL = (hrl / 100) * (fbl / 100) * baseHrRate / 0.036 * 0.036
       }
     }
     if (bb?.rhp) {
       const hrr = num(bb.rhp['HR/FB'])
       const fbr = num(bb.rhp['FB%'])
       if (hrr != null && fbr != null && fbr > 0) {
-        hrPerPaVsR = (hrr / 100) * (fbr / 100) * hrPerPaVal / 0.036 * 0.036
+        hrPerPaVsR = (hrr / 100) * (fbr / 100) * baseHrRate / 0.036 * 0.036
       }
     }
 
     const batterInput: BatterFeatureInput = {
       hrPerPa:       hrPerPaVal,
-      barrelRate:    num((ev as any).brl_percent),
-      iso:           null,
+      barrelRate:    num((ev as any)?.brl_percent),
+      iso:           isoVal,
       hand:          batterHand,
       lineupPosition: lineupPos,
       hrPerPaVsL,
@@ -757,4 +742,40 @@ export async function runAndSaveProjections(dateOverride?: string): Promise<{ co
 
   console.log(`[hr-engine] Saved ${saved}/${projections.length} projections for ${date}`)
   return { computed: projections.length, saved }
+}
+
+export async function runUpcomingLineupRefresh(windowMinutes = 60) {
+  const sb = getServiceClient()
+  const now = new Date()
+  const end = new Date(now.getTime() + windowMinutes * 60 * 1000)
+
+  const { data } = await sb
+    .from('bdl_games')
+    .select('bdl_game_id,start_time_utc')
+    .gte('start_time_utc', now.toISOString())
+    .lte('start_time_utc', end.toISOString())
+    .order('start_time_utc', { ascending: true })
+
+  const dates = [
+    ...new Set(
+      ((data ?? []) as Array<{ start_time_utc: string | null }>)
+        .map((g) => etDateFromUtc(g.start_time_utc))
+        .filter((d): d is string => Boolean(d)),
+    ),
+  ]
+
+  let computed = 0
+  let saved = 0
+  for (const date of dates) {
+    const result = await runAndSaveProjections(date)
+    computed += result.computed
+    saved += result.saved
+  }
+
+  return {
+    windowMinutes,
+    dates,
+    computed,
+    saved,
+  }
 }

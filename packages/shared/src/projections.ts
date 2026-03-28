@@ -207,11 +207,8 @@ async function calculateMatchupProjections(
     homeAway.set(home, 'H'); homeAway.set(away, 'A')
   }
 
-  let year = await fetchMaxBattingHomerunYear(supabase)
-  if (year == null) {
-    // No batting HR data at all — try to show players for the playing teams
-    return fallbackTeamPlayers(supabase, teamsPlaying, matchupDisplayMap)
-  }
+  const year = await fetchMaxBattingHomerunYear(supabase)
+  if (year == null) return []
 
   const [evRows, hrRows, bArsenalRows, pArsenalRows, pHrRows, bbRows, parkRows, playersRes] =
     await Promise.all([
@@ -357,64 +354,14 @@ async function calculateMatchupProjections(
 }
 
 async function getGamesForDateRaw(supabase: SupabaseClient, dateIso: string) {
-  const [{ data: bdl }, { data: sched }] = await Promise.all([
-    supabase.from('bdl_games').select('home_team_abbrev,away_team_abbrev').eq('date', dateIso),
-    supabase.from('schedule_games').select('home_team,away_team').eq('date', dateIso),
-  ])
-  const pairKey = (home: string, away: string) =>
-    [canonicalTeam(home) ?? home, canonicalTeam(away) ?? away].sort().join('|')
-  const merged = new Map<string, { home_team: string; away_team: string }>()
-  for (const g of (sched ?? []) as any[]) {
-    merged.set(pairKey(g.home_team, g.away_team), { home_team: g.home_team, away_team: g.away_team })
+  const { data: bdl, error: bdlErr } = await supabase
+    .from('bdl_games').select('home_team_abbrev,away_team_abbrev').eq('date', dateIso)
+  if (!bdlErr && bdl?.length) {
+    return bdl.map((g) => ({ home_team: g.home_team_abbrev, away_team: g.away_team_abbrev })) as { home_team: string; away_team: string }[]
   }
-  for (const g of (bdl ?? []) as any[]) {
-    merged.set(pairKey(g.home_team_abbrev, g.away_team_abbrev), {
-      home_team: g.home_team_abbrev,
-      away_team: g.away_team_abbrev,
-    })
-  }
-  return [...merged.values()]
-}
-
-/**
- * When no stat data is available, at least return players that belong to teams
- * playing today so the UI can show names and team badges instead of dashes.
- */
-async function fallbackTeamPlayers(
-  supabase: SupabaseClient,
-  teamsPlaying: Set<string>,
-  matchupDisplayMap: Map<string, string>,
-): Promise<DailyProjection[]> {
-  const { data: players } = await supabase
-    .from('players')
-    .select('stat_player_id,slug,name,team,position')
-    .limit(5000)
-
-  if (!players?.length) return []
-
-  const results: DailyProjection[] = []
-  for (const p of players as any[]) {
-    const pTeam = canonicalTeam(p.team)
-    if (!pTeam || !teamsPlaying.has(pTeam)) continue
-
-    results.push({
-      playerId: p.stat_player_id,
-      slug: p.slug ?? '',
-      name: p.name ?? 'Unknown',
-      team: pTeam,
-      position: p.position ?? null,
-      opponentPitcher: null,
-      opponentPitcherHand: null,
-      hrProbability: null,
-      l7Hrs: null,
-      tier: null,
-      opponent: matchupDisplayMap.get(pTeam) ?? null,
-      americanOdds: null,
-      americanOddsStr: null,
-      source: 'hr_model',
-    })
-  }
-  return results
+  const { data } = await supabase
+    .from('schedule_games').select('home_team,away_team').eq('date', dateIso)
+  return (data ?? []) as { home_team: string; away_team: string }[]
 }
 
 /* ─── Public API ─────────────────────────────────────────────────── */
