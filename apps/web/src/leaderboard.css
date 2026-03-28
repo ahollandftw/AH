@@ -28,6 +28,100 @@
   font-size: 0.9rem;
 }
 
+.lb-calendarCard {
+  margin: 0 0 18px;
+  padding: 16px;
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 26%, transparent);
+  background: color-mix(in srgb, var(--color-surface) 58%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.lb-calendarHead {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.lb-calendarKicker {
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-secondary) 72%, transparent);
+}
+
+.lb-calendarTitle {
+  margin: 3px 0 0;
+  font-size: 1.1rem;
+  font-weight: 900;
+  letter-spacing: 0.02em;
+}
+
+.lb-calendarLegend {
+  color: var(--color-muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.lb-calendarWeekdays,
+.lb-calendarGrid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.lb-calendarWeekdays {
+  margin-bottom: 8px;
+}
+
+.lb-calendarWeekday {
+  text-align: center;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-secondary) 76%, transparent);
+}
+
+.lb-calendarDay {
+  min-height: 74px;
+  padding: 10px 8px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--color-secondary) 14%, transparent);
+  background: color-mix(in srgb, var(--color-bg) 50%, var(--color-surface));
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.lb-calendarDay:not(.lb-calendarDay--blank) {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--color-primary) calc(var(--lb-calendar-alpha, 0) * 100%), transparent),
+      color-mix(in srgb, var(--color-bg) 58%, var(--color-surface))
+    );
+}
+
+.lb-calendarDay--blank {
+  opacity: 0.22;
+}
+
+.lb-calendarDate {
+  font-size: 0.86rem;
+  font-weight: 900;
+  color: var(--color-text);
+}
+
+.lb-calendarCount {
+  font-size: 0.78rem;
+  font-weight: 800;
+  color: color-mix(in srgb, var(--color-primary) 86%, white);
+}
+
 .lb-tabs {
   display: flex;
   flex-wrap: wrap;

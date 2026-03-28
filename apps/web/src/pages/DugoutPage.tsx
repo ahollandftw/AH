@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   formatProbability,
+  getBallparkForHomeTeam,
   getAppDisplayDateIso,
   getGamesForDate,
   getScheduleDates,
@@ -23,26 +24,88 @@ type WeatherSlateEntry = {
       temp?: number
       feels_like?: number
       wind_speed?: number
-      weather?: Array<{ description?: string }>
+      wind_deg?: number
+      weather?: Array<{ main?: string; description?: string }>
     }
   }
   error?: string
 }
 
-function formatBallparkWx(entry: WeatherSlateEntry | undefined): string | null {
-  if (!entry) return null
-  if (entry.error) return 'Weather unavailable'
-  if (!entry.weather?.current) return 'Weather unavailable'
-  const c = entry.weather.current
-  const t = c.temp
-  const desc = c.weather?.[0]?.description
-  const wind = c.wind_speed
-  if (t == null && !desc && wind == null) return 'Weather unavailable'
-  const parts: string[] = []
-  if (t != null) parts.push(`${Math.round(t)}°F`)
-  if (desc) parts.push(desc)
-  if (wind != null) parts.push(`${Math.round(wind)} mph wind`)
-  return parts.join(' · ')
+type WeatherDisplay = {
+  tempText: string | null
+  weatherText: string | null
+  weatherIcon: string | null
+  windText: string | null
+  windRotation: number | null
+  roofText: string | null
+}
+
+function normalizeDeg(deg: number): number {
+  return ((deg % 360) + 360) % 360
+}
+
+function signedAngleDelta(fromDeg: number, toDeg: number): number {
+  return ((toDeg - fromDeg + 540) % 360) - 180
+}
+
+function weatherIconFor(main?: string | null, description?: string | null): string {
+  const text = `${main ?? ''} ${description ?? ''}`.trim().toLowerCase()
+  if (/thunder|storm/.test(text)) return '⛈️'
+  if (/snow|sleet|ice/.test(text)) return '❄️'
+  if (/rain|drizzle|shower/.test(text)) return '🌧️'
+  if (/mist|fog|haze|smoke/.test(text)) return '🌫️'
+  if (/overcast/.test(text)) return '☁️'
+  if (/cloud/.test(text)) return '⛅'
+  if (/clear|sun/.test(text)) return '☀️'
+  return '🌤️'
+}
+
+function formatWindForField(entry: WeatherSlateEntry | undefined, homeTeam: string): Pick<WeatherDisplay, 'windText' | 'windRotation' | 'roofText'> {
+  const park = getBallparkForHomeTeam(homeTeam)
+  if (!park) return { windText: null, windRotation: null, roofText: null }
+  if (park.roof === 'dome') {
+    return { windText: null, windRotation: null, roofText: 'Indoor dome' }
+  }
+  const windSpeed = entry?.weather?.current?.wind_speed
+  const windDeg = entry?.weather?.current?.wind_deg
+  if (windSpeed == null || windDeg == null) {
+    return {
+      windText: null,
+      windRotation: null,
+      roofText: park.roof === 'retractable' ? 'Retractable roof park' : null,
+    }
+  }
+  const windTo = normalizeDeg(windDeg + 180)
+  const delta = signedAngleDelta(park.cfBearing, windTo)
+  let direction = 'toward RF'
+  if (Math.abs(delta) <= 30) direction = 'out to CF'
+  else if (Math.abs(delta) >= 150) direction = 'in to home plate'
+  else if (delta < 0) direction = 'toward LF'
+  return {
+    windText: `${Math.round(windSpeed)} mph ${direction}`,
+    windRotation: delta,
+    roofText: park.roof === 'retractable' ? 'Retractable roof park' : null,
+  }
+}
+
+function getWeatherDisplay(entry: WeatherSlateEntry | undefined, homeTeam: string): WeatherDisplay | null {
+  if (!entry || entry.error || !entry.weather?.current) return null
+  const current = entry.weather.current
+  const detail = current.weather?.[0]
+  const tempText = current.temp != null ? `${Math.round(current.temp)}°F` : null
+  const weatherText = detail?.description
+    ? detail.description.replace(/\b\w/g, (ch) => ch.toUpperCase())
+    : null
+  const { windText, windRotation, roofText } = formatWindForField(entry, homeTeam)
+  if (!tempText && !weatherText && !windText && !roofText) return null
+  return {
+    tempText,
+    weatherText,
+    weatherIcon: weatherText ? weatherIconFor(detail?.main, detail?.description) : null,
+    windText,
+    windRotation,
+    roofText,
+  }
 }
 
 function shiftIsoDate(dateIso: string, days: number): string {
@@ -561,7 +624,7 @@ export default function DugoutPage() {
 
   return (
     <div className="pg">
-      <h1 className="pg-title">Dugout</h1>
+      <h1 className="pg-title">Scoreboard</h1>
       <div className="pg-controls">
         <label htmlFor="dugout-date" className="pg-label">
           Date
@@ -640,7 +703,7 @@ export default function DugoutPage() {
                   const homePalette = paletteForTeam(homeTop?.team ?? g.homeTeam)
                   const isExpanded = expandedGameId === g.gameId
                   const homeNorm = normalizeTeamCode(g.homeTeam) ?? g.homeTeam
-                  const wxLine = formatBallparkWx(weatherByHome[homeNorm])
+                  const weatherDisplay = getWeatherDisplay(weatherByHome[homeNorm], homeNorm)
                   const lineupCacheKey = live?.bdl_game_id ? `game:${live.bdl_game_id}` : `pair:${displayDate}:${awayKey}:${homeKey}`
                   const homerHitters = extractHomerHitters(live?.scoring_summary)
                   return (
@@ -659,13 +722,55 @@ export default function DugoutPage() {
                               {g.awayTeam} @ {g.homeTeam}
                             </Link>
                           </div>
-                          <div className="pg-weather">
-                            {formatGameStatus(live) || (live?.start_time_utc ? `${formatEtTime(live.start_time_utc)} ET` : 'TBD')}
+                          <div className="pg-gameMetaCenter">
+                            <div className="pg-weather pg-weather--status">
+                              {formatGameStatus(live) || (live?.start_time_utc ? `${formatEtTime(live.start_time_utc)} ET` : 'TBD')}
+                            </div>
+                            {weatherDisplay ? (
+                              <div
+                                className="pg-weatherRow"
+                                title={weatherByHome[homeNorm]?.stadium ?? ''}
+                              >
+                                {weatherDisplay.tempText ? (
+                                  <span className="pg-weatherChip">
+                                    <span className="pg-weatherIcon" aria-hidden="true">🌡️</span>
+                                    <span>{weatherDisplay.tempText}</span>
+                                  </span>
+                                ) : null}
+                                {weatherDisplay.weatherText ? (
+                                  <span className="pg-weatherChip">
+                                    <span className="pg-weatherIcon" aria-hidden="true">{weatherDisplay.weatherIcon}</span>
+                                    <span>{weatherDisplay.weatherText}</span>
+                                  </span>
+                                ) : null}
+                                {weatherDisplay.windText ? (
+                                  <span className="pg-weatherChip">
+                                    <span
+                                      className="pg-weatherArrow"
+                                      aria-hidden="true"
+                                      style={{ transform: `rotate(${weatherDisplay.windRotation ?? 0}deg)` }}
+                                    >
+                                      ↑
+                                    </span>
+                                    <span>{weatherDisplay.windText}</span>
+                                  </span>
+                                ) : null}
+                                {weatherDisplay.roofText ? (
+                                  <span className="pg-weatherChip pg-weatherChip--roof">
+                                    <span className="pg-weatherIcon" aria-hidden="true">🏟️</span>
+                                    <span>{weatherDisplay.roofText}</span>
+                                  </span>
+                                ) : null}
+                              </div>
+                            ) : null}
                           </div>
                         </div>
-                        {wxLine ? (
-                          <div className="pg-sub" style={{ marginTop: 6 }} title={weatherByHome[homeNorm]?.error ?? weatherByHome[homeNorm]?.stadium ?? ''}>
-                            {wxLine}
+                        {!weatherDisplay && weatherByHome[homeNorm]?.error ? (
+                          <div
+                            className="pg-sub pg-sub--weatherError"
+                            title={weatherByHome[homeNorm]?.error ?? weatherByHome[homeNorm]?.stadium ?? ''}
+                          >
+                            Weather unavailable
                           </div>
                         ) : null}
                         {gameStarted ? (

@@ -27,6 +27,12 @@ function utcToETDateIso(utcStr: string): string | null {
   }
 }
 
+function shiftIsoDate(dateIso: string, days: number): string {
+  const d = new Date(`${dateIso}T12:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + days)
+  return d.toISOString().slice(0, 10)
+}
+
 /**
  * Canonical team abbreviation — collapses known aliases so the same franchise
  * isn't counted twice (e.g. the Athletics were "OAK" in the CSV schedule but
@@ -65,7 +71,8 @@ export async function getGamesForDate(
     supabase
       .from('bdl_games')
       .select('bdl_game_id,date,start_time_utc,home_team_abbrev,away_team_abbrev')
-      .eq('date', dateIso)
+      .gte('date', shiftIsoDate(dateIso, -1))
+      .lte('date', shiftIsoDate(dateIso, 1))
       .order('bdl_game_id'),
     supabase
       .from('schedule_games')
@@ -80,15 +87,15 @@ export async function getGamesForDate(
   // Add validated BDL games first (ET date check guards against sync-day bleed-over)
   for (const r of ((bdlRes.data ?? []) as any[])) {
     const utc: string | null = r.start_time_utc ?? null
+    const etDate = utc ? utcToETDateIso(utc) : null
     if (utc) {
-      const etDate = utcToETDateIso(utc)
       if (etDate && etDate !== dateIso) continue // wrong calendar day — skip
     }
     const key = teamPairKey(r.home_team_abbrev, r.away_team_abbrev)
     coveredPairs.add(key)
     merged.push({
       gameId: String(r.bdl_game_id),
-      date: r.date,
+      date: etDate ?? r.date,
       homeTeam: r.home_team_abbrev,
       awayTeam: r.away_team_abbrev,
       slateType: null,

@@ -3,6 +3,20 @@ import { mergedHrProbabilityMapForDate } from '../matchupProjectionMerge.js'
 import { getServiceClient } from '../supabase.js'
 import type { LeaderboardEntry, LeaderboardResponse } from '../types.js'
 
+function utcToETDateIso(utcStr: string | null | undefined): string | null {
+  if (!utcStr) return null
+  try {
+    const d = new Date(new Date(utcStr).toLocaleString('en-US', { timeZone: 'America/New_York' }))
+    if (Number.isNaN(d.getTime())) return null
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, '0')
+    const dd = String(d.getDate()).padStart(2, '0')
+    return `${y}-${m}-${dd}`
+  } catch {
+    return null
+  }
+}
+
 function parseIncludeLow(req: Request): boolean {
   return req.query.include_low_sample === 'true'
 }
@@ -89,7 +103,7 @@ export function registerLeaderboardRoutes(app: Express) {
 
       const { data: seasonGames, error: gErr } = await supabase
         .from('bdl_games')
-        .select('bdl_game_id,date,venue,home_team_abbrev,away_team_abbrev')
+        .select('bdl_game_id,date,start_time_utc,venue,home_team_abbrev,away_team_abbrev')
         .gte('date', `${season}-01-01`)
         .lte('date', `${season}-12-31`)
 
@@ -97,13 +111,14 @@ export function registerLeaderboardRoutes(app: Express) {
 
       const gameMeta = new Map<
         number,
-        { date: string; venue: string | null; home: string; away: string }
+        { date: string; start_time_utc: string | null; venue: string | null; home: string; away: string }
       >()
       for (const g of seasonGames ?? []) {
         const id = Number((g as { bdl_game_id: number }).bdl_game_id)
         if (!id) continue
         gameMeta.set(id, {
           date: String((g as { date: string }).date),
+          start_time_utc: (g as { start_time_utc: string | null }).start_time_utc ?? null,
           venue: (g as { venue: string | null }).venue ?? null,
           home: String((g as { home_team_abbrev: string }).home_team_abbrev ?? ''),
           away: String((g as { away_team_abbrev: string }).away_team_abbrev ?? ''),
@@ -189,7 +204,10 @@ export function registerLeaderboardRoutes(app: Express) {
         const gid = Number(ev.bdl_game_id ?? 0)
         const meta = gameMeta.get(gid)
         const gameDate =
-          (ev.game_date as string | null | undefined) ?? meta?.date ?? null
+          utcToETDateIso(meta?.start_time_utc) ??
+          (ev.game_date as string | null | undefined) ??
+          meta?.date ??
+          null
         const stadium =
           (ev.venue as string | null | undefined) ?? meta?.venue ?? null
         const sid = ev.stat_player_id != null ? String(ev.stat_player_id) : null
@@ -284,10 +302,19 @@ export function registerLeaderboardRoutes(app: Express) {
       }
       rows.sort(cmp)
 
+      const marchMonth = `${season}-03`
+      const marchCounts = rows.reduce<Record<string, number>>((acc, row) => {
+        if (!row.game_date?.startsWith(`${marchMonth}-`)) return acc
+        acc[row.game_date] = (acc[row.game_date] ?? 0) + 1
+        return acc
+      }, {})
+
       res.json({
         last_updated: new Date().toISOString(),
         season,
         count: rows.length,
+        calendar_month: marchMonth,
+        calendar_counts: marchCounts,
         persisted:
           'Each HR is stored in Supabase `bdl_hr_events` (enriched from `bdl_games`) for future reference.',
         events: rows.slice(0, limit),

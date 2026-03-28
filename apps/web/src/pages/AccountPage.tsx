@@ -412,7 +412,7 @@ export default function AccountPage() {
         <div className="acc-card">
           <h2 className="pg-sectionTitle">Liability Waiver Required</h2>
           <p className="pg-sub">
-            Accept the waiver to unlock Dugout, Projections, HR Tracking, and the rest of the app.
+            Accept the waiver to unlock Scoreboard, Projections, HR Tracking, and the rest of the app.
           </p>
           <div className="pg-focusCard" style={{ marginTop: 8 }}>
             <div className="pg-focusLine"><strong>DISCLAIMER OF LIABILITY</strong></div>

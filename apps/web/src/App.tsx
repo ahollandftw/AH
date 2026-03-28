@@ -22,14 +22,14 @@ function Layout() {
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const fullLinks = [
-    ['/dugout', 'Dugout', '⚾'],
+    ['/dugout', 'Scoreboard', '⚾'],
     ['/projections', 'Projections', '📈'],
     ['/stats', 'Homer Tracking', '📊'],
     ['/community', 'Leaderboard', '🏆'],
     ['/wall', 'Wall of Bang', '💥'],
   ] as const
   const menuLinks = [
-    ['/dugout', 'Dugout'],
+    ['/dugout', 'Scoreboard'],
     ['/projections', 'Projections'],
     ['/stats', 'Homer Tracking'],
     ['/community', 'Leaderboard'],
@@ -150,7 +150,7 @@ function Layout() {
             </div>
           ) : null}
         </div>
-        <Link to="/dugout" className="topBanner-logoLink" aria-label="Go to Dugout">
+        <Link to="/dugout" className="topBanner-logoLink" aria-label="Go to Scoreboard">
           <span className="topBanner-logoFrame" style={{ ['--logo-url' as string]: `url("${appLogo}")` }}>
             <span className="topBanner-logoMask" aria-hidden="true" />
           </span>

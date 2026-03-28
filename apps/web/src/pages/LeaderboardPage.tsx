@@ -24,6 +24,8 @@ type HomersResponse = {
   last_updated: string
   season: number
   count: number
+  calendar_month?: string
+  calendar_counts?: Record<string, number>
   events: HrEventRow[]
 }
 
@@ -32,6 +34,25 @@ const apiBase = () => import.meta.env.VITE_API_BASE_URL ?? ''
 function fmtPct(x: number | null | undefined): string {
   if (x == null || Number.isNaN(x)) return '—'
   return `${(x * 100).toFixed(1)}%`
+}
+
+function buildMonthCells(monthIso: string): Array<{ iso: string | null; day: number | null }> {
+  const [yearStr, monthStr] = monthIso.split('-')
+  const year = Number(yearStr)
+  const monthIndex = Number(monthStr) - 1
+  const first = new Date(Date.UTC(year, monthIndex, 1))
+  const daysInMonth = new Date(Date.UTC(year, monthIndex + 1, 0)).getUTCDate()
+  const startWeekday = first.getUTCDay()
+  const cells: Array<{ iso: string | null; day: number | null }> = []
+  for (let i = 0; i < startWeekday; i += 1) cells.push({ iso: null, day: null })
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    cells.push({
+      iso: `${monthIso}-${String(day).padStart(2, '0')}`,
+      day,
+    })
+  }
+  while (cells.length % 7 !== 0) cells.push({ iso: null, day: null })
+  return cells
 }
 
 export default function LeaderboardPage() {
@@ -58,6 +79,18 @@ export default function LeaderboardPage() {
     if (batter.trim()) p.set('batter', batter.trim())
     return p.toString()
   }, [season, sort, dir, stadium, team, pitcher, batter])
+
+  const monthIso = data?.calendar_month ?? `${season}-03`
+  const monthLabel = useMemo(() => {
+    const [yearStr, monthStr] = monthIso.split('-')
+    const d = new Date(Date.UTC(Number(yearStr), Number(monthStr) - 1, 1))
+    return d.toLocaleString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' })
+  }, [monthIso])
+  const monthCells = useMemo(() => buildMonthCells(monthIso), [monthIso])
+  const maxCalendarCount = useMemo(() => {
+    const vals = Object.values(data?.calendar_counts ?? {})
+    return vals.length ? Math.max(...vals) : 0
+  }, [data?.calendar_counts])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -97,6 +130,47 @@ export default function LeaderboardPage() {
         Last updated:{' '}
         {data?.last_updated ? new Date(data.last_updated).toLocaleString() : '—'}
       </p>
+
+      <section className="lb-calendarCard" aria-label={`${monthLabel} home run totals`}>
+        <div className="lb-calendarHead">
+          <div>
+            <div className="lb-calendarKicker">Home Runs by Day</div>
+            <h2 className="lb-calendarTitle">{monthLabel}</h2>
+          </div>
+          <div className="lb-calendarLegend">
+            {data?.calendar_counts ? `${Object.keys(data.calendar_counts).length} active days` : 'No homers logged'}
+          </div>
+        </div>
+        <div className="lb-calendarWeekdays">
+          {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((label) => (
+            <div key={label} className="lb-calendarWeekday">{label}</div>
+          ))}
+        </div>
+        <div className="lb-calendarGrid">
+          {monthCells.map((cell, idx) => {
+            const count = cell.iso ? (data?.calendar_counts?.[cell.iso] ?? 0) : 0
+            const intensity = maxCalendarCount > 0 ? Math.max(0.14, count / maxCalendarCount) : 0
+            return (
+              <div
+                key={cell.iso ?? `blank-${idx}`}
+                className={`lb-calendarDay ${cell.iso ? '' : 'lb-calendarDay--blank'}`}
+                style={
+                  cell.iso && count > 0
+                    ? { ['--lb-calendar-alpha' as string]: String(intensity) }
+                    : undefined
+                }
+              >
+                {cell.iso ? (
+                  <>
+                    <div className="lb-calendarDate">{cell.day}</div>
+                    <div className="lb-calendarCount">{count > 0 ? `${count} HR` : '0'}</div>
+                  </>
+                ) : null}
+              </div>
+            )
+          })}
+        </div>
+      </section>
 
       <div className="lb-toolbar lb-toolbar--sort">
         <label className="lb-field">
