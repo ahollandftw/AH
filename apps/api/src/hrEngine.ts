@@ -11,11 +11,11 @@ import { getServiceClient } from './supabase.js'
 import { config } from './config.js'
 import { bdlFetch } from './bdl/client.js'
 import { getBestLineupForGame, getResolvedGamesForDate } from './bdl/lineups.js'
+import { listCachedWeatherForDate, syncWeatherForDate } from './weather/cache.js'
 import {
   getBallparkForHomeTeam,
   type BallparkInfo,
 } from './weather/mlbBallparks.js'
-import { fetchOneCallWeather, type OneCallPayload } from './weather/openWeather.js'
 
 import {
   zHrPerPa,
@@ -231,15 +231,22 @@ async function fetchBdlProbablePitchers(
   return map
 }
 
-/* ─── Weather → WeatherInput conversion ─────────────────────────── */
+/* ─── Weather cache → WeatherInput conversion ───────────────────── */
 
-function weatherToInput(ow: OneCallPayload, park: BallparkInfo): WeatherInput | null {
-  const c = ow.current
-  if (!c) return null
-  const tempF = c.temp ?? 72
-  const windSpeedMph = c.wind_speed ?? 0
-  const windDegMeteo = c.wind_deg ?? 0
-  const humidity = c.humidity ?? 50
+function weatherToInput(
+  row: {
+    temp_f: number | null
+    humidity_pct: number | null
+    wind_speed_mph: number | null
+    wind_deg: number | null
+  } | null | undefined,
+  park: BallparkInfo,
+) {
+  if (!row) return null
+  const tempF = row.temp_f ?? 72
+  const windSpeedMph = row.wind_speed_mph ?? 0
+  const windDegMeteo = row.wind_deg ?? 0
+  const humidity = row.humidity_pct ?? 50
 
   if (park.roof === 'dome') {
     return { tempF: 72, windSpeedMph: 0, windDirectionDeg: 90, humidityPct: 50 }
@@ -325,21 +332,18 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
 
   const probPitchers = await fetchBdlProbablePitchers(sb, date)
 
-  // Fetch weather for each unique home team
-  const homeTeams = [...new Set(games.map((g) => canon(g.home_team_abbrev)).filter(Boolean))] as string[]
-  const weatherByTeam = new Map<string, WeatherInput | null>()
+  const weatherByGameId = new Map<number, ReturnType<typeof weatherToInput>>()
   if (config.openWeatherApiKey()) {
-    const tasks = homeTeams.map(async (t) => {
-      const bp = getBallparkForHomeTeam(t)
-      if (!bp) return
-      try {
-        const ow = await fetchOneCallWeather(bp.lat, bp.lon)
-        weatherByTeam.set(t, weatherToInput(ow, bp))
-      } catch (e) {
-        console.warn(`[hr-engine] weather failed for ${t}:`, e)
-      }
-    })
-    await Promise.all(tasks)
+    const weatherSync = await syncWeatherForDate(sb, date)
+    if (weatherSync.errors.length) {
+      console.warn('[hr-engine] weather sync errors:', weatherSync.errors.join(' | '))
+    }
+    const cachedWeather = await listCachedWeatherForDate(sb, date)
+    for (const row of cachedWeather) {
+      const park = getBallparkForHomeTeam(row.home_team)
+      if (!park) continue
+      weatherByGameId.set(Number(row.bdl_game_id), weatherToInput(row, park))
+    }
   } else {
     console.warn('[hr-engine] OPENWEATHER_API_KEY not configured; weather feature omitted for all games')
   }
@@ -471,7 +475,7 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
       homeTeam: home,
       awayTeam: away,
       parkFactor: lookupParkFactor(home, venueLower),
-      weather: weatherByTeam.get(home) ?? null,
+      weather: weatherByGameId.get(g.bdl_game_id) ?? null,
       homePitcherStatId: resolveStatIdFromBdl(pp?.home ?? null),
       awayPitcherStatId: resolveStatIdFromBdl(pp?.away ?? null),
       homePitcherHand: pitcherHandFromBdl(pp?.home ?? null),

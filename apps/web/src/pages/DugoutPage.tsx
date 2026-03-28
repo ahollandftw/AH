@@ -289,7 +289,7 @@ export default function DugoutPage() {
       ...new Set(visibleGames.map((g) => normalizeTeamCode(g.homeTeam) ?? g.homeTeam)),
     ]
     const ac = new AbortController()
-    void fetch(`${base}/bdl/weather/slate?homes=${encodeURIComponent(homes.join(','))}`, {
+    void fetch(`${base}/bdl/weather/slate?date=${encodeURIComponent(displayDate)}&homes=${encodeURIComponent(homes.join(','))}`, {
       signal: ac.signal,
     })
       .then((r) => {
@@ -306,7 +306,7 @@ export default function DugoutPage() {
       })
       .catch(() => {})
     return () => ac.abort()
-  }, [visibleGames])
+  }, [displayDate, visibleGames])
 
   function toProjections(params: { date: string; team?: string; player?: string }) {
     const qp = new URLSearchParams()

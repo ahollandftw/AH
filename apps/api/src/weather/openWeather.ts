@@ -11,7 +11,9 @@ export type OneCallPayload = {
   lat: number
   lon: number
   timezone?: string
+  timezone_offset?: number
   current?: {
+    dt?: number
     temp?: number
     feels_like?: number
     humidity?: number
@@ -19,6 +21,15 @@ export type OneCallPayload = {
     wind_deg?: number
     weather?: Array<{ id?: number; main?: string; description?: string; icon?: string }>
   }
+  hourly?: Array<{
+    dt?: number
+    temp?: number
+    feels_like?: number
+    humidity?: number
+    wind_speed?: number
+    wind_deg?: number
+    weather?: Array<{ id?: number; main?: string; description?: string; icon?: string }>
+  }>
 }
 
 function cacheKey(lat: number, lon: number): string {
@@ -56,7 +67,9 @@ export async function fetchOneCallWeather(lat: number, lon: number): Promise<One
     lat,
     lon,
     timezone: raw.timezone as string | undefined,
+    timezone_offset: raw.timezone_offset as number | undefined,
     current: raw.current as OneCallPayload['current'],
+    hourly: raw.hourly as OneCallPayload['hourly'],
   }
 
   cache.set(key, { at: now, payload })
