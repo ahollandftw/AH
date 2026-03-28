@@ -11,8 +11,9 @@ import {
 import { startLiveMonitor, stopLiveMonitor } from '../bdl/liveMonitor.js'
 import { calculateEdge, calculateEdgesForDate } from '../bdl/edge.js'
 import { getServiceClient } from '../supabase.js'
-import { bdlFetch, bdlFetchAll, type BdlPlay, type BdlPlateAppearance } from '../bdl/client.js'
+import { bdlFetch, bdlFetchAll, type BdlGame, type BdlPlay, type BdlPlateAppearance } from '../bdl/client.js'
 import { buildHrEventEnrichment } from '../bdl/hrEventEnrichment.js'
+import { syncLineupForGame } from '../bdl/lineupSync.js'
 
 export function registerBdlRoutes(app: Express) {
   const canonTeam = (team: string): string => {
@@ -26,6 +27,39 @@ export function registerBdlRoutes(app: Express) {
     if (t === 'OAK' || t === 'ATH') return 'ATH'
     if (t === 'CWS' || t === 'CHW') return 'CHW'
     return t
+  }
+  const teamVariants = (team: string): string[] => {
+    const canon = canonTeam(team)
+    if (canon === 'TBR') return ['TBR', 'TB']
+    if (canon === 'WSN') return ['WSN', 'WSH', 'WAS']
+    if (canon === 'ARI') return ['ARI', 'AZ']
+    if (canon === 'KCR') return ['KCR', 'KC']
+    if (canon === 'SFG') return ['SFG', 'SF']
+    if (canon === 'SDP') return ['SDP', 'SD']
+    if (canon === 'ATH') return ['ATH', 'OAK']
+    if (canon === 'CHW') return ['CHW', 'CWS']
+    return [canon]
+  }
+  async function syncLiveLineupForMatchup(date: string, homeTeam: string, awayTeam: string): Promise<boolean> {
+    try {
+      const games = await bdlFetchAll<BdlGame>('/mlb/v1/games', {
+        'dates[]': date,
+        season_type: 'regular',
+      })
+      const match = games.find((g) =>
+        canonTeam(g.home_team?.abbreviation ?? '') === canonTeam(homeTeam)
+        && canonTeam(g.away_team?.abbreviation ?? '') === canonTeam(awayTeam),
+      )
+      if (!match?.id) return false
+      return syncLineupForGame(
+        match.id,
+        date,
+        match.home_team?.abbreviation ?? homeTeam,
+        match.away_team?.abbreviation ?? awayTeam,
+      )
+    } catch {
+      return false
+    }
   }
   /* ── Daily sync (called by cron or manually) ─────────────────── */
 
@@ -900,12 +934,20 @@ export function registerBdlRoutes(app: Express) {
 
       // BDL returns lineups keyed by team; structure: { data: { home: [...], away: [...] } }
       type BdlLineupEntry = {
-        player: { id: number; full_name: string; position: string }
+        game_id: number
+        player: {
+          id: number
+          full_name: string
+          position: string
+          team?: { abbreviation?: string | null } | null
+        }
+        team?: { abbreviation?: string | null } | null
         batting_order: number | null
         position: string | null
+        is_probable_pitcher?: boolean | null
       }
       type BdlLineupResponse = {
-        data?: { home?: BdlLineupEntry[]; away?: BdlLineupEntry[] }
+        data?: BdlLineupEntry[]
       }
 
       let bdlLineup: BdlLineupResponse
@@ -917,8 +959,20 @@ export function registerBdlRoutes(app: Express) {
         return
       }
 
-      const homeEntries: BdlLineupEntry[] = bdlLineup?.data?.home ?? []
-      const awayEntries: BdlLineupEntry[] = bdlLineup?.data?.away ?? []
+      const entries = (bdlLineup?.data ?? []).filter((e) => Number(e.game_id ?? 0) === bdlGameId)
+      const { data: gameRow } = await getServiceClient()
+        .from('bdl_games')
+        .select('home_team_abbrev,away_team_abbrev')
+        .eq('bdl_game_id', bdlGameId)
+        .maybeSingle()
+      const homeTeam = canonTeam(String((gameRow as any)?.home_team_abbrev ?? ''))
+      const awayTeam = canonTeam(String((gameRow as any)?.away_team_abbrev ?? ''))
+      const homeEntries: BdlLineupEntry[] = entries.filter(
+        (e) => canonTeam(String(e.team?.abbreviation ?? e.player?.team?.abbreviation ?? '')) === homeTeam,
+      )
+      const awayEntries: BdlLineupEntry[] = entries.filter(
+        (e) => canonTeam(String(e.team?.abbreviation ?? e.player?.team?.abbreviation ?? '')) === awayTeam,
+      )
 
       if (!homeEntries.length && !awayEntries.length) {
         res.json({ data: null, reason: 'Lineup not posted yet' })
@@ -985,13 +1039,14 @@ export function registerBdlRoutes(app: Express) {
 
       const sb = getServiceClient()
 
-      const fetchTeamLineup = async (team: string, side: string) => {
+      const fetchTeamLineup = async (team: string) => {
         // Try today's confirmed lineup first
         const { data: today } = await sb
           .from('bdl_lineups')
           .select('bdl_player_id, stat_player_id, full_name, position, batting_order, is_confirmed')
           .eq('date', date)
-          .eq('team_abbrev', team)
+          .in('team_abbrev', teamVariants(team))
+          .eq('is_confirmed', true)
           .order('batting_order', { ascending: true })
 
         if (today?.length) {
@@ -1002,7 +1057,7 @@ export function registerBdlRoutes(app: Express) {
         const { data: prev } = await sb
           .from('bdl_lineups')
           .select('bdl_player_id, stat_player_id, full_name, position, batting_order, is_confirmed, date')
-          .eq('team_abbrev', team)
+          .in('team_abbrev', teamVariants(team))
           .eq('is_confirmed', true)
           .lt('date', date)
           .order('date', { ascending: false })
@@ -1017,10 +1072,19 @@ export function registerBdlRoutes(app: Express) {
         return { players: [], source: 'none' as const }
       }
 
-      const [home, away] = await Promise.all([
-        homeTeam ? fetchTeamLineup(homeTeam, 'home') : Promise.resolve({ players: [], source: 'none' as const }),
-        awayTeam ? fetchTeamLineup(awayTeam, 'away') : Promise.resolve({ players: [], source: 'none' as const }),
+      let [home, away] = await Promise.all([
+        homeTeam ? fetchTeamLineup(homeTeam) : Promise.resolve({ players: [], source: 'none' as const }),
+        awayTeam ? fetchTeamLineup(awayTeam) : Promise.resolve({ players: [], source: 'none' as const }),
       ])
+
+      const needsTodayLineup =
+        date && homeTeam && awayTeam && (home.source !== 'confirmed' || away.source !== 'confirmed')
+      if (needsTodayLineup) {
+        const synced = await syncLiveLineupForMatchup(date, homeTeam, awayTeam)
+        if (synced) {
+          ;[home, away] = await Promise.all([fetchTeamLineup(homeTeam), fetchTeamLineup(awayTeam)])
+        }
+      }
 
       res.json({
         data: {

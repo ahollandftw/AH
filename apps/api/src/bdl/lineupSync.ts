@@ -9,12 +9,33 @@ import { getServiceClient } from '../supabase.js'
 import { bdlFetch } from './client.js'
 
 type BdlLineupEntry = {
-  player: { id: number; full_name: string; position: string }
+  game_id: number
+  player: {
+    id: number
+    full_name: string
+    position: string
+    team?: { abbreviation?: string | null } | null
+  }
+  team?: { abbreviation?: string | null } | null
   batting_order: number | null
   position: string | null
+  is_probable_pitcher?: boolean | null
 }
 type BdlLineupResponse = {
-  data?: { home?: BdlLineupEntry[]; away?: BdlLineupEntry[] }
+  data?: BdlLineupEntry[]
+}
+
+function canonTeam(team: string): string {
+  const t = team.trim().toUpperCase()
+  if (t === 'TB' || t === 'TBR') return 'TBR'
+  if (t === 'WSH' || t === 'WSN' || t === 'WAS') return 'WSN'
+  if (t === 'AZ' || t === 'ARI') return 'ARI'
+  if (t === 'KC' || t === 'KCR') return 'KCR'
+  if (t === 'SF' || t === 'SFG') return 'SFG'
+  if (t === 'SD' || t === 'SDP') return 'SDP'
+  if (t === 'OAK' || t === 'ATH') return 'ATH'
+  if (t === 'CWS' || t === 'CHW') return 'CHW'
+  return t
 }
 
 function todayET(): string {
@@ -39,8 +60,15 @@ export async function syncLineupForGame(
     return false
   }
 
-  const homeEntries = bdlLineup?.data?.home ?? []
-  const awayEntries = bdlLineup?.data?.away ?? []
+  const entries = (bdlLineup?.data ?? []).filter((e) => Number(e.game_id ?? 0) === bdlGameId)
+  const homeTeam = canonTeam(homeAbbrev)
+  const awayTeam = canonTeam(awayAbbrev)
+  const homeEntries = entries.filter(
+    (e) => canonTeam(String(e.team?.abbreviation ?? e.player?.team?.abbreviation ?? '')) === homeTeam,
+  )
+  const awayEntries = entries.filter(
+    (e) => canonTeam(String(e.team?.abbreviation ?? e.player?.team?.abbreviation ?? '')) === awayTeam,
+  )
   if (!homeEntries.length && !awayEntries.length) return false
 
   const sb = getServiceClient()
@@ -67,7 +95,7 @@ export async function syncLineupForGame(
     rows.push({
       bdl_game_id: bdlGameId,
       date,
-      team_abbrev: homeAbbrev.toUpperCase(),
+      team_abbrev: homeTeam,
       side: 'home',
       bdl_player_id: e.player?.id ?? null,
       stat_player_id: xr?.stat_player_id ?? null,
@@ -83,7 +111,7 @@ export async function syncLineupForGame(
     rows.push({
       bdl_game_id: bdlGameId,
       date,
-      team_abbrev: awayAbbrev.toUpperCase(),
+      team_abbrev: awayTeam,
       side: 'away',
       bdl_player_id: e.player?.id ?? null,
       stat_player_id: xr?.stat_player_id ?? null,

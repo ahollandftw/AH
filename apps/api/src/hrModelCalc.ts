@@ -396,18 +396,29 @@ async function calculateMatchupProjections(
 }
 
 async function getGamesForDateRaw(supabase: SupabaseClient, dateIso: string) {
-  const { data: bdl, error: bdlErr } = await supabase
-    .from('bdl_games')
-    .select('home_team_abbrev,away_team_abbrev')
-    .eq('date', dateIso)
-  if (!bdlErr && bdl?.length) {
-    return bdl.map((g) => ({ home_team: g.home_team_abbrev, away_team: g.away_team_abbrev })) as { home_team: string; away_team: string }[]
+  const [{ data: bdl }, { data: sched }] = await Promise.all([
+    supabase
+      .from('bdl_games')
+      .select('home_team_abbrev,away_team_abbrev')
+      .eq('date', dateIso),
+    supabase
+      .from('schedule_games')
+      .select('home_team,away_team')
+      .eq('date', dateIso),
+  ])
+  const pairKey = (home: string, away: string) =>
+    [canonicalTeam(home) ?? home, canonicalTeam(away) ?? away].sort().join('|')
+  const merged = new Map<string, { home_team: string; away_team: string }>()
+  for (const g of (sched ?? []) as any[]) {
+    merged.set(pairKey(g.home_team, g.away_team), { home_team: g.home_team, away_team: g.away_team })
   }
-  const { data } = await supabase
-    .from('schedule_games')
-    .select('home_team,away_team')
-    .eq('date', dateIso)
-  return (data ?? []) as { home_team: string; away_team: string }[]
+  for (const g of (bdl ?? []) as any[]) {
+    merged.set(pairKey(g.home_team_abbrev, g.away_team_abbrev), {
+      home_team: g.home_team_abbrev,
+      away_team: g.away_team_abbrev,
+    })
+  }
+  return [...merged.values()]
 }
 
 export { calculateMatchupProjections, listDailyHrProjectionsFromTable }

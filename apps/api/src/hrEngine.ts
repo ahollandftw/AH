@@ -76,21 +76,36 @@ function todayET(): string {
 /* ─── Data fetching ──────────────────────────────────────────────── */
 
 async function fetchGames(sb: SupabaseClient, date: string) {
-  const { data: bdl } = await sb
-    .from('bdl_games')
-    .select('bdl_game_id, home_team_abbrev, away_team_abbrev')
-    .eq('date', date)
-  if (bdl?.length) return bdl as { bdl_game_id: number; home_team_abbrev: string; away_team_abbrev: string }[]
+  const [{ data: bdl }, { data: sched }] = await Promise.all([
+    sb
+      .from('bdl_games')
+      .select('bdl_game_id, home_team_abbrev, away_team_abbrev')
+      .eq('date', date),
+    sb
+      .from('schedule_games')
+      .select('home_team, away_team')
+      .eq('date', date),
+  ])
 
-  const { data: sched } = await sb
-    .from('schedule_games')
-    .select('home_team, away_team')
-    .eq('date', date)
-  return (sched ?? []).map((g: any) => ({
-    bdl_game_id: 0,
-    home_team_abbrev: g.home_team,
-    away_team_abbrev: g.away_team,
-  }))
+  const pairKey = (home: string, away: string) => [canon(home), canon(away)].sort().join('|')
+  const merged = new Map<string, { bdl_game_id: number; home_team_abbrev: string; away_team_abbrev: string }>()
+
+  for (const g of (sched ?? []) as any[]) {
+    merged.set(pairKey(g.home_team, g.away_team), {
+      bdl_game_id: 0,
+      home_team_abbrev: g.home_team,
+      away_team_abbrev: g.away_team,
+    })
+  }
+  for (const g of (bdl ?? []) as any[]) {
+    merged.set(pairKey(g.home_team_abbrev, g.away_team_abbrev), {
+      bdl_game_id: Number(g.bdl_game_id ?? 0),
+      home_team_abbrev: g.home_team_abbrev,
+      away_team_abbrev: g.away_team_abbrev,
+    })
+  }
+
+  return [...merged.values()]
 }
 
 async function fetchPlayers(sb: SupabaseClient) {
@@ -192,19 +207,34 @@ async function fetchBdlProbablePitchers(date: string): Promise<Map<number, { hom
 }
 
 type BdlLineupEntry = {
-  player_id: number
-  batting_order: number
-  player?: { first_name?: string; last_name?: string }
+  game_id: number
+  batting_order: number | null
+  player: {
+    id: number
+    first_name?: string
+    last_name?: string
+    team?: { abbreviation?: string | null } | null
+  }
+  team?: { abbreviation?: string | null } | null
 }
 
-async function fetchBdlLineup(gameId: number): Promise<{ home: BdlLineupEntry[]; away: BdlLineupEntry[] } | null> {
+async function fetchBdlLineup(
+  gameId: number,
+  homeTeam: string,
+  awayTeam: string,
+): Promise<{ home: BdlLineupEntry[]; away: BdlLineupEntry[] } | null> {
   try {
-    const res = await bdlFetch<{ data?: { home_lineup?: BdlLineupEntry[]; away_lineup?: BdlLineupEntry[] } }>(
+    const res = await bdlFetch<{ data?: BdlLineupEntry[] }>(
       `/mlb/v1/lineups`, { game_id: String(gameId) },
     )
+    const entries = (res.data ?? []).filter((e) => Number(e.game_id ?? 0) === gameId)
     return {
-      home: res.data?.home_lineup ?? [],
-      away: res.data?.away_lineup ?? [],
+      home: entries.filter(
+        (e) => canon(String(e.team?.abbreviation ?? e.player?.team?.abbreviation ?? '')) === canon(homeTeam),
+      ),
+      away: entries.filter(
+        (e) => canon(String(e.team?.abbreviation ?? e.player?.team?.abbreviation ?? '')) === canon(awayTeam),
+      ),
     }
   } catch {
     return null
@@ -308,7 +338,7 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
   const lineupsByGame = new Map<number, { home: BdlLineupEntry[]; away: BdlLineupEntry[] }>()
   for (const g of games) {
     if (g.bdl_game_id) {
-      const lu = await fetchBdlLineup(g.bdl_game_id)
+      const lu = await fetchBdlLineup(g.bdl_game_id, g.home_team_abbrev, g.away_team_abbrev)
       if (lu && (lu.home.length > 0 || lu.away.length > 0)) {
         lineupsByGame.set(g.bdl_game_id, lu)
       }
@@ -444,12 +474,12 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
     const lu = lineupsByGame.get(g.bdl_game_id)
     if (lu) {
       for (const entry of lu.home) {
-        const sid = resolveStatIdFromBdl(entry.player_id)
-        if (sid) lineupHome.set(sid, entry.batting_order)
+        const sid = resolveStatIdFromBdl(entry.player.id)
+        if (sid && entry.batting_order != null) lineupHome.set(sid, entry.batting_order)
       }
       for (const entry of lu.away) {
-        const sid = resolveStatIdFromBdl(entry.player_id)
-        if (sid) lineupAway.set(sid, entry.batting_order)
+        const sid = resolveStatIdFromBdl(entry.player.id)
+        if (sid && entry.batting_order != null) lineupAway.set(sid, entry.batting_order)
       }
     }
 
