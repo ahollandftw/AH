@@ -33,6 +33,29 @@ export function registerBdlRoutes(app: Express) {
     d.setUTCDate(d.getUTCDate() + days)
     return d.toISOString().slice(0, 10)
   }
+  const toNum = (v: unknown): number | null => {
+    if (v == null || v === '') return null
+    const n = Number(v)
+    return Number.isFinite(n) ? n : null
+  }
+  const weightedAvg = (rows: any[], valueKey: string, weightKey = 'pitch_usage'): number | null => {
+    let weightedSum = 0
+    let weightSum = 0
+    const vals: number[] = []
+    for (const row of rows) {
+      const value = toNum(row?.[valueKey])
+      if (value == null) continue
+      vals.push(value)
+      const weight = toNum(row?.[weightKey])
+      if (weight != null && weight > 0) {
+        weightedSum += value * weight
+        weightSum += weight
+      }
+    }
+    if (weightSum > 0) return weightedSum / weightSum
+    if (!vals.length) return null
+    return vals.reduce((a, b) => a + b, 0) / vals.length
+  }
   /* ── Daily sync (called by cron or manually) ─────────────────── */
 
   app.post('/bdl/sync/daily', async (_req, res) => {
@@ -378,18 +401,22 @@ export function registerBdlRoutes(app: Express) {
         Promise.all([
           sb
             .from('stats_homeruns')
-            .select('hr_total')
+            .select('hr_total,year')
             .eq('role', 'batting')
             .eq('type', 'adj_xhr')
             .eq('player_id', statPlayerId)
-            .eq('year', season)
+            .lte('year', season)
+            .order('year', { ascending: false })
+            .limit(1)
             .maybeSingle(),
           sb
             .from('stats_exit_velocity')
-            .select('avg_hit_speed,ev95percent,brl_percent,fbld,attempts')
+            .select('avg_hit_speed,ev95percent,brl_percent,fbld,attempts,season')
             .eq('role', 'batting')
             .eq('player_id', statPlayerId)
-            .eq('season', season)
+            .lte('season', season)
+            .order('season', { ascending: false })
+            .limit(1)
             .maybeSingle(),
           sb
             .from('bdl_season_stats')
@@ -402,22 +429,14 @@ export function registerBdlRoutes(app: Express) {
       let batterHr = (batterStatsRes as any)?.[0]?.data?.hr_total ?? null
       let batterEv = (batterStatsRes as any)?.[1]?.data ?? null
       let batterSeason = (batterStatsRes as any)?.[2]?.data ?? null
-      let usedSeason = season
-
-      if (!batterHr && !batterEv?.avg_hit_speed && season !== 2025) {
-        const [hrFb, evFb] = await Promise.all([
-          sb.from('stats_homeruns').select('hr_total').eq('role', 'batting').eq('type', 'adj_xhr').eq('player_id', statPlayerId).eq('year', 2025).maybeSingle(),
-          sb.from('stats_exit_velocity').select('avg_hit_speed,ev95percent,brl_percent,fbld,attempts').eq('role', 'batting').eq('player_id', statPlayerId).eq('season', 2025).maybeSingle(),
-        ])
-        if (hrFb.data?.hr_total || evFb.data?.avg_hit_speed) {
-          batterHr = hrFb.data?.hr_total ?? null
-          batterEv = evFb.data ?? null
-          usedSeason = 2025
-        }
-      }
+      const batterEvSeason = Number(batterEv?.season ?? 0) || null
+      const batterHrSeason = Number((batterStatsRes as any)?.[0]?.data?.year ?? 0) || null
+      let usedSeason = batterEvSeason ?? batterHrSeason ?? season
 
       // Pitch-type matchup: pitcher's top pitches by usage + batter ISO vs those pitch types.
       let pitchTypeMatchup: any[] = []
+      let batterArsenalRows: any[] = []
+      let pitcherArsenalRows: any[] = []
       try {
         if (best?.pitcher_bdl_id) {
           // Map pitcher BDL id -> stat_player_id (so we can query Statcast pitch arsenal)
@@ -432,30 +451,45 @@ export function registerBdlRoutes(app: Express) {
             pitcherStatId
               ? sb
                   .from('stats_pitch_arsenal')
-                  .select('pitch_type,pitch_name,pitch_usage,slg,ba,woba,est_slg,est_woba')
+                  .select('pitch_type,pitch_name,pitch_usage,slg,ba,woba,est_slg,est_woba,hard_hit_percent,season')
                   .eq('role', 'pitching')
                   .eq('player_id', pitcherStatId)
-                  .eq('season', usedSeason)
+                  .lte('season', season)
+                  .order('season', { ascending: false })
                   .order('pitch_usage', { ascending: false })
-                  .limit(5)
+                  .limit(40)
               : Promise.resolve({ data: [] as any[] }),
             sb
               .from('stats_pitch_arsenal')
-              .select('pitch_type,pitch_name,slg,ba,woba,k_percent,hard_hit_percent')
+              .select('pitch_type,pitch_name,slg,ba,woba,est_slg,est_woba,k_percent,hard_hit_percent,season')
               .eq('role', 'batting')
               .eq('player_id', statPlayerId)
-              .eq('season', usedSeason)
+              .lte('season', season)
+              .order('season', { ascending: false })
               .limit(200),
           ])
 
+          const latestPitcherSeason = Number((pitcherArsRes.data?.[0] as any)?.season ?? 0) || null
+          const latestBatterSeason = Number((batterArsRes.data?.[0] as any)?.season ?? 0) || null
+          if (latestPitcherSeason || latestBatterSeason) {
+            usedSeason = Math.max(latestPitcherSeason ?? 0, latestBatterSeason ?? 0, usedSeason ?? 0) || usedSeason
+          }
+          pitcherArsenalRows = (pitcherArsRes.data ?? []).filter((r: any) => Number(r.season ?? 0) === (latestPitcherSeason ?? usedSeason))
+          batterArsenalRows = (batterArsRes.data ?? []).filter((r: any) => Number(r.season ?? 0) === (latestBatterSeason ?? usedSeason))
+
+          const topPitcherRows = pitcherArsenalRows
+            .slice()
+            .sort((a: any, b: any) => Number(b?.pitch_usage ?? 0) - Number(a?.pitch_usage ?? 0))
+            .slice(0, 5)
+
           const batterByType = new Map<string, any>()
-          for (const r of (batterArsRes.data ?? []) as any[]) {
+          for (const r of batterArsenalRows) {
             const key = String(r.pitch_type ?? r.pitch_name ?? '').toUpperCase()
             if (!key) continue
             if (!batterByType.has(key)) batterByType.set(key, r)
           }
 
-          pitchTypeMatchup = ((pitcherArsRes.data ?? []) as any[]).map((p) => {
+          pitchTypeMatchup = topPitcherRows.map((p: any) => {
             const key = String(p.pitch_type ?? p.pitch_name ?? '').toUpperCase()
             const b = batterByType.get(key) ?? null
             const batterIso =
@@ -484,6 +518,8 @@ export function registerBdlRoutes(app: Express) {
       // Pitcher Statcast mirrors (role=pitching) — same categories as batter where the schema has them.
       let pitcherEv: Record<string, unknown> | null = null
       let pitcherHrM: Record<string, unknown> | null = null
+      let pitcherEvSeason: number | null = null
+      let pitcherHrSeason: number | null = null
       try {
         if (best?.pitcher_bdl_id) {
           const { data: pitX } = await sb
@@ -496,22 +532,28 @@ export function registerBdlRoutes(app: Express) {
             const [evRes, hrRes] = await Promise.all([
               sb
                 .from('stats_exit_velocity')
-                .select('avg_hit_speed,ev95percent,brl_percent,fbld')
+                .select('avg_hit_speed,ev95percent,brl_percent,fbld,season')
                 .eq('role', 'pitching')
                 .eq('player_id', pitcherStatId)
-                .eq('season', usedSeason)
+                .lte('season', season)
+                .order('season', { ascending: false })
+                .limit(1)
                 .maybeSingle(),
               sb
                 .from('stats_homeruns')
-                .select('hr_total,xhr')
+                .select('hr_total,xhr,year')
                 .eq('role', 'pitching')
                 .eq('type', 'adj_xhr')
                 .eq('player_id', pitcherStatId)
-                .eq('year', usedSeason)
+                .lte('year', season)
+                .order('year', { ascending: false })
+                .limit(1)
                 .maybeSingle(),
             ])
             pitcherEv = (evRes.data as Record<string, unknown>) ?? null
             pitcherHrM = (hrRes.data as Record<string, unknown>) ?? null
+            pitcherEvSeason = Number((evRes.data as any)?.season ?? 0) || null
+            pitcherHrSeason = Number((hrRes.data as any)?.year ?? 0) || null
           }
         }
       } catch {
@@ -534,6 +576,30 @@ export function registerBdlRoutes(app: Express) {
           ? Number(batterSeason.batting_so) /
             Math.max(1, Number(batterSeason.batting_ab) + Number(batterSeason.batting_bb ?? 0))
           : null
+      const batterHardHit =
+        weightedAvg(batterArsenalRows, 'hard_hit_percent') ??
+        null
+      const pitcherHardHitAllowed =
+        weightedAvg(pitcherArsenalRows, 'hard_hit_percent') ??
+        null
+      const batterIsoFromArsenal = (() => {
+        const slg = weightedAvg(batterArsenalRows, 'slg')
+        const ba = weightedAvg(batterArsenalRows, 'ba')
+        return slg != null && ba != null ? slg - ba : null
+      })()
+      const pitcherIsoAllowed = (() => {
+        const slg = weightedAvg(pitcherArsenalRows, 'slg')
+        const ba = weightedAvg(pitcherArsenalRows, 'ba')
+        return slg != null && ba != null ? slg - ba : null
+      })()
+      const pitcherBbPer9 =
+        pitcherStatsRes.data?.pitching_bb != null && pitcherStatsRes.data?.pitching_ip != null
+          ? (Number(pitcherStatsRes.data.pitching_bb) / Math.max(0.1, Number(pitcherStatsRes.data.pitching_ip))) * 9
+          : null
+      const batterDataSeason =
+        batterEvSeason ?? batterHrSeason ?? usedSeason ?? season
+      const pitcherDataSeason =
+        pitcherEvSeason ?? pitcherHrSeason ?? usedSeason ?? season
 
       res.json({
         data: {
@@ -561,34 +627,38 @@ export function registerBdlRoutes(app: Express) {
           batter_avg_hit_speed: batterEv?.avg_hit_speed ?? null,
           batter_ev95: batterEv?.ev95percent ?? null,
           batter_barrel: batterEv?.brl_percent ?? null,
-          batter_hard_hit: null,
+          batter_hard_hit: batterHardHit,
           batter_fbld: batterEv?.fbld ?? null,
           batter_attempts: batterEv?.attempts ?? null,
-          batter_iso: batterIso,
+          batter_iso: batterIso ?? batterIsoFromArsenal,
           batter_bb_pct: batterBbPct,
           batter_k_pct: batterKPct,
           batter_season_hr: batterSeason?.batting_hr ?? null,
           pitcher_avg_hit_speed_allowed: pitcherEv?.avg_hit_speed ?? null,
           pitcher_ev95_allowed: pitcherEv?.ev95percent ?? null,
           pitcher_barrel_allowed: pitcherEv?.brl_percent ?? null,
-          pitcher_hard_hit_allowed: null,
+          pitcher_hard_hit_allowed: pitcherHardHitAllowed,
           pitcher_fbld_allowed: pitcherEv?.fbld ?? null,
+          pitcher_iso_allowed: pitcherIsoAllowed,
+          pitcher_bb_per_9: pitcherBbPer9,
           pitcher_hr_statcast: pitcherHrM?.hr_total ?? null,
           pitcher_xhr_statcast: pitcherHrM?.xhr ?? null,
+          batter_data_season: batterDataSeason,
+          pitcher_data_season: pitcherDataSeason,
           /** Structured to match the HR matchup checklist (null = not in our CSV schema). */
           matchup_framework: {
             power: {
-              batter_iso: batterIso,
+              batter_iso: batterIso ?? batterIsoFromArsenal,
               batter_hr_fb: null,
-              pitcher_iso_allowed: null,
+              pitcher_iso_allowed: pitcherIsoAllowed,
               pitcher_hr_fb_allowed: null,
             },
             contact_quality: {
               batter_barrel_pct: batterEv?.brl_percent ?? null,
-              batter_hard_hit_pct: null,
+              batter_hard_hit_pct: batterHardHit,
               batter_avg_ev: batterEv?.avg_hit_speed ?? null,
               pitcher_barrel_pct_allowed: pitcherEv?.brl_percent ?? null,
-              pitcher_hard_hit_pct_allowed: null,
+              pitcher_hard_hit_pct_allowed: pitcherHardHitAllowed,
               pitcher_avg_ev_allowed: pitcherEv?.avg_hit_speed ?? null,
             },
             launch_profile: {

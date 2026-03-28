@@ -1184,16 +1184,18 @@ export default function DugoutPage() {
                 <div className="pg-matchupStatsGrid">
                   {/* Pitcher stats */}
                   <div className="pg-matchupStatCol">
-                    <div className="pg-matchupStatHead">Pitcher Stats ({matchupData?.season ?? selectedYear})</div>
+                    <div className="pg-matchupStatHead">Pitcher Stats ({matchupData?.pitcher_data_season ?? matchupData?.season ?? selectedYear})</div>
                     <div className="pg-matchupStatRows">
                       {[
-                        { label: 'ERA', val: matchupData?.pitcher_era, hint: '4.50+ favors HR', good: matchupData?.pitcher_era != null && Number(matchupData.pitcher_era) >= 4.5 },
-                        { label: 'WHIP', val: matchupData?.pitcher_whip, hint: '1.30+ favors HR', good: matchupData?.pitcher_whip != null && Number(matchupData.pitcher_whip) >= 1.3 },
-                        { label: 'HR Allowed', val: matchupData?.pitcher_hr_allowed, hint: '20+ favors HR', good: matchupData?.pitcher_hr_allowed != null && Number(matchupData.pitcher_hr_allowed) >= 20 },
-                        { label: 'K/9', val: matchupData?.pitcher_k_per_9, hint: '8.0 or lower favors HR', good: matchupData?.pitcher_k_per_9 != null && Number(matchupData.pitcher_k_per_9) <= 8 },
-                        { label: 'K', val: matchupData?.pitcher_k, hint: null, good: false },
-                        { label: 'BB', val: matchupData?.pitcher_bb, hint: null, good: false },
-                        { label: 'IP', val: matchupData?.pitcher_ip, hint: null, good: false },
+                        { label: 'Avg EV Allowed', val: matchupData?.pitcher_avg_hit_speed_allowed, hint: '90+ mph favors HR', good: matchupData?.pitcher_avg_hit_speed_allowed != null && Number(matchupData.pitcher_avg_hit_speed_allowed) >= 90 },
+                        { label: 'EV95 Allowed', val: matchupData?.pitcher_ev95_allowed, hint: null, good: false },
+                        { label: 'Barrel % Allowed', val: matchupData?.pitcher_barrel_allowed, hint: '10%+ favors HR', good: matchupData?.pitcher_barrel_allowed != null && Number(matchupData.pitcher_barrel_allowed) >= 10 },
+                        { label: 'Hard-hit % Allowed', val: matchupData?.pitcher_hard_hit_allowed, hint: '40%+ favors HR', good: matchupData?.pitcher_hard_hit_allowed != null && Number(matchupData.pitcher_hard_hit_allowed) >= 40 },
+                        { label: 'ISO Allowed', val: matchupData?.pitcher_iso_allowed != null ? Number(matchupData.pitcher_iso_allowed).toFixed(3) : null, hint: '.250+ favors HR', good: matchupData?.pitcher_iso_allowed != null && Number(matchupData.pitcher_iso_allowed) >= 0.25 },
+                        { label: 'FB/LD % Allowed', val: matchupData?.pitcher_fbld_allowed, hint: '.45+ favors HR', good: matchupData?.pitcher_fbld_allowed != null && Number(matchupData.pitcher_fbld_allowed) >= 0.45 },
+                        { label: 'K/9', val: matchupData?.pitcher_k_per_9, hint: 'Lower is better for batter', good: false },
+                        { label: 'BB/9', val: matchupData?.pitcher_bb_per_9 != null ? Number(matchupData.pitcher_bb_per_9).toFixed(2) : null, hint: 'Higher is better for batter', good: false },
+                        { label: 'HR Allowed', val: matchupData?.pitcher_hr_allowed ?? matchupData?.pitcher_hr_statcast, hint: null, good: false },
                       ].map(({ label, val, hint, good }) => (
                         <div key={label} className={`pg-mStatRow ${good ? 'pg-mStatRow--good' : ''}`}>
                           <span className="pg-mStatLabel">{label}</span>
@@ -1206,7 +1208,7 @@ export default function DugoutPage() {
 
                   {/* Batter stats */}
                   <div className="pg-matchupStatCol">
-                    <div className="pg-matchupStatHead">Batter Stats ({matchupData?.season ?? playerInputs?.season ?? selectedYear})</div>
+                    <div className="pg-matchupStatHead">Batter Stats ({matchupData?.batter_data_season ?? matchupData?.season ?? playerInputs?.season ?? selectedYear})</div>
                     <div className="pg-matchupStatRows">
                       {[
                         { label: 'Avg EV', val: matchupData?.batter_avg_hit_speed ?? playerInputs?.avg_hit_speed, hint: '90+ mph ✓', good: (matchupData?.batter_avg_hit_speed ?? playerInputs?.avg_hit_speed) != null && Number(matchupData?.batter_avg_hit_speed ?? playerInputs?.avg_hit_speed) >= 90 },
