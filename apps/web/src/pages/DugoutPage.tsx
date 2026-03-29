@@ -301,7 +301,7 @@ export default function DugoutPage() {
       // Fetch HR milestone/over props from the user's sportsbook
       const { data: props } = await supabase
         .from('bdl_player_props')
-        .select('bdl_player_id,milestone_odds,over_odds,vendor')
+        .select('bdl_player_id,line_value,milestone_odds,over_odds,vendor')
         .in('bdl_game_id', bdlGameIds)
         .in('bdl_player_id', bdlPlayerIds)
         .eq('prop_type', 'home_runs')
@@ -312,11 +312,30 @@ export default function DugoutPage() {
       for (const [sid, bid] of statToBdl) bdlToStat.set(bid, sid)
 
       const next: Record<string, number | null> = {}
+      const bestByStat = new Map<string, { odds: number; lineValue: number | null }>()
       for (const p of props as any[]) {
         const sid = bdlToStat.get(Number(p.bdl_player_id))
         if (!sid) continue
         const odds = p.milestone_odds ?? p.over_odds ?? null
-        if (odds != null) next[sid] = Number(odds)
+        if (odds == null) continue
+        const lineValue = Number(p.line_value ?? '')
+        const normalizedLine = Number.isFinite(lineValue) ? lineValue : null
+        const prev = bestByStat.get(sid)
+        const shouldReplace =
+          !prev ||
+          (normalizedLine === 0.5 && prev.lineValue !== 0.5) ||
+          (
+            normalizedLine != null &&
+            prev.lineValue != null &&
+            normalizedLine < prev.lineValue &&
+            prev.lineValue !== 0.5
+          )
+        if (shouldReplace) {
+          bestByStat.set(sid, { odds: Number(odds), lineValue: normalizedLine })
+        }
+      }
+      for (const [sid, info] of bestByStat) {
+        next[sid] = info.odds
       }
       setPlayerOdds(next)
     })()
