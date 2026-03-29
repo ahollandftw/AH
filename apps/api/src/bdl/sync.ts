@@ -329,16 +329,37 @@ export async function syncPlayerProps(
   bdlGameId: number,
   vendors?: string[],
 ): Promise<{ synced: number }> {
-  const params: Record<string, string | string[] | number | undefined> = {
-    game_id: bdlGameId,
-    prop_type: 'home_runs',
-  }
-  if (vendors?.length) params['vendors[]'] = vendors
+  const requestedVendors = vendors?.length
+    ? vendors
+    : ['draftkings', 'fanduel', 'fanatics', 'betmgm', 'caesars', 'betrivers']
 
-  const res = await bdlFetch<{ data: BdlPlayerProp[] }>(
-    '/mlb/v1/odds/player_props',
-    params,
-  )
+  const propMap = new Map<string, BdlPlayerProp>()
+  for (const vendor of requestedVendors) {
+    try {
+      const res = await bdlFetch<{ data: BdlPlayerProp[] }>(
+        '/mlb/v1/odds/player_props',
+        {
+          game_id: bdlGameId,
+          prop_type: 'home_runs',
+          'vendors[]': vendor,
+        },
+      )
+      for (const row of res.data ?? []) {
+        const key = [
+          row.game_id,
+          row.player_id,
+          row.vendor,
+          row.prop_type,
+          row.line_value,
+          row.market?.type ?? '',
+        ].join('|')
+        if (!propMap.has(key)) propMap.set(key, row)
+      }
+    } catch (e) {
+      console.warn(`[BDL] props fetch failed for ${vendor} game ${bdlGameId}:`, e)
+    }
+  }
+  const props = [...propMap.values()]
 
   const sb = supabase()
 
@@ -349,7 +370,7 @@ export async function syncPlayerProps(
     .eq('bdl_game_id', bdlGameId)
     .eq('prop_type', 'home_runs')
 
-  const rows = (res.data ?? []).map((p) => ({
+  const rows = props.map((p) => ({
     bdl_game_id: p.game_id,
     bdl_player_id: p.player_id,
     vendor: p.vendor,

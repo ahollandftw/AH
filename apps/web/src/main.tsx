@@ -18,7 +18,7 @@ function setFavicon(iconUrl: string) {
 
 // Set tab icon + title early so it applies immediately on load.
 setFavicon(hrIcon)
-document.title = 'Home Runs'
+document.title = 'analytichustle'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

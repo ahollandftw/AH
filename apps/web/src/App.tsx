@@ -42,6 +42,20 @@ function Layout() {
     session && !waiverAccepted
       ? ([['/account', 'Account', '👤']] as const)
       : fullLinks
+
+  useEffect(() => {
+    const pageName =
+      pathname === '/dugout' ? 'Scoreboard'
+      : pathname === '/projections' ? 'Projections'
+      : pathname === '/stats' ? 'Homer Tracking'
+      : pathname === '/community' ? 'Leaderboard'
+      : pathname === '/wall' ? 'Wall of Bang'
+      : pathname === '/friends' ? 'Friends'
+      : pathname === '/help' ? 'Help'
+      : pathname === '/account' ? 'Account'
+      : 'Scoreboard'
+    document.title = `analytichustle | ${pageName}`
+  }, [pathname])
   useEffect(() => {
     if (!supabase || !session?.user.id) {
       setProfileName(null)

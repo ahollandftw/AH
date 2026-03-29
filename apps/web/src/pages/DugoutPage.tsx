@@ -42,6 +42,9 @@ type WeatherDisplay = {
 
 function sportsbookLabel(vendor: string): string {
   if (!vendor) return 'Sportsbook'
+  if (vendor === 'draftkings') return 'DraftKings'
+  if (vendor === 'fanduel') return 'FanDuel'
+  if (vendor === 'fanatics') return 'Fanatics'
   if (vendor === 'betmgm') return 'BetMGM'
   if (vendor === 'betrivers') return 'BetRivers'
   return vendor.charAt(0).toUpperCase() + vendor.slice(1)
@@ -60,11 +63,11 @@ function normalizePlayerName(name: string | null | undefined): string {
     .trim()
 }
 
-const SUPPORTED_SPORTSBOOKS = ['caesars', 'betmgm', 'betrivers'] as const
+const SUPPORTED_SPORTSBOOKS = ['draftkings', 'fanduel', 'fanatics', 'caesars', 'betmgm', 'betrivers'] as const
 
 function normalizeSportsbook(value: string | null | undefined): string {
   const raw = String(value ?? '').toLowerCase().trim()
-  return SUPPORTED_SPORTSBOOKS.includes(raw as (typeof SUPPORTED_SPORTSBOOKS)[number]) ? raw : 'caesars'
+  return SUPPORTED_SPORTSBOOKS.includes(raw as (typeof SUPPORTED_SPORTSBOOKS)[number]) ? raw : 'draftkings'
 }
 
 function chooseBestPlayerBook(
@@ -234,7 +237,7 @@ export default function DugoutPage() {
   const [probablePitchers, setProbablePitchers] = useState<Record<string, { home: string | null; away: string | null }>>({})
   // { [statPlayerId]: americanOdds number }
   const [playerOdds, setPlayerOdds] = useState<Record<string, { odds: number; vendor: string } | null>>({})
-  const [defaultSportsbook, setDefaultSportsbook] = useState<string>('caesars')
+  const [defaultSportsbook, setDefaultSportsbook] = useState<string>('draftkings')
 
   useEffect(() => {
     if (!supabase) return
@@ -392,6 +395,8 @@ export default function DugoutPage() {
       const key = normalizePlayerName(r.name)
       if (!key || m.has(key)) continue
       m.set(key, odds)
+      const last = key.split(' ').filter(Boolean).at(-1)
+      if (last && !m.has(last)) m.set(last, odds)
     }
     return m
   }, [playerOdds, rows])

@@ -38,6 +38,9 @@ function tierBadgeBg(k: string): string {
 
 function sportsbookLabel(vendor: string): string {
   if (!vendor) return 'Sportsbook'
+  if (vendor === 'draftkings') return 'DraftKings'
+  if (vendor === 'fanduel') return 'FanDuel'
+  if (vendor === 'fanatics') return 'Fanatics'
   if (vendor === 'betmgm') return 'BetMGM'
   if (vendor === 'betrivers') return 'BetRivers'
   return vendor.charAt(0).toUpperCase() + vendor.slice(1)
@@ -48,11 +51,11 @@ function formatBookOdds(odds: number | null | undefined): string | null {
   return odds > 0 ? `+${odds}` : String(odds)
 }
 
-const SUPPORTED_SPORTSBOOKS = ['caesars', 'betmgm', 'betrivers'] as const
+const SUPPORTED_SPORTSBOOKS = ['draftkings', 'fanduel', 'fanatics', 'caesars', 'betmgm', 'betrivers'] as const
 
 function normalizeSportsbook(value: string | null | undefined): string {
   const raw = String(value ?? '').toLowerCase().trim()
-  return SUPPORTED_SPORTSBOOKS.includes(raw as (typeof SUPPORTED_SPORTSBOOKS)[number]) ? raw : 'caesars'
+  return SUPPORTED_SPORTSBOOKS.includes(raw as (typeof SUPPORTED_SPORTSBOOKS)[number]) ? raw : 'draftkings'
 }
 
 function chooseBestPlayerBook(
@@ -106,7 +109,7 @@ export default function ProjectionsPage() {
   const [liveGames, setLiveGames] = useState<any[]>([])
   const [probablePitchers, setProbablePitchers] = useState<Record<string, { home: string | null; away: string | null }>>({})
   const [playerOdds, setPlayerOdds] = useState<Record<string, { odds: number; vendor: string } | null>>({})
-  const [defaultSportsbook, setDefaultSportsbook] = useState<string>('caesars')
+  const [defaultSportsbook, setDefaultSportsbook] = useState<string>('draftkings')
   const [displayDate, setDisplayDate] = useState(
     searchParams.get('date') ?? getAppDisplayDateIso(),
   )
@@ -326,6 +329,10 @@ export default function ProjectionsPage() {
     const opp = (parseOpponentTeam(r) ?? '').toUpperCase()
     if (!team || !opp) return { name: null, hand: null }
     return probablePitcherByMatchup.get(`${team}|${opp}`) ?? { name: null, hand: null }
+  }
+
+  function displayOpponentTeam(r: DailyProjection): string | null {
+    return parseOpponentTeam(r)
   }
 
   function pickStatusLabel(v: boolean | null | undefined): string {
@@ -645,16 +652,17 @@ export default function ProjectionsPage() {
                       >
                         {r.name}
                       </button>
-                    </div>
-                    <span className="pg-meta">
-                      {(r.team ?? '—').toUpperCase()} &bull; {(r.position ?? '—').toUpperCase()}
-                    </span>
-                    {displayPitcher.name ? (
-                      <span className="pg-matchup">
-                        vs {displayPitcher.name}{' '}
-                        {displayPitcher.hand ? `(${displayPitcher.hand})` : ''}
+                      <span className="pg-meta">
+                        {(r.team ?? '—').toUpperCase()}
                       </span>
-                    ) : null}
+                    </div>
+                    <span className="pg-matchup">
+                      {(displayOpponentTeam(r) ?? '—').toUpperCase()} &bull; {displayPitcher.name ?? '—'}
+                      {displayPitcher.hand ? ` (${displayPitcher.hand})` : ''}
+                    </span>
+                    <span className="pg-small">
+                      {(r.position ?? '—').toUpperCase()}
+                    </span>
                   </div>
                   <div className="pg-right">
                     <span className="pg-prob">{formatProbability(r.hrProbability)}</span>

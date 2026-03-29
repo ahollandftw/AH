@@ -33,6 +33,9 @@ type DailyPickRow = {
 }
 
 const SUPPORTED_SPORTSBOOKS = [
+  { value: 'draftkings', label: 'DraftKings' },
+  { value: 'fanduel', label: 'FanDuel' },
+  { value: 'fanatics', label: 'Fanatics' },
   { value: 'caesars', label: 'Caesars' },
   { value: 'betmgm', label: 'BetMGM' },
   { value: 'betrivers', label: 'BetRivers' },
@@ -40,7 +43,7 @@ const SUPPORTED_SPORTSBOOKS = [
 
 function normalizeSportsbook(value: string | null | undefined): string {
   const raw = String(value ?? '').toLowerCase().trim()
-  return SUPPORTED_SPORTSBOOKS.some((book) => book.value === raw) ? raw : 'caesars'
+  return SUPPORTED_SPORTSBOOKS.some((book) => book.value === raw) ? raw : 'draftkings'
 }
 
 export default function AccountPage() {
@@ -72,7 +75,7 @@ export default function AccountPage() {
   const [avatarUrl, setAvatarUrl] = useState('')
   const [visibility, setVisibility] = useState<ProfileVisibility>('private')
   const [savingProfile, setSavingProfile] = useState(false)
-  const [defaultSportsbook, setDefaultSportsbook] = useState('caesars')
+  const [defaultSportsbook, setDefaultSportsbook] = useState('draftkings')
   const [hrNotifications, setHrNotifications] = useState(true)
   const [hrLeagueNotifications, setHrLeagueNotifications] = useState(false)
   const [todayPickDate, setTodayPickDate] = useState(new Date().toISOString().slice(0, 10))
