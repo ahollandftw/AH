@@ -30,6 +30,7 @@ EXISTING STATCAST CSVs (see supabase/schema/stats_csv_tables.sql)
 - b.homerunsYYYY.csv / p.homerunsYYYY.csv -> stats_homeruns
 - b.exit_velocityYYYY.csv / p.exit_velocityYYYY.csv -> stats_exit_velocity
 - b.pitch-arsenal-statsYYYY.csv / p.pitch-arsenal-statsYYYY.csv -> stats_pitch_arsenal
+- b.standard2019through2025.csv / p.standard2019through2025.csv -> stats_standard
 - mlb_*_schedule.csv -> schedule_games
 
 Import command: npm run import:stats (repo root, requires SUPABASE_SERVICE_ROLE_KEY)

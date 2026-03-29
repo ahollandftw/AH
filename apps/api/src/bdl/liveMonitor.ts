@@ -1,6 +1,6 @@
 import { getServiceClient } from '../supabase.js'
 import { bdlFetch, bdlFetchAll, type BdlGame, type BdlPlay, type BdlPlateAppearance } from './client.js'
-import { syncGames, syncPlayerProps } from './sync.js'
+import { syncGames } from './sync.js'
 import { buildHrEventEnrichment } from './hrEventEnrichment.js'
 
 const POLL_INTERVAL_MS = 2 * 60 * 1000   // 2 minutes during active games
@@ -349,16 +349,6 @@ async function pollCycle() {
 
   // Active games found → fast polling
   setPollingRate(POLL_INTERVAL_MS)
-
-  // Refresh props for active games
-  for (const g of activeGames) {
-    const game = g as { bdl_game_id: number; status: string; last_play_order: number }
-    try {
-      await syncPlayerProps(game.bdl_game_id)
-    } catch (e) {
-      console.error(`[LIVE] props sync failed for game ${game.bdl_game_id}:`, e)
-    }
-  }
 
   // Poll play-by-play for each active game
   for (const g of activeGames) {

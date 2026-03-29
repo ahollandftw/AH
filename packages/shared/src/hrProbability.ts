@@ -6,6 +6,7 @@ import {
   type NormalizedFeatures,
 } from './models/hr/hrProbability.js'
 import { expectedPaFromLineupSlot } from './models/hr/expectedPA.js'
+import { computeMatchupHrRate, zMatchup } from './models/hr/features.js'
 
 export type HrProbabilityInput = {
   brl_percent: number
@@ -103,22 +104,23 @@ export function calculateHrProbability(input: HrProbabilityInput): HrProbability
   const pitcherFactor = calcPitcherFactor(input.pitcher_hr_total)
   const normalizedMatchup = calcNormalizedMatchup(input.matchup_score)
 
-  const zHrPerPa = (baseHrRate - 0.036) / 0.022
-  const zPower = (input.brl_percent - 8.2) / 4.0
-  const zArsenal = (input.pitcher_hr_total - 20) / 12
+  const pitcherHrPerPaAllowed =
+    input.attempts > 0 && input.pitcher_hr_total > 0
+      ? input.pitcher_hr_total / Math.max(input.attempts * 4, 1)
+      : 0.036
+  const matchupHrRate = computeMatchupHrRate(baseHrRate, pitcherHrPerPaAllowed)
+  const matchupZ = zMatchup(matchupHrRate)
 
   const features: NormalizedFeatures = {
-    zHrPerPa:      Number.isFinite(zHrPerPa) ? Math.max(-3, Math.min(3, zHrPerPa)) : null,
-    zPower:        Number.isFinite(zPower) ? Math.max(-3, Math.min(3, zPower)) : null,
-    zArsenal:      Number.isFinite(zArsenal) ? Math.max(-3, Math.min(3, zArsenal)) : null,
+    zMatchup:      matchupZ,
     zPark:         null,
     zHandedness:   null,
     zWeather:      null,
-    zRecentForm7:  0,
-    zRecentForm14: 0,
+    zRecentForm:   null,
     zLineupSpot:   0,
     expectedPA:    expectedPaFromLineupSlot(undefined),
-    featuresPresent: ['hrPerPa', 'power', 'arsenal'],
+    matchupHrRate,
+    featuresPresent: matchupZ != null ? ['matchup'] : [],
   }
 
   const out = computeGameHrProbability(features)

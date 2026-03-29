@@ -18,8 +18,8 @@ import {
 } from './weather/mlbBallparks.js'
 
 import {
-  zHrPerPa,
-  zPower,
+  computeMatchupHrRate,
+  zMatchup,
   zPark,
   zHandedness,
   zWeather as computeZWeather,
@@ -31,19 +31,13 @@ import {
   type Hand,
 } from './models/hr/features.js'
 import {
-  computeArsenalScore,
-  zArsenal,
-  zPitcherFallback,
-  type PitchArsenalEntry,
-  type BatterVsPitchType,
-} from './models/hr/arsenal.js'
-import {
   computeGameHrProbability,
   probToAmericanOdds,
   formatAmericanOdds,
+  summarizeProjectionDistribution,
   type NormalizedFeatures,
 } from './models/hr/hrProbability.js'
-import { type CalibrationCoeffKey } from './models/hr/calibration.js'
+import { CALIBRATION, type CalibrationCoeffKey } from './models/hr/calibration.js'
 
 /* ─── Team canonicalization ──────────────────────────────────────── */
 
@@ -201,6 +195,30 @@ async function fetchBdlSeasonStats(sb: SupabaseClient, season: number) {
   }[]
 }
 
+async function fetchStandardBatting(sb: SupabaseClient) {
+  const { data, error } = await sb.from('stats_standard')
+    .select('player_id, pa, hr')
+    .eq('role', 'batting')
+    .limit(10000)
+  if (error) {
+    console.warn('[hr-engine] stats_standard batting unavailable:', error.message)
+    return [] as Array<{ player_id: string; pa: number | null; hr: number | null }>
+  }
+  return (data ?? []) as Array<{ player_id: string; pa: number | null; hr: number | null }>
+}
+
+async function fetchStandardPitching(sb: SupabaseClient) {
+  const { data, error } = await sb.from('stats_standard')
+    .select('player_id, tbf, hr')
+    .eq('role', 'pitching')
+    .limit(10000)
+  if (error) {
+    console.warn('[hr-engine] stats_standard pitching unavailable:', error.message)
+    return [] as Array<{ player_id: string; tbf: number | null; hr: number | null }>
+  }
+  return (data ?? []) as Array<{ player_id: string; tbf: number | null; hr: number | null }>
+}
+
 async function fetchMaxBattingYear(sb: SupabaseClient): Promise<number | null> {
   const { data } = await sb.from('stats_homeruns')
     .select('year').eq('role', 'batting').eq('type', 'adj_xhr')
@@ -314,8 +332,11 @@ export interface EngineProjection {
   tier:        string
   pPa:         number
   linearScore: number
+  lambda:      number
   expectedPA:  number
   dataQuality: string
+  matchupHrRate: number | null
+  zMatchup: number | null
   americanOdds:    number
   americanOddsStr: string
 }
@@ -329,23 +350,20 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
   if (!year) { console.warn('[hr-engine] No stats year found'); return [] }
 
   const [
-    games, players, evRows, hrRows, bArsenalRows, pArsenalRows,
-    bbRows, parkRows, bdlPlayers, bdlStats,
+    games, players, bbRows, parkRows, bdlPlayers, bdlStats, standardBattingRows, standardPitchingRows,
   ] = await Promise.all([
     fetchGames(sb, date),
     fetchPlayers(sb),
-    fetchBatterEV(sb, year),
-    fetchBatterHR(sb, year),
-    fetchBatterArsenal(sb, year),
-    fetchPitcherArsenal(sb, year),
     fetchBattedBall(sb),
     fetchParkFactors(sb),
     fetchBdlPlayers(sb),
     fetchBdlSeasonStats(sb, 2026),
+    fetchStandardBatting(sb),
+    fetchStandardPitching(sb),
   ])
 
   if (!games.length) { console.log('[hr-engine] No games today'); return [] }
-  console.log(`[hr-engine] ${games.length} games, ${evRows.length} EV rows, ${pArsenalRows.length} pitcher arsenal rows`)
+  console.log(`[hr-engine] ${games.length} games, ${standardBattingRows.length} batting standard rows, ${standardPitchingRows.length} pitching standard rows`)
 
   const probPitchers = await fetchBdlProbablePitchers(sb, date)
 
@@ -368,18 +386,6 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
   /* ─── Index data ──────────────────────────────────────────────── */
 
   const playerMap = new Map(players.map((p) => [p.stat_player_id, p]))
-  const evMap = new Map<string, any>()
-  for (const r of evRows as any[]) {
-    const pid = r.player_id as string
-    if (!pid || evMap.has(pid)) continue
-    evMap.set(pid, r)
-  }
-  const hrMap = new Map<string, any>()
-  for (const r of hrRows as any[]) {
-    const pid = r.player_id as string
-    if (!pid || hrMap.has(pid)) continue
-    hrMap.set(pid, r)
-  }
   const venueLower = buildVenueParkMap(parkRows)
 
   const bdlByStatId = new Map<string, typeof bdlPlayers[0]>()
@@ -412,44 +418,15 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
     if (row.split === 'vs_rhp') b.rhp = row.metrics
   }
 
-  // Batter pitch-type RV/100 by player
-  const batterRVMap = new Map<string, Map<string, number>>()
-  const batterArsenalSeason = new Map<string, number>()
-  for (const r of bArsenalRows as any[]) {
-    const pid = r.player_id as string
-    const seasonNum = Number(r.season ?? 0) || 0
-    const seenSeason = batterArsenalSeason.get(pid)
-    if (seenSeason != null && seasonNum < seenSeason) continue
-    if (seenSeason == null || seasonNum > seenSeason) {
-      batterArsenalSeason.set(pid, seasonNum)
-      batterRVMap.set(pid, new Map())
-    }
-    const rv = num(r.run_value_per_100)
-    if (rv == null) continue
-    if (!batterRVMap.has(pid)) batterRVMap.set(pid, new Map())
-    batterRVMap.get(pid)!.set(r.pitch_type as string, rv)
+  const standardBattingMap = new Map<string, { pa: number | null; hr: number | null }>()
+  for (const row of standardBattingRows) {
+    if (!row.player_id || standardBattingMap.has(row.player_id)) continue
+    standardBattingMap.set(row.player_id, { pa: row.pa, hr: row.hr })
   }
-
-  // Pitcher pitch arsenal by player_id
-  const pitcherArsenalMap = new Map<string, PitchArsenalEntry[]>()
-  const pitcherArsenalSeason = new Map<string, number>()
-  for (const r of pArsenalRows as any[]) {
-    const pid = r.player_id as string
-    const seasonNum = Number(r.season ?? 0) || 0
-    const seenSeason = pitcherArsenalSeason.get(pid)
-    if (seenSeason != null && seasonNum < seenSeason) continue
-    if (seenSeason == null || seasonNum > seenSeason) {
-      pitcherArsenalSeason.set(pid, seasonNum)
-      pitcherArsenalMap.set(pid, [])
-    }
-    const usage = num(r.pitch_usage) ?? 0
-    const rv = num(r.run_value_per_100) ?? 0
-    if (!pitcherArsenalMap.has(pid)) pitcherArsenalMap.set(pid, [])
-    pitcherArsenalMap.get(pid)!.push({
-      pitchType: r.pitch_type as string,
-      usagePct: usage,
-      pitcherRV100: rv,
-    })
+  const standardPitchingMap = new Map<string, { tbf: number | null; hr: number | null }>()
+  for (const row of standardPitchingRows) {
+    if (!row.player_id || standardPitchingMap.has(row.player_id)) continue
+    standardPitchingMap.set(row.player_id, { tbf: row.tbf, hr: row.hr })
   }
 
   /* ─── Build game context ──────────────────────────────────────── */
@@ -466,8 +443,8 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
     awayPitcherHand: Hand | null
     homePitcherName: string | null
     awayPitcherName: string | null
-    homePitcherHrPer9: number | null
-    awayPitcherHrPer9: number | null
+    homePitcherHrPerPaAllowed: number | null
+    awayPitcherHrPerPaAllowed: number | null
     lineupHome: Map<string, number>
     lineupAway: Map<string, number>
   }
@@ -497,12 +474,14 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
     return bdlById.get(bdlId)?.full_name ?? null
   }
 
-  function hrPer9FromBdl(bdlId: number | null): number | null {
-    if (!bdlId) return null
-    const s = bdlStatsById.get(bdlId)
-    if (!s || !s.pitching_ip || s.pitching_ip <= 0) return null
-    const hr = s.pitching_hr ?? 0
-    return (hr / (s.pitching_ip as number)) * 9
+  function hrPerPaAllowedForPitcher(statPlayerId: string | null): number | null {
+    if (!statPlayerId) return null
+    const row = standardPitchingMap.get(statPlayerId)
+    if (!row) return null
+    const tbf = num(row.tbf)
+    const hr = num(row.hr)
+    if (tbf == null || tbf <= 0 || hr == null || hr < 0) return null
+    return hr / tbf
   }
 
   const gameContexts: GameCtx[] = await Promise.all(games.map(async (g) => {
@@ -537,8 +516,8 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
       awayPitcherHand: pitcherHandFromBdl(pp?.away ?? null),
       homePitcherName: pitcherNameFromBdl(pp?.home ?? null),
       awayPitcherName: pitcherNameFromBdl(pp?.away ?? null),
-      homePitcherHrPer9: hrPer9FromBdl(pp?.home ?? null),
-      awayPitcherHrPer9: hrPer9FromBdl(pp?.away ?? null),
+      homePitcherHrPerPaAllowed: hrPerPaAllowedForPitcher(resolveStatIdFromBdl(pp?.home ?? null)),
+      awayPitcherHrPerPaAllowed: hrPerPaAllowedForPitcher(resolveStatIdFromBdl(pp?.away ?? null)),
       lineupHome,
       lineupAway,
     }
@@ -586,34 +565,29 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
 
     const { ctx, side } = gm
     const oppTeam = side === 'home' ? ctx.awayTeam : ctx.homeTeam
-    const ev = evMap.get(playerId)
-    const hr = hrMap.get(playerId)
     const bdlInfo = bdlByStatId.get(playerId)
     const seasonBatting = bdlInfo ? bdlStatsById.get(bdlInfo.bdl_id) : null
 
     const positionRaw = String(bdlInfo?.position ?? player.position ?? '').toUpperCase()
     if (positionRaw === 'P' || positionRaw === 'SP' || positionRaw === 'RP') continue
 
+    const standardBatting = standardBattingMap.get(playerId)
     const seasonPa =
       (seasonBatting?.batting_ab ?? 0) +
       (seasonBatting?.batting_bb ?? 0)
-    const attempts = seasonPa > 0 ? seasonPa : (num((ev as any)?.attempts) ?? 0)
-    const hrTotal = seasonBatting?.batting_hr ?? num((hr as any)?.hr_total) ?? 0
-    const brlPct = num((ev as any)?.brl_percent) ?? 0
-    if (attempts <= 0 && hrTotal <= 0 && brlPct <= 0) continue
+    const seasonHr = seasonBatting?.batting_hr ?? 0
+    const batterPa = (num(standardBatting?.pa) ?? 0) > 0 ? num(standardBatting?.pa)! : seasonPa
+    const batterHr = standardBatting?.hr != null ? (num(standardBatting.hr) ?? 0) : seasonHr
+    if (batterPa <= 0) continue
 
-    const hrPerPaVal = attempts > 0 ? hrTotal / attempts : null
-    const isoVal =
-      seasonBatting?.batting_slg != null && seasonBatting?.batting_avg != null
-        ? Number(seasonBatting.batting_slg) - Number(seasonBatting.batting_avg)
-        : null
-    if (hrPerPaVal == null && brlPct <= 0 && isoVal == null) continue
+    const batterHrPerPa = batterHr / batterPa
+    if (!Number.isFinite(batterHrPerPa) || batterHrPerPa <= 0) continue
 
     // Determine opposing pitcher info
-    const oppPitcherStatId = side === 'home' ? ctx.awayPitcherStatId : ctx.homePitcherStatId
     const oppPitcherHand   = side === 'home' ? ctx.awayPitcherHand   : ctx.homePitcherHand
     const oppPitcherName   = side === 'home' ? ctx.awayPitcherName   : ctx.homePitcherName
-    const oppPitcherHrPer9 = side === 'home' ? ctx.awayPitcherHrPer9 : ctx.homePitcherHrPer9
+    const oppPitcherHrPerPaAllowed =
+      side === 'home' ? ctx.awayPitcherHrPerPaAllowed : ctx.homePitcherHrPerPaAllowed
 
     // Batter hand from BDL
     const { bats: batterHand } = parseBatsThrows(bdlInfo?.bats_throws)
@@ -624,7 +598,7 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
 
     // Batted ball splits for handedness
     const bb = bbByPlayer.get(playerId)
-    const baseHrRate = hrPerPaVal ?? 0
+    const baseHrRate = batterHrPerPa
     let hrPerPaVsL: number | null = null
     let hrPerPaVsR: number | null = null
     if (bb?.lhp) {
@@ -643,9 +617,7 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
     }
 
     const batterInput: BatterFeatureInput = {
-      hrPerPa:       hrPerPaVal,
-      barrelRate:    num((ev as any)?.brl_percent),
-      iso:           isoVal,
+      hrPerPa:       batterHrPerPa,
       hand:          batterHand,
       lineupPosition: lineupPos,
       hrPerPaVsL,
@@ -656,43 +628,11 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
       paLast14:      null,
     }
 
-    /* ── Arsenal matchup score ──────────────────────────────────── */
-    let arsenalZ: number | null = null
-    let arsenalRaw = 0
-    let arsenalDetail: unknown[] = []
-    let hasArsenal = false
-
-    if (oppPitcherStatId) {
-      const pitcherPitches = pitcherArsenalMap.get(oppPitcherStatId) ?? []
-      const batterRV = batterRVMap.get(playerId)
-
-      if (pitcherPitches.length > 0 && batterRV && batterRV.size > 0) {
-        const batterSplits: BatterVsPitchType[] = []
-        for (const [pt, rv] of batterRV) {
-          batterSplits.push({ pitchType: pt, batterRV100: rv })
-        }
-        const result = computeArsenalScore(pitcherPitches, batterSplits)
-        arsenalRaw = result.raw
-        arsenalDetail = result.detail
-        arsenalZ = zArsenal(arsenalRaw)
-        hasArsenal = true
-      }
-    }
-
-    if (!hasArsenal && oppPitcherHrPer9 != null) {
-      arsenalZ = zPitcherFallback(oppPitcherHrPer9)
-    }
-
     /* ── Assemble features ──────────────────────────────────────── */
     const present: CalibrationCoeffKey[] = []
-
-    const fZHrPerPa = zHrPerPa(hrPerPaVal)
-    if (fZHrPerPa != null) present.push('hrPerPa')
-
-    const fZPower = zPower(batterInput)
-    if (fZPower != null) present.push('power')
-
-    if (arsenalZ != null) present.push('arsenal')
+    const matchupHrRate = computeMatchupHrRate(batterHrPerPa, oppPitcherHrPerPaAllowed ?? CALIBRATION.leagueAvgHrPerPa)
+    const fZMatchup = zMatchup(matchupHrRate)
+    if (fZMatchup != null) present.push('matchup')
 
     const fZPark = zPark(ctx.parkFactor)
     if (fZPark != null) present.push('park')
@@ -703,30 +643,28 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
     const fZWeather = computeZWeather(ctx.weather)
     if (fZWeather != null) present.push('weather')
 
-    const fZRecent7 = zRecentForm(batterInput.hrLast7 ?? null, batterInput.paLast7 ?? null, 7)
-    if (fZRecent7 !== 0) present.push('recentForm7')
-
-    const fZRecent14 = zRecentForm(batterInput.hrLast14 ?? null, batterInput.paLast14 ?? null, 14)
-    if (fZRecent14 !== 0) present.push('recentForm14')
+    const fZRecent = zRecentForm(
+      batterInput.hrLast7 ?? null,
+      batterInput.paLast7 ?? null,
+      batterInput.hrLast14 ?? null,
+      batterInput.paLast14 ?? null,
+    )
+    if (fZRecent != null) present.push('recentForm')
 
     const fZLineup = zLineupSpot(lineupPos)
-    if (fZLineup !== 0) present.push('lineupSpot')
+    if (lineupPos != null) present.push('lineupSpot')
 
     const expPA = expectedPaForSpot(lineupPos)
 
     const features: NormalizedFeatures = {
-      zHrPerPa:      fZHrPerPa,
-      zPower:        fZPower,
-      zArsenal:      arsenalZ,
+      zMatchup:      fZMatchup,
       zPark:         fZPark,
       zHandedness:   fZHand,
       zWeather:      fZWeather,
-      zRecentForm7:  fZRecent7,
-      zRecentForm14: fZRecent14,
+      zRecentForm:   fZRecent,
       zLineupSpot:   fZLineup,
       expectedPA:    expPA,
-      arsenalRaw,
-      arsenalDetail,
+      matchupHrRate,
       featuresPresent: present,
     }
 
@@ -747,14 +685,32 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
       tier: out.tier,
       pPa: out.pPa,
       linearScore: out.x,
+      lambda: out.lambda,
       expectedPA: expPA,
       dataQuality: out.dataQuality,
+      matchupHrRate,
+      zMatchup: fZMatchup,
       americanOdds,
       americanOddsStr: formatAmericanOdds(americanOdds),
     })
   }
 
   results.sort((a, b) => b.hrProbability - a.hrProbability)
+  console.log(
+    '[hr-engine] Distribution:',
+    JSON.stringify(
+      summarizeProjectionDistribution(
+        results.map((row) => ({
+          matchupHrRate: row.matchupHrRate,
+          zMatchup: row.zMatchup,
+          x: row.linearScore,
+          pPa: row.pPa,
+          lambda: row.lambda,
+          probRaw: row.probRaw,
+        })),
+      ),
+    ),
+  )
   console.log(`[hr-engine] Computed ${results.length} projections. Top: ${results[0]?.name ?? 'none'} ${(results[0]?.hrProbability * 100)?.toFixed(1)}%`)
   return results
 }
@@ -822,6 +778,12 @@ export async function runUpcomingLineupRefresh(windowMinutes = 60) {
 
   let computed = 0
   let saved = 0
+  let propsSynced = 0
+  const { syncPlayerProps } = await import('./bdl/sync.js')
+  for (const game of (data ?? []) as Array<{ bdl_game_id: number; start_time_utc: string | null }>) {
+    const result = await syncPlayerProps(game.bdl_game_id)
+    propsSynced += result.synced
+  }
   for (const date of dates) {
     const result = await runAndSaveProjections(date)
     computed += result.computed
@@ -833,5 +795,6 @@ export async function runUpcomingLineupRefresh(windowMinutes = 60) {
     dates,
     computed,
     saved,
+    propsSynced,
   }
 }

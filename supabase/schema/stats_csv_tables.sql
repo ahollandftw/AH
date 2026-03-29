@@ -78,9 +78,31 @@ create table if not exists public.stats_pitch_arsenal (
 
 create index if not exists stats_pitch_arsenal_player_id_idx on public.stats_pitch_arsenal (player_id);
 
+-- b.standard2019through2025.csv / p.standard2019through2025.csv
+create table if not exists public.stats_standard (
+  role text not null check (role in ('batting', 'pitching')),
+  player_id text not null,
+  player_name text,
+  team_abbrev text,
+  name_ascii text,
+  mlbam_id bigint,
+  g int,
+  ab int,
+  pa int,
+  hr int,
+  ip numeric,
+  tbf int,
+  stats jsonb not null default '{}'::jsonb,
+  primary key (role, player_id)
+);
+
+create index if not exists stats_standard_player_id_idx on public.stats_standard (player_id);
+create index if not exists stats_standard_team_abbrev_idx on public.stats_standard (team_abbrev);
+
 alter table public.stats_homeruns enable row level security;
 alter table public.stats_exit_velocity enable row level security;
 alter table public.stats_pitch_arsenal enable row level security;
+alter table public.stats_standard enable row level security;
 
 do $$
 begin
@@ -92,5 +114,8 @@ begin
   end if;
   if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'stats_pitch_arsenal' and policyname = 'stats_pitch_arsenal_select') then
     create policy stats_pitch_arsenal_select on public.stats_pitch_arsenal for select using (true);
+  end if;
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'stats_standard' and policyname = 'stats_standard_select') then
+    create policy stats_standard_select on public.stats_standard for select using (true);
   end if;
 end $$;

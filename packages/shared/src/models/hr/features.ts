@@ -5,8 +5,6 @@ export type Hand = 'L' | 'R' | 'S'
 
 export interface BatterFeatureInput {
   hrPerPa:       number | null
-  barrelRate:    number | null
-  iso:           number | null
   hand:          Hand
   lineupPosition: number | null
   hrPerPaVsL?:   number | null
@@ -24,23 +22,42 @@ export interface WeatherInput {
   humidityPct:      number
 }
 
-export function zHrPerPa(hrPerPa: number | null): number | null {
-  return zScore(hrPerPa, LEAGUE.hrPerPa.mean, LEAGUE.hrPerPa.std)
+export function computeMatchupHrRate(
+  batterHrPerPa: number | null,
+  pitcherHrPerPaAllowed: number | null,
+): number | null {
+  if (batterHrPerPa == null || !Number.isFinite(batterHrPerPa) || batterHrPerPa <= 0) return null
+  const pitcherRate =
+    pitcherHrPerPaAllowed != null && Number.isFinite(pitcherHrPerPaAllowed) && pitcherHrPerPaAllowed > 0
+      ? pitcherHrPerPaAllowed
+      : CALIBRATION.leagueAvgHrPerPa
+  return (batterHrPerPa * pitcherRate) / CALIBRATION.leagueAvgHrPerPa
 }
 
-export function zPower(batter: BatterFeatureInput): number | null {
-  if (batter.barrelRate != null && batter.barrelRate > 0) {
-    return zScore(batter.barrelRate, LEAGUE.barrelRate.mean, LEAGUE.barrelRate.std)
-  }
-  return zScore(batter.iso, LEAGUE.iso.mean, LEAGUE.iso.std)
+export function zMatchup(matchupHrRate: number | null): number | null {
+  if (matchupHrRate == null || !Number.isFinite(matchupHrRate) || matchupHrRate <= 0) return null
+  return zScore(Math.log(matchupHrRate), LEAGUE.logMatchupHrRate.mean, LEAGUE.logMatchupHrRate.std)
 }
 
-export function zRecentForm(hr: number | null, pa: number | null, window: 7 | 14): number {
-  if (hr == null || pa == null) return 0
+function zRecentFormWindow(hr: number | null, pa: number | null, window: 7 | 14): number | null {
+  if (hr == null || pa == null) return null
   const minPa = window === 7 ? 12 : 24
-  if (pa < minPa) return 0
+  if (pa < minPa) return null
   const recentRate = hr / pa
-  return zScore(recentRate, LEAGUE.recentHrRate.mean, LEAGUE.recentHrRate.std) ?? 0
+  return zScore(recentRate, LEAGUE.recentHrRate.mean, LEAGUE.recentHrRate.std)
+}
+
+export function zRecentForm(
+  hrLast7: number | null,
+  paLast7: number | null,
+  hrLast14: number | null,
+  paLast14: number | null,
+): number | null {
+  const z7 = zRecentFormWindow(hrLast7, paLast7, 7)
+  const z14 = zRecentFormWindow(hrLast14, paLast14, 14)
+  if (z7 == null && z14 == null) return null
+  if (z7 != null && z14 != null) return (z7 * 0.65) + (z14 * 0.35)
+  return z7 ?? z14
 }
 
 export function zPark(parkFactor: number | null): number | null {

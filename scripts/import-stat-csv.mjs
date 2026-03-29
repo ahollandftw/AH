@@ -119,6 +119,7 @@ function parseFilename(file) {
   if (base.includes('homeruns')) kind = 'homeruns'
   else if (base.includes('exit_velocity')) kind = 'exit_velocity'
   else if (base.includes('pitch-arsenal-stats')) kind = 'pitch_arsenal'
+  else if (base.includes('standard2019through2025')) kind = 'standard'
   return { base, role, kind, year }
 }
 
@@ -360,6 +361,57 @@ async function importBattedBall(file, role, split) {
   console.log(`batted_ball ${role} ${split} ${path.basename(file)}: ${batch.length} rows`)
 }
 
+async function importStandard(file, role) {
+  const raw = readCsvUtf8(file)
+  const rows = parse(raw, csvParseOpts)
+  const batch = []
+  for (const r of rows) {
+    const pid = String(r.PlayerId ?? r.player_id ?? '').trim()
+    if (!/^\d+$/.test(pid)) continue
+    const teamRaw = String(r.Team ?? '').trim()
+    const team = teamRaw && teamRaw !== '- - -' ? teamRaw : null
+    await upsertPlayerFromRow(r.Name, pid, team)
+    const stats = { ...r }
+    delete stats.Name
+    delete stats.Team
+    delete stats.NameASCII
+    delete stats.PlayerId
+    delete stats.player_id
+    delete stats.MLBAMID
+    for (const k of Object.keys(stats)) {
+      const v = stats[k]
+      if (v != null && v !== '' && typeof v === 'string') {
+        const n = num(v)
+        if (n !== null) stats[k] = n
+      }
+    }
+    batch.push({
+      role,
+      player_id: pid,
+      player_name: r.Name ?? null,
+      team_abbrev: team,
+      name_ascii: r.NameASCII ?? null,
+      mlbam_id: int(r.MLBAMID),
+      g: int(r.G),
+      ab: int(r.AB),
+      pa: int(r.PA),
+      hr: int(r.HR),
+      ip: num(r.IP),
+      tbf: int(r.TBF),
+      stats,
+    })
+  }
+  const chunkSize = 150
+  for (let i = 0; i < batch.length; i += chunkSize) {
+    const part = batch.slice(i, i + chunkSize)
+    const { error } = await supabase.from('stats_standard').upsert(part, {
+      onConflict: 'role,player_id',
+    })
+    if (error) console.error('stats_standard', file, error.message)
+  }
+  console.log(`standard ${role} ${path.basename(file)}: ${batch.length} rows`)
+}
+
 async function main() {
   const dir = path.join(root, 'data')
   const files = fs.readdirSync(dir).filter((f) => f.endsWith('.csv'))
@@ -393,11 +445,12 @@ async function main() {
     }
 
     const { role, kind, year } = parseFilename(full)
-    if (!role || !kind || !year) {
+    if (!role || !kind || (kind !== 'standard' && !year)) {
       console.warn('skip', f)
       continue
     }
-    if (kind === 'homeruns') await importHomeruns(full, role, year)
+    if (kind === 'standard') await importStandard(full, role)
+    else if (kind === 'homeruns') await importHomeruns(full, role, year)
     else if (kind === 'exit_velocity') await importExitVelocity(full, role, year)
     else if (kind === 'pitch_arsenal') await importPitchArsenal(full, role, year)
   }

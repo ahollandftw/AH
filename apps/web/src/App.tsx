@@ -11,6 +11,7 @@ import FriendsPage from './pages/FriendsPage.tsx'
 import HelpPage from './pages/HelpPage.tsx'
 import WallOfBangPage from './pages/WallOfBangPage.tsx'
 import appLogo from '../../../data/logo.svg'
+import hrIcon64 from '../../../data/icons8-home-run-64.png'
 import './leaderboard.css'
 
 function Layout() {
@@ -24,7 +25,7 @@ function Layout() {
   const fullLinks = [
     ['/dugout', 'Scoreboard', '⚾'],
     ['/projections', 'Projections', '📈'],
-    ['/stats', 'Homer Tracking', '📊'],
+    ['/stats', 'Homer Tracking', <img src={hrIcon64} alt="" style={{ width: 18, height: 18, objectFit: 'contain' }} />],
     ['/community', 'Leaderboard', '🏆'],
     ['/wall', 'Wall of Bang', '💥'],
   ] as const

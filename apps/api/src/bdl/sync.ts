@@ -329,6 +329,24 @@ export async function syncPlayerProps(
   bdlGameId: number,
   vendors?: string[],
 ): Promise<{ synced: number }> {
+  const sb = supabase()
+  const { data: gameMeta } = await sb
+    .from('bdl_games')
+    .select('status')
+    .eq('bdl_game_id', bdlGameId)
+    .maybeSingle()
+  const status = String((gameMeta as { status?: string | null } | null)?.status ?? '').toLowerCase()
+  const gameStarted = status !== '' && !/scheduled|pre|not started/.test(status)
+  const { count: existingCount } = await sb
+    .from('bdl_player_props')
+    .select('*', { count: 'exact', head: true })
+    .eq('bdl_game_id', bdlGameId)
+    .eq('prop_type', 'home_runs')
+  if (gameStarted && (existingCount ?? 0) > 0) {
+    console.log(`[BDL] preserving pregame props for game ${bdlGameId} (${existingCount} rows)`)
+    return { synced: existingCount ?? 0 }
+  }
+
   const requestedVendors = vendors?.length
     ? vendors
     : ['draftkings', 'fanduel', 'fanatics', 'betmgm', 'caesars', 'betrivers']
@@ -360,8 +378,6 @@ export async function syncPlayerProps(
     }
   }
   const props = [...propMap.values()]
-
-  const sb = supabase()
 
   // Clear stale props for this game + prop type before inserting fresh
   await sb

@@ -70,11 +70,24 @@ function normalizeSportsbook(value: string | null | undefined): string {
   return SUPPORTED_SPORTSBOOKS.includes(raw as (typeof SUPPORTED_SPORTSBOOKS)[number]) ? raw : 'draftkings'
 }
 
+type PlayerBookOdds = {
+  bestOdds: number
+  bestVendor: string
+  all: Array<{ vendor: string; odds: number }>
+}
+
+function oddsProfitScore(odds: number): number {
+  if (odds >= 0) return odds
+  return 10000 / Math.abs(odds)
+}
+
+function buildTooltip(all: Array<{ vendor: string; odds: number }>): string {
+  return all.map((entry) => `${sportsbookLabel(entry.vendor)} ${formatBookOdds(entry.odds)}`).join('\n')
+}
+
 function chooseBestPlayerBook(
   props: Array<{ vendor: string | null; line_value: string | null; milestone_odds: number | null; over_odds: number | null }>,
-  preferredVendor: string,
-): { odds: number; vendor: string } | null {
-  const rankedVendors = [preferredVendor, ...SUPPORTED_SPORTSBOOKS.filter((v) => v !== preferredVendor)]
+): PlayerBookOdds | null {
   const bestByVendor = new Map<string, { odds: number; vendor: string; lineValue: number | null }>()
   for (const p of props) {
     const vendor = normalizeSportsbook(p.vendor)
@@ -96,11 +109,15 @@ function chooseBestPlayerBook(
       bestByVendor.set(vendor, { odds: Number(odds), vendor, lineValue: normalizedLine })
     }
   }
-  for (const vendor of rankedVendors) {
-    const hit = bestByVendor.get(vendor)
-    if (hit) return { odds: hit.odds, vendor: hit.vendor }
+  const all = [...bestByVendor.values()]
+    .sort((a, b) => oddsProfitScore(b.odds) - oddsProfitScore(a.odds))
+    .map((entry) => ({ vendor: entry.vendor, odds: entry.odds }))
+  if (!all.length) return null
+  return {
+    bestOdds: all[0]!.odds,
+    bestVendor: all[0]!.vendor,
+    all,
   }
-  return null
 }
 
 function normalizeDeg(deg: number): number {
@@ -236,8 +253,7 @@ export default function DugoutPage() {
   // { [bdlGameId]: { home: pitcherName|null, away: pitcherName|null } }
   const [probablePitchers, setProbablePitchers] = useState<Record<string, { home: string | null; away: string | null }>>({})
   // { [statPlayerId]: americanOdds number }
-  const [playerOdds, setPlayerOdds] = useState<Record<string, { odds: number; vendor: string } | null>>({})
-  const [defaultSportsbook, setDefaultSportsbook] = useState<string>('draftkings')
+  const [playerOdds, setPlayerOdds] = useState<Record<string, PlayerBookOdds | null>>({})
 
   useEffect(() => {
     if (!supabase) return
@@ -252,19 +268,6 @@ export default function DugoutPage() {
       })
     })
   }, [supabase])
-
-  // Load user's preferred sportsbook
-  useEffect(() => {
-    if (!supabase || !session?.user.id) return
-    void supabase
-      .from('user_settings')
-      .select('default_sportsbook')
-      .eq('user_id', session.user.id)
-      .maybeSingle()
-      .then(({ data }) => {
-        if (data?.default_sportsbook) setDefaultSportsbook(normalizeSportsbook(String(data.default_sportsbook)))
-      })
-  }, [supabase, session?.user.id])
 
   useEffect(() => {
     if (!supabase) return
@@ -358,7 +361,7 @@ export default function DugoutPage() {
       const bdlToStat = new Map<number, string>()
       for (const [sid, bid] of statToBdl) bdlToStat.set(bid, sid)
 
-      const next: Record<string, { odds: number; vendor: string } | null> = {}
+      const next: Record<string, PlayerBookOdds | null> = {}
       const propsByStat = new Map<string, Array<{ vendor: string | null; line_value: string | null; milestone_odds: number | null; over_odds: number | null }>>()
       for (const p of props as any[]) {
         const sid = bdlToStat.get(Number(p.bdl_player_id))
@@ -367,12 +370,12 @@ export default function DugoutPage() {
         propsByStat.get(sid)!.push(p)
       }
       for (const [sid, statProps] of propsByStat) {
-        const best = chooseBestPlayerBook(statProps, defaultSportsbook)
+        const best = chooseBestPlayerBook(statProps)
         if (best) next[sid] = best
       }
       setPlayerOdds(next)
     })()
-  }, [supabase, liveGames, rows, defaultSportsbook])
+  }, [supabase, liveGames, rows])
 
   const topByTeam = useMemo(() => {
     const m = new Map<string, DailyProjection>()
@@ -388,15 +391,15 @@ export default function DugoutPage() {
   }, [rows])
 
   const oddsByName = useMemo(() => {
-    const m = new Map<string, number>()
+    const m = new Map<string, PlayerBookOdds>()
     for (const r of rows) {
-      const odds = playerOdds[r.playerId]?.odds
-      if (odds == null) continue
+      const info = playerOdds[r.playerId]
+      if (!info) continue
       const key = normalizePlayerName(r.name)
       if (!key || m.has(key)) continue
-      m.set(key, odds)
+      m.set(key, info)
       const last = key.split(' ').filter(Boolean).at(-1)
-      if (last && !m.has(last)) m.set(last, odds)
+      if (last && !m.has(last)) m.set(last, info)
     }
     return m
   }, [playerOdds, rows])
@@ -927,11 +930,12 @@ export default function DugoutPage() {
                                     const txt = String(p?.play ?? '')
                                     const hitterName = txt.split(/\bhomered\b/i)[0]?.trim() ?? ''
                                     const hitterOdds = oddsByName.get(normalizePlayerName(hitterName)) ?? null
-                                    const hitterOddsText = formatBookOdds(hitterOdds)
+                                    const hitterOddsText = formatBookOdds(hitterOdds?.bestOdds)
                                     const displayText =
                                       hitterName && hitterOddsText
                                         ? txt.replace(hitterName, `${hitterName} (${hitterOddsText})`)
                                         : txt
+                                    const oddsTooltip = hitterOdds ? buildTooltip(hitterOdds.all) : undefined
                                     // BDL scoring summary has `inning` + `period`, but sometimes the meaning is swapped.
                                     // We infer half inning from whichever field contains TOP/BOTTOM and inning number from the other.
                                     const inningRaw = String(p?.inning ?? '').trim()
@@ -992,7 +996,7 @@ export default function DugoutPage() {
                                         <span className="pg-scoringPlayIcon" aria-hidden="true">
                                           <img className={iconClass} src={iconSrc} alt="" />
                                         </span>
-                                        <span className="pg-scoringPlayText">{displayText}</span>
+                                        <span className="pg-scoringPlayText" title={oddsTooltip}>{displayText}</span>
                                         <span className="pg-scoringPlayInning">{inningLabel}</span>
                                       </div>
                                     )
@@ -1050,9 +1054,9 @@ export default function DugoutPage() {
                               <span style={{ color: awayPalette.primary }}>
                                 {awayTop ? formatProbability(awayTop.hrProbability) : '—'}
                               </span>
-                              {awayTop && playerOdds[awayTop.playerId]?.odds != null ? (
-                                <span className="pg-batterBookOdds" title={`${playerOdds[awayTop.playerId]?.vendor} HR odds`}>
-                                  {sportsbookLabel(playerOdds[awayTop.playerId]?.vendor ?? defaultSportsbook)} {formatBookOdds(playerOdds[awayTop.playerId]?.odds)}
+                              {awayTop && playerOdds[awayTop.playerId]?.bestOdds != null ? (
+                                <span className="pg-batterBookOdds" title={buildTooltip(playerOdds[awayTop.playerId]?.all ?? [])}>
+                                  {sportsbookLabel(playerOdds[awayTop.playerId]?.bestVendor ?? '')} {formatBookOdds(playerOdds[awayTop.playerId]?.bestOdds)}
                                 </span>
                               ) : null}
                               {awayTop && Object.prototype.hasOwnProperty.call(pickState, awayTop.playerId) ? (
@@ -1109,9 +1113,9 @@ export default function DugoutPage() {
                               <span style={{ color: homePalette.primary }}>
                                 {homeTop ? formatProbability(homeTop.hrProbability) : '—'}
                               </span>
-                              {homeTop && playerOdds[homeTop.playerId]?.odds != null ? (
-                                <span className="pg-batterBookOdds" title={`${playerOdds[homeTop.playerId]?.vendor} HR odds`}>
-                                  {sportsbookLabel(playerOdds[homeTop.playerId]?.vendor ?? defaultSportsbook)} {formatBookOdds(playerOdds[homeTop.playerId]?.odds)}
+                              {homeTop && playerOdds[homeTop.playerId]?.bestOdds != null ? (
+                                <span className="pg-batterBookOdds" title={buildTooltip(playerOdds[homeTop.playerId]?.all ?? [])}>
+                                  {sportsbookLabel(playerOdds[homeTop.playerId]?.bestVendor ?? '')} {formatBookOdds(playerOdds[homeTop.playerId]?.bestOdds)}
                                 </span>
                               ) : null}
                               {homeTop && Object.prototype.hasOwnProperty.call(pickState, homeTop.playerId) ? (

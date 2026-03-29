@@ -58,11 +58,24 @@ function normalizeSportsbook(value: string | null | undefined): string {
   return SUPPORTED_SPORTSBOOKS.includes(raw as (typeof SUPPORTED_SPORTSBOOKS)[number]) ? raw : 'draftkings'
 }
 
+type PlayerBookOdds = {
+  bestOdds: number
+  bestVendor: string
+  all: Array<{ vendor: string; odds: number }>
+}
+
+function oddsProfitScore(odds: number): number {
+  if (odds >= 0) return odds
+  return 10000 / Math.abs(odds)
+}
+
+function buildTooltip(all: Array<{ vendor: string; odds: number }>): string {
+  return all.map((entry) => `${sportsbookLabel(entry.vendor)} ${formatBookOdds(entry.odds)}`).join('\n')
+}
+
 function chooseBestPlayerBook(
   props: Array<{ vendor: string | null; line_value: string | null; milestone_odds: number | null; over_odds: number | null }>,
-  preferredVendor: string,
-): { odds: number; vendor: string } | null {
-  const rankedVendors = [preferredVendor, ...SUPPORTED_SPORTSBOOKS.filter((v) => v !== preferredVendor)]
+): PlayerBookOdds | null {
   const bestByVendor = new Map<string, { odds: number; vendor: string; lineValue: number | null }>()
   for (const p of props) {
     const vendor = normalizeSportsbook(p.vendor)
@@ -84,11 +97,15 @@ function chooseBestPlayerBook(
       bestByVendor.set(vendor, { odds: Number(odds), vendor, lineValue: normalizedLine })
     }
   }
-  for (const vendor of rankedVendors) {
-    const hit = bestByVendor.get(vendor)
-    if (hit) return { odds: hit.odds, vendor: hit.vendor }
+  const all = [...bestByVendor.values()]
+    .sort((a, b) => oddsProfitScore(b.odds) - oddsProfitScore(a.odds))
+    .map((entry) => ({ vendor: entry.vendor, odds: entry.odds }))
+  if (!all.length) return null
+  return {
+    bestOdds: all[0]!.odds,
+    bestVendor: all[0]!.vendor,
+    all,
   }
-  return null
 }
 
 export default function ProjectionsPage() {
@@ -108,8 +125,7 @@ export default function ProjectionsPage() {
   const [selectedYear, setSelectedYear] = useState<number>(2026)
   const [liveGames, setLiveGames] = useState<any[]>([])
   const [probablePitchers, setProbablePitchers] = useState<Record<string, { home: string | null; away: string | null }>>({})
-  const [playerOdds, setPlayerOdds] = useState<Record<string, { odds: number; vendor: string } | null>>({})
-  const [defaultSportsbook, setDefaultSportsbook] = useState<string>('draftkings')
+  const [playerOdds, setPlayerOdds] = useState<Record<string, PlayerBookOdds | null>>({})
   const [displayDate, setDisplayDate] = useState(
     searchParams.get('date') ?? getAppDisplayDateIso(),
   )
@@ -134,18 +150,6 @@ export default function ProjectionsPage() {
       })
     })
   }, [supabase])
-
-  useEffect(() => {
-    if (!supabase || !session?.user.id) return
-    void supabase
-      .from('user_settings')
-      .select('default_sportsbook')
-      .eq('user_id', session.user.id)
-      .maybeSingle()
-      .then(({ data }) => {
-        if (data?.default_sportsbook) setDefaultSportsbook(normalizeSportsbook(String(data.default_sportsbook)))
-      })
-  }, [supabase, session?.user.id])
 
   useEffect(() => {
     if (!supabase) return
@@ -267,7 +271,7 @@ export default function ProjectionsPage() {
       const bdlToStat = new Map<number, string>()
       for (const [sid, bid] of statToBdl) bdlToStat.set(bid, sid)
 
-      const next: Record<string, { odds: number; vendor: string } | null> = {}
+      const next: Record<string, PlayerBookOdds | null> = {}
       const propsByStat = new Map<string, Array<{ vendor: string | null; line_value: string | null; milestone_odds: number | null; over_odds: number | null }>>()
       for (const p of props as any[]) {
         const sid = bdlToStat.get(Number(p.bdl_player_id))
@@ -276,12 +280,12 @@ export default function ProjectionsPage() {
         propsByStat.get(sid)!.push(p)
       }
       for (const [sid, statProps] of propsByStat) {
-        const best = chooseBestPlayerBook(statProps, defaultSportsbook)
+        const best = chooseBestPlayerBook(statProps)
         if (best) next[sid] = best
       }
       setPlayerOdds(next)
     })()
-  }, [defaultSportsbook, filteredRows, games, supabase])
+  }, [filteredRows, games, supabase])
 
   const selectedPlayer = useMemo(
     () => rows.find((r) => r.playerId === selectedPlayerId) ?? null,
@@ -290,16 +294,18 @@ export default function ProjectionsPage() {
 
   const probablePitcherByMatchup = useMemo(() => {
     const out = new Map<string, { name: string | null; hand: string | null }>()
-    for (const game of games) {
-      const home = (normalizeTeamCode(game.homeTeam) ?? game.homeTeam).toUpperCase()
-      const away = (normalizeTeamCode(game.awayTeam) ?? game.awayTeam).toUpperCase()
-      const pp = probablePitchers[String(game.gameId)]
-      if (!pp) continue
+    const addMatchup = (homeTeam: string, awayTeam: string, gameId: string | number | null | undefined) => {
+      const home = (normalizeTeamCode(homeTeam) ?? homeTeam).toUpperCase()
+      const away = (normalizeTeamCode(awayTeam) ?? awayTeam).toUpperCase()
+      const pp = probablePitchers[String(gameId ?? '')]
+      if (!pp || !home || !away) return
       out.set(`${home}|${away}`, { name: pp.away ?? null, hand: null })
       out.set(`${away}|${home}`, { name: pp.home ?? null, hand: null })
     }
+    for (const game of games) addMatchup(game.homeTeam, game.awayTeam, game.gameId)
+    for (const game of liveGames) addMatchup(game.home_team_abbrev, game.away_team_abbrev, game.bdl_game_id)
     return out
-  }, [games, probablePitchers])
+  }, [games, liveGames, probablePitchers])
 
   const sections = useMemo(
     () =>
@@ -612,8 +618,10 @@ export default function ProjectionsPage() {
             <div className="pg-cards">
               {s.data.map((r) => {
                 const displayPitcher = displayOpponentPitcher(r)
-                const bookOdds = formatBookOdds(playerOdds[r.playerId]?.odds)
-                const bookVendor = playerOdds[r.playerId]?.vendor ?? defaultSportsbook
+                const bestBook = playerOdds[r.playerId] ?? null
+                const bookOdds = formatBookOdds(bestBook?.bestOdds)
+                const bookVendor = bestBook?.bestVendor ?? ''
+                const oddsTooltip = bestBook ? buildTooltip(bestBook.all) : 'Sportsbook HR odds unavailable'
                 return (
                 <div
                   key={r.playerId}
@@ -669,7 +677,7 @@ export default function ProjectionsPage() {
                     <span
                       className="pg-odds"
                       style={{ color: tierColor(r.tier ?? 'D') }}
-                      title={bookOdds ? `${sportsbookLabel(bookVendor)} HR odds` : 'Sportsbook HR odds unavailable'}
+                      title={oddsTooltip}
                     >
                       {bookOdds ?? '—'}
                     </span>

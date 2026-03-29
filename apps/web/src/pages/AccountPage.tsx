@@ -32,20 +32,6 @@ type DailyPickRow = {
   } | null
 }
 
-const SUPPORTED_SPORTSBOOKS = [
-  { value: 'draftkings', label: 'DraftKings' },
-  { value: 'fanduel', label: 'FanDuel' },
-  { value: 'fanatics', label: 'Fanatics' },
-  { value: 'caesars', label: 'Caesars' },
-  { value: 'betmgm', label: 'BetMGM' },
-  { value: 'betrivers', label: 'BetRivers' },
-] as const
-
-function normalizeSportsbook(value: string | null | undefined): string {
-  const raw = String(value ?? '').toLowerCase().trim()
-  return SUPPORTED_SPORTSBOOKS.some((book) => book.value === raw) ? raw : 'draftkings'
-}
-
 export default function AccountPage() {
   const navigate = useNavigate()
   const {
@@ -75,7 +61,6 @@ export default function AccountPage() {
   const [avatarUrl, setAvatarUrl] = useState('')
   const [visibility, setVisibility] = useState<ProfileVisibility>('private')
   const [savingProfile, setSavingProfile] = useState(false)
-  const [defaultSportsbook, setDefaultSportsbook] = useState('draftkings')
   const [hrNotifications, setHrNotifications] = useState(true)
   const [hrLeagueNotifications, setHrLeagueNotifications] = useState(false)
   const [todayPickDate, setTodayPickDate] = useState(new Date().toISOString().slice(0, 10))
@@ -105,7 +90,7 @@ export default function AccountPage() {
     }
     void supabase
       .from('user_settings')
-      .select('display_name,avatar_url,profile_visibility,default_sportsbook,hr_notifications,hr_notifications_league')
+      .select('display_name,avatar_url,profile_visibility,hr_notifications,hr_notifications_league')
       .eq('user_id', session.user.id)
       .maybeSingle()
       .then(({ data }) => {
@@ -113,7 +98,6 @@ export default function AccountPage() {
         setAvatarUrl(String(data?.avatar_url ?? ''))
         const raw = String(data?.profile_visibility ?? 'private').toLowerCase()
         setVisibility(raw === 'public' || raw === 'friends' ? raw : 'private')
-        setDefaultSportsbook(normalizeSportsbook(data?.default_sportsbook))
         setHrNotifications(data?.hr_notifications !== false)
         setHrLeagueNotifications(data?.hr_notifications_league === true)
       })
@@ -295,7 +279,6 @@ export default function AccountPage() {
         display_name: displayName.trim() || null,
         avatar_url: avatarUrl.trim() || null,
         profile_visibility: visibility,
-        default_sportsbook: defaultSportsbook,
         hr_notifications: hrNotifications,
         hr_notifications_league: hrLeagueNotifications,
       },
@@ -525,21 +508,7 @@ export default function AccountPage() {
                   <img src={avatarUrl} alt="Profile preview" className="acc-avatarPreview" />
                 </div>
               ) : null}
-              <label className="pg-label" htmlFor="default-sportsbook">
-                Default sportsbook (for edge calculation)
-              </label>
-              <select
-                id="default-sportsbook"
-                className="acc-select"
-                value={defaultSportsbook}
-                onChange={(e) => setDefaultSportsbook(e.target.value)}
-              >
-                {SUPPORTED_SPORTSBOOKS.map((book) => (
-                  <option key={book.value} value={book.value}>
-                    {book.label}
-                  </option>
-                ))}
-              </select>
+              <div className="pg-sub">Best available sportsbook odds are shown automatically.</div>
               <label className="pg-label acc-switchRow">
                 <span>Pick HR notifications</span>
                 <button
