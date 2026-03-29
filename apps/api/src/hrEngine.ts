@@ -350,10 +350,12 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
   if (!year) { console.warn('[hr-engine] No stats year found'); return [] }
 
   const [
-    games, players, bbRows, parkRows, bdlPlayers, bdlStats, standardBattingRows, standardPitchingRows,
+    games, players, evRows, hrRows, bbRows, parkRows, bdlPlayers, bdlStats, standardBattingRows, standardPitchingRows,
   ] = await Promise.all([
     fetchGames(sb, date),
     fetchPlayers(sb),
+    fetchBatterEV(sb, year),
+    fetchBatterHR(sb, year),
     fetchBattedBall(sb),
     fetchParkFactors(sb),
     fetchBdlPlayers(sb),
@@ -386,6 +388,18 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
   /* ─── Index data ──────────────────────────────────────────────── */
 
   const playerMap = new Map(players.map((p) => [p.stat_player_id, p]))
+  const evMap = new Map<string, any>()
+  for (const row of evRows as any[]) {
+    const pid = String(row.player_id ?? '')
+    if (!pid || evMap.has(pid)) continue
+    evMap.set(pid, row)
+  }
+  const hrMap = new Map<string, any>()
+  for (const row of hrRows as any[]) {
+    const pid = String(row.player_id ?? '')
+    if (!pid || hrMap.has(pid)) continue
+    hrMap.set(pid, row)
+  }
   const venueLower = buildVenueParkMap(parkRows)
 
   const bdlByStatId = new Map<string, typeof bdlPlayers[0]>()
@@ -572,16 +586,24 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
     if (positionRaw === 'P' || positionRaw === 'SP' || positionRaw === 'RP') continue
 
     const standardBatting = standardBattingMap.get(playerId)
+    const ev = evMap.get(playerId) as any
+    const hrRow = hrMap.get(playerId) as any
     const seasonPa =
       (seasonBatting?.batting_ab ?? 0) +
       (seasonBatting?.batting_bb ?? 0)
     const seasonHr = seasonBatting?.batting_hr ?? 0
-    const batterPa = (num(standardBatting?.pa) ?? 0) > 0 ? num(standardBatting?.pa)! : seasonPa
-    const batterHr = standardBatting?.hr != null ? (num(standardBatting.hr) ?? 0) : seasonHr
-    if (batterPa <= 0) continue
-
-    const batterHrPerPa = batterHr / batterPa
-    if (!Number.isFinite(batterHrPerPa) || batterHrPerPa <= 0) continue
+    const standardPa = num(standardBatting?.pa) ?? 0
+    const standardHr = num(standardBatting?.hr) ?? 0
+    const histPa = num(ev?.attempts) ?? 0
+    const histHr = num(hrRow?.hr_total) ?? 0
+    const standardRate = standardPa > 0 ? standardHr / standardPa : null
+    const seasonRate = seasonPa > 0 ? seasonHr / seasonPa : null
+    const histRate = histPa > 0 ? histHr / histPa : null
+    const batterHrPerPa =
+      (standardRate != null && standardRate > 0 ? standardRate : null) ??
+      (seasonRate != null && seasonRate > 0 ? seasonRate : null) ??
+      (histRate != null && histRate > 0 ? histRate : null)
+    if (batterHrPerPa == null || !Number.isFinite(batterHrPerPa) || batterHrPerPa <= 0) continue
 
     // Determine opposing pitcher info
     const oppPitcherHand   = side === 'home' ? ctx.awayPitcherHand   : ctx.homePitcherHand

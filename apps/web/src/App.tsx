@@ -55,7 +55,7 @@ function Layout() {
       : pathname === '/help' ? 'Help'
       : pathname === '/account' ? 'Account'
       : 'Scoreboard'
-    document.title = `analytichustle | ${pageName}`
+    document.title = `AnalyticHustle | ${pageName}`
   }, [pathname])
   useEffect(() => {
     if (!supabase || !session?.user.id) {

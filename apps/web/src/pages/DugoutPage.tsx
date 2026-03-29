@@ -254,6 +254,7 @@ export default function DugoutPage() {
   const [probablePitchers, setProbablePitchers] = useState<Record<string, { home: string | null; away: string | null }>>({})
   // { [statPlayerId]: americanOdds number }
   const [playerOdds, setPlayerOdds] = useState<Record<string, PlayerBookOdds | null>>({})
+  const [playerOddsByName, setPlayerOddsByName] = useState<Record<string, PlayerBookOdds | null>>({})
 
   useEffect(() => {
     if (!supabase) return
@@ -324,58 +325,82 @@ export default function DugoutPage() {
     return () => clearInterval(id)
   }, [displayDate, supabase])
 
-  // Fetch HR odds for top-projected batters from the user's preferred sportsbook
+  // Fetch HR odds for visible games so scoreboard cards and homer text can use them.
   useEffect(() => {
-    if (!supabase || !liveGames.length || !rows.length) { setPlayerOdds({}); return }
+    if (!supabase || !liveGames.length) {
+      setPlayerOdds({})
+      setPlayerOddsByName({})
+      return
+    }
     const bdlGameIds = liveGames.map((g: any) => g.bdl_game_id).filter(Boolean) as number[]
-    if (!bdlGameIds.length) return
-
-    // Collect all top-projected stat_player_ids visible in the game cards
-    const topStatIds = [...new Set(rows.map((r) => r.playerId))]
-    if (!topStatIds.length) return
+    if (!bdlGameIds.length) {
+      setPlayerOdds({})
+      setPlayerOddsByName({})
+      return
+    }
 
     void (async () => {
-      // Cross-ref stat_player_id → bdl_player_id
-      const { data: xref } = await supabase
-        .from('bdl_players')
-        .select('bdl_id,stat_player_id')
-        .in('stat_player_id', topStatIds.slice(0, 100))
-      const statToBdl = new Map<string, number>(
-        (xref ?? []).map((r: any) => [String(r.stat_player_id), Number(r.bdl_id)])
-      )
-      const bdlPlayerIds = [...statToBdl.values()].filter(Boolean)
-      if (!bdlPlayerIds.length) return
-
-      // Fetch HR milestone/over props from the user's sportsbook
       const { data: props } = await supabase
         .from('bdl_player_props')
         .select('bdl_player_id,line_value,milestone_odds,over_odds,vendor')
         .in('bdl_game_id', bdlGameIds)
-        .in('bdl_player_id', bdlPlayerIds)
         .eq('prop_type', 'home_runs')
 
       if (!props?.length) {
         setPlayerOdds({})
+        setPlayerOddsByName({})
         return
       }
+
+      const bdlIds = [...new Set(props.map((p: any) => Number(p.bdl_player_id)).filter((id) => Number.isFinite(id) && id > 0))]
+      const { data: xref } = await supabase
+        .from('bdl_players')
+        .select('bdl_id,stat_player_id,full_name')
+        .in('bdl_id', bdlIds.slice(0, 500))
       const bdlToStat = new Map<number, string>()
-      for (const [sid, bid] of statToBdl) bdlToStat.set(bid, sid)
+      const bdlToName = new Map<number, string>()
+      for (const row of xref ?? []) {
+        const bid = Number((row as any).bdl_id)
+        const sid = String((row as any).stat_player_id ?? '')
+        const name = String((row as any).full_name ?? '').trim()
+        if (sid) bdlToStat.set(bid, sid)
+        if (name) bdlToName.set(bid, name)
+      }
 
       const next: Record<string, PlayerBookOdds | null> = {}
+      const nextByName: Record<string, PlayerBookOdds | null> = {}
       const propsByStat = new Map<string, Array<{ vendor: string | null; line_value: string | null; milestone_odds: number | null; over_odds: number | null }>>()
+      const propsByName = new Map<string, Array<{ vendor: string | null; line_value: string | null; milestone_odds: number | null; over_odds: number | null }>>()
       for (const p of props as any[]) {
-        const sid = bdlToStat.get(Number(p.bdl_player_id))
-        if (!sid) continue
-        if (!propsByStat.has(sid)) propsByStat.set(sid, [])
-        propsByStat.get(sid)!.push(p)
+        const bid = Number(p.bdl_player_id)
+        const sid = bdlToStat.get(bid)
+        if (sid) {
+          if (!propsByStat.has(sid)) propsByStat.set(sid, [])
+          propsByStat.get(sid)!.push(p)
+        }
+        const nameKey = normalizePlayerName(bdlToName.get(bid))
+        if (nameKey) {
+          if (!propsByName.has(nameKey)) propsByName.set(nameKey, [])
+          propsByName.get(nameKey)!.push(p)
+          const last = nameKey.split(' ').filter(Boolean).at(-1)
+          if (last) {
+            if (!propsByName.has(last)) propsByName.set(last, [])
+            propsByName.get(last)!.push(p)
+          }
+        }
       }
       for (const [sid, statProps] of propsByStat) {
         const best = chooseBestPlayerBook(statProps)
         if (best) next[sid] = best
       }
+      for (const [nameKey, nameProps] of propsByName) {
+        const best = chooseBestPlayerBook(nameProps)
+        if (best) nextByName[nameKey] = best
+      }
       setPlayerOdds(next)
+      setPlayerOddsByName(nextByName)
     })()
-  }, [supabase, liveGames, rows])
+  }, [supabase, liveGames])
 
   const topByTeam = useMemo(() => {
     const m = new Map<string, DailyProjection>()
@@ -392,6 +417,10 @@ export default function DugoutPage() {
 
   const oddsByName = useMemo(() => {
     const m = new Map<string, PlayerBookOdds>()
+    for (const [key, info] of Object.entries(playerOddsByName)) {
+      if (!key || !info) continue
+      m.set(key, info)
+    }
     for (const r of rows) {
       const info = playerOdds[r.playerId]
       if (!info) continue
@@ -402,7 +431,7 @@ export default function DugoutPage() {
       if (last && !m.has(last)) m.set(last, info)
     }
     return m
-  }, [playerOdds, rows])
+  }, [playerOdds, playerOddsByName, rows])
 
   const visibleGames = useMemo(() => {
     const pairKey = (a: string, b: string) =>

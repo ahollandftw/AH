@@ -61,6 +61,26 @@ function canonicalTeam(team: string | null | undefined): string | null {
   return TEAM_ALIASES[key] ?? key
 }
 
+function shiftIsoDate(dateIso: string, days: number): string {
+  const d = new Date(`${dateIso}T12:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + days)
+  return d.toISOString().slice(0, 10)
+}
+
+function utcToETDateIso(utcStr: string | null | undefined): string | null {
+  if (!utcStr) return null
+  try {
+    const d = new Date(new Date(utcStr).toLocaleString('en-US', { timeZone: 'America/New_York' }))
+    if (Number.isNaN(d.getTime())) return null
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, '0')
+    const dd = String(d.getDate()).padStart(2, '0')
+    return `${y}-${m}-${dd}`
+  } catch {
+    return null
+  }
+}
+
 /* ─── daily_hr_projections table path ────────────────────────────── */
 
 async function listDailyHrProjectionsFromTable(
@@ -233,8 +253,10 @@ async function calculateMatchupProjections(
   const year = await fetchMaxBattingHomerunYear(supabase)
   if (year == null) return []
 
-  const [bbRows, parkRows, playersRes, standardBattingRows, standardPitchingRows] =
+  const [evRows, hrRows, bbRows, parkRows, playersRes, standardBattingRows, standardPitchingRows] =
     await Promise.all([
+      fetchAllBatterEV(supabase, year),
+      fetchAllBatterHR(supabase, year),
       fetchBattedBallBatting(supabase),
       fetchParkFactors(supabase),
       supabase.from('players').select('stat_player_id,slug,name,team,position').limit(5000),
@@ -244,6 +266,18 @@ async function calculateMatchupProjections(
 
   const players = (playersRes.data ?? []) as any[]
   const playerMap = new Map(players.map((p: any) => [p.stat_player_id, p]))
+  const evMap = new Map<string, any>()
+  for (const row of evRows as any[]) {
+    const pid = String(row.player_id ?? '')
+    if (!pid || evMap.has(pid)) continue
+    evMap.set(pid, row)
+  }
+  const hrMap = new Map<string, any>()
+  for (const row of hrRows as any[]) {
+    const pid = String(row.player_id ?? '')
+    if (!pid || hrMap.has(pid)) continue
+    hrMap.set(pid, row)
+  }
   const venueLower = buildVenueParkMap(parkRows)
 
   const bbByPlayer = new Map<string, { lhp?: Record<string, unknown>; rhp?: Record<string, unknown> }>()
@@ -276,22 +310,35 @@ async function calculateMatchupProjections(
     if (acc.tbf > 0) teamPitcherHrPerPaAllowed.set(team, acc.hr / acc.tbf)
   }
 
+  const rosterPlayerIds = new Set<string>()
+  for (const [playerId, player] of playerMap) {
+    const team = canonicalTeam(player?.team)
+    if (team && teamsPlaying.has(team)) rosterPlayerIds.add(playerId)
+  }
+
   const results: DailyProjection[] = []
   const debugRows: Array<{ matchupHrRate: number | null; zMatchup: number | null; x: number; pPa: number; lambda: number; probRaw: number }> = []
 
-  for (const [playerId, standardBatting] of standardBattingMap) {
+  for (const playerId of rosterPlayerIds) {
     const player = playerMap.get(playerId) as any
     if (!player) continue
     const pTeam = canonicalTeam(player.team)
     if (!pTeam || !teamsPlaying.has(pTeam)) continue
 
     const oppTeam = opponentMap.get(pTeam) ?? null
-    const attempts = num(standardBatting.pa) ?? 0
-    const hrTotal = num(standardBatting.hr) ?? 0
-    if (attempts <= 0) continue
-
-    const hrPerPa = hrTotal / attempts
-    if (!Number.isFinite(hrPerPa) || hrPerPa <= 0) continue
+    const standardBatting = standardBattingMap.get(playerId) ?? null
+    const ev = evMap.get(playerId) as any
+    const hrRow = hrMap.get(playerId) as any
+    const attempts = num(standardBatting?.pa) ?? 0
+    const hrTotal = num(standardBatting?.hr) ?? 0
+    const histPa = num(ev?.attempts) ?? 0
+    const histHr = num(hrRow?.hr_total) ?? 0
+    const standardRate = attempts > 0 ? hrTotal / attempts : null
+    const histRate = histPa > 0 ? histHr / histPa : null
+    const hrPerPa =
+      (standardRate != null && standardRate > 0 ? standardRate : null) ??
+      (histRate != null && histRate > 0 ? histRate : null)
+    if (hrPerPa == null || !Number.isFinite(hrPerPa) || hrPerPa <= 0) continue
 
     const ha = homeAway.get(pTeam) ?? null
     const parkTeam = ha === 'H' ? pTeam : oppTeam
@@ -360,16 +407,33 @@ async function calculateMatchupProjections(
 async function getGamesForDateRaw(supabase: SupabaseClient, dateIso: string) {
   const { data: bdl, error: bdlErr } = await supabase
     .from('bdl_games')
-    .select('home_team_abbrev,away_team_abbrev')
-    .eq('date', dateIso)
-  if (!bdlErr && bdl?.length) {
-    return bdl.map((g) => ({ home_team: g.home_team_abbrev, away_team: g.away_team_abbrev })) as { home_team: string; away_team: string }[]
-  }
+    .select('home_team_abbrev,away_team_abbrev,date,start_time_utc')
+    .gte('date', shiftIsoDate(dateIso, -1))
+    .lte('date', shiftIsoDate(dateIso, 1))
   const { data } = await supabase
     .from('schedule_games')
     .select('home_team,away_team')
     .eq('date', dateIso)
-  return (data ?? []) as { home_team: string; away_team: string }[]
+  const out: Array<{ home_team: string; away_team: string }> = []
+  const seen = new Set<string>()
+  const pairKey = (a: string, b: string) => [canonicalTeam(a) ?? a, canonicalTeam(b) ?? b].sort().join('|')
+  if (!bdlErr && bdl?.length) {
+    for (const g of bdl as any[]) {
+      const etDate = utcToETDateIso(g.start_time_utc ?? null)
+      if ((etDate ? etDate !== dateIso : g.date !== dateIso)) continue
+      const key = pairKey(g.home_team_abbrev, g.away_team_abbrev)
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push({ home_team: g.home_team_abbrev, away_team: g.away_team_abbrev })
+    }
+  }
+  for (const g of (data ?? []) as any[]) {
+    const key = pairKey(g.home_team, g.away_team)
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push({ home_team: g.home_team, away_team: g.away_team })
+  }
+  return out
 }
 
 export { calculateMatchupProjections, listDailyHrProjectionsFromTable }
