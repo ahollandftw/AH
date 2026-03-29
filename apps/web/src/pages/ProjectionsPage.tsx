@@ -159,6 +159,19 @@ export default function ProjectionsPage() {
     [rows, selectedPlayerId],
   )
 
+  const probablePitcherByMatchup = useMemo(() => {
+    const out = new Map<string, { name: string | null; hand: string | null }>()
+    for (const game of games) {
+      const home = (normalizeTeamCode(game.homeTeam) ?? game.homeTeam).toUpperCase()
+      const away = (normalizeTeamCode(game.awayTeam) ?? game.awayTeam).toUpperCase()
+      const pp = probablePitchers[String(game.gameId)]
+      if (!pp) continue
+      out.set(`${home}|${away}`, { name: pp.away ?? null, hand: null })
+      out.set(`${away}|${home}`, { name: pp.home ?? null, hand: null })
+    }
+    return out
+  }, [games, probablePitchers])
+
   const sections = useMemo(
     () =>
       groupProjectionsByTier(filteredRows).map((g) => ({
@@ -183,21 +196,10 @@ export default function ProjectionsPage() {
 
   function displayOpponentPitcher(r: DailyProjection): { name: string | null; hand: string | null } {
     if (r.opponentPitcher) return { name: r.opponentPitcher, hand: r.opponentPitcherHand ?? null }
-    const team = normalizeTeamCode(r.team ?? '') ?? ''
-    const opp = parseOpponentTeam(r) ?? ''
+    const team = (normalizeTeamCode(r.team ?? '') ?? '').toUpperCase()
+    const opp = (parseOpponentTeam(r) ?? '').toUpperCase()
     if (!team || !opp) return { name: null, hand: null }
-    const game = games.find((g) => {
-      const home = normalizeTeamCode(g.homeTeam) ?? g.homeTeam
-      const away = normalizeTeamCode(g.awayTeam) ?? g.awayTeam
-      return (home === team && away === opp) || (home === opp && away === team)
-    })
-    if (!game) return { name: null, hand: null }
-    const pp = probablePitchers[game.gameId]
-    if (!pp) return { name: null, hand: null }
-    const home = normalizeTeamCode(game.homeTeam) ?? game.homeTeam
-    return home === team
-      ? { name: pp.away ?? null, hand: null }
-      : { name: pp.home ?? null, hand: null }
+    return probablePitcherByMatchup.get(`${team}|${opp}`) ?? { name: null, hand: null }
   }
 
   function pickStatusLabel(v: boolean | null | undefined): string {

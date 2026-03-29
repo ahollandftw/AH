@@ -46,6 +46,11 @@ type RawLineupEntry = {
   is_probable_pitcher?: boolean | null
 }
 
+type PlayerXref = {
+  stat_player_id: string | null
+  full_name: string | null
+}
+
 const TEAM_ALIASES: Record<string, string> = {
   AZ: 'ARI',
   ARI: 'ARI',
@@ -154,10 +159,10 @@ async function resolveGameForMatchup(
   )
 }
 
-async function mapRawLineup(
+async function fetchLineupXref(
   sb: SupabaseClient,
   entries: RawLineupEntry[],
-): Promise<TeamLineupPlayer[]> {
+): Promise<Map<number, PlayerXref>> {
   const allIds = [
     ...new Set(
       entries
@@ -170,13 +175,18 @@ async function mapRawLineup(
     ? await sb.from('bdl_players').select('bdl_id,stat_player_id,full_name').in('bdl_id', allIds)
     : { data: [] as Array<{ bdl_id: number; stat_player_id: string | null; full_name: string | null }> }
 
-  const xrefMap = new Map<number, { stat_player_id: string | null; full_name: string | null }>(
+  return new Map<number, PlayerXref>(
     (xref ?? []).map((r: any) => [
       Number(r.bdl_id),
       { stat_player_id: r.stat_player_id ?? null, full_name: r.full_name ?? null },
     ]),
   )
+}
 
+function mapRawLineupEntries(
+  entries: RawLineupEntry[],
+  xrefMap: Map<number, PlayerXref>,
+): TeamLineupPlayer[] {
   return entries
     .map((e) => {
       const bdlId = Number(e.player?.id ?? e.player_id ?? 0) || null
@@ -192,14 +202,62 @@ async function mapRawLineup(
     .sort((a, b) => orderValue(a.batting_order) - orderValue(b.batting_order))
 }
 
+async function mapRawLineup(
+  sb: SupabaseClient,
+  entries: RawLineupEntry[],
+): Promise<TeamLineupPlayer[]> {
+  const xrefMap = await fetchLineupXref(sb, entries)
+  return mapRawLineupEntries(entries, xrefMap)
+}
+
+function parseOfficialLineupRows(
+  game: BdlGameRow,
+  rows: RawLineupEntry[],
+  xrefMap: Map<number, PlayerXref>,
+): { home: TeamLineupPlayer[]; away: TeamLineupPlayer[] } | null {
+  const homeAbbrev = canonTeam(game.home_team_abbrev)
+  const awayAbbrev = canonTeam(game.away_team_abbrev)
+  const homeRaw = rows.filter((r) => canonTeam(r.team?.abbreviation) === homeAbbrev)
+  const awayRaw = rows.filter((r) => canonTeam(r.team?.abbreviation) === awayAbbrev)
+  if (!homeRaw.length && !awayRaw.length) return null
+
+  return {
+    home: mapRawLineupEntries(homeRaw, xrefMap),
+    away: mapRawLineupEntries(awayRaw, xrefMap),
+  }
+}
+
+async function fetchOfficialLineupsForGames(
+  sb: SupabaseClient,
+  games: BdlGameRow[],
+): Promise<Map<number, { home: TeamLineupPlayer[]; away: TeamLineupPlayer[] } | null>> {
+  const out = new Map<number, { home: TeamLineupPlayer[]; away: TeamLineupPlayer[] } | null>()
+  if (!games.length) return out
+
+  try {
+    const rows = await bdlFetchAll<RawLineupEntry>('/mlb/v1/lineups')
+    const validGameIds = new Set(games.map((g) => g.bdl_game_id))
+    const scopedRows = rows.filter((r) => validGameIds.has(Number(r.game_id ?? 0)))
+    const xrefMap = await fetchLineupXref(sb, scopedRows)
+    for (const game of games) {
+      const gameRows = scopedRows.filter((r) => Number(r.game_id ?? 0) === game.bdl_game_id)
+      out.set(game.bdl_game_id, parseOfficialLineupRows(game, gameRows, xrefMap))
+    }
+  } catch {
+    for (const game of games) out.set(game.bdl_game_id, null)
+  }
+
+  return out
+}
+
 async function fetchOfficialGameLineup(
   sb: SupabaseClient,
   game: BdlGameRow,
 ): Promise<{ home: TeamLineupPlayer[]; away: TeamLineupPlayer[] } | null> {
   try {
-    const rows = await bdlFetchAll<RawLineupEntry>('/mlb/v1/lineups')
-    const gameRows = rows.filter((r) => Number(r.game_id ?? 0) === game.bdl_game_id)
-    if (!gameRows.length) {
+    const officialMap = await fetchOfficialLineupsForGames(sb, [game])
+    const bulkLineup = officialMap.get(game.bdl_game_id) ?? null
+    if (!bulkLineup) {
       const res = await bdlFetch<{
         data?: {
           home?: RawLineupEntry[]
@@ -219,17 +277,7 @@ async function fetchOfficialGameLineup(
         away: await mapRawLineup(sb, awayRaw),
       }
     }
-
-    const homeAbbrev = canonTeam(game.home_team_abbrev)
-    const awayAbbrev = canonTeam(game.away_team_abbrev)
-    const homeRaw = gameRows.filter((r) => canonTeam(r.team?.abbreviation) === homeAbbrev)
-    const awayRaw = gameRows.filter((r) => canonTeam(r.team?.abbreviation) === awayAbbrev)
-    if (!homeRaw.length && !awayRaw.length) return null
-
-    return {
-      home: await mapRawLineup(sb, homeRaw),
-      away: await mapRawLineup(sb, awayRaw),
-    }
+    return bulkLineup
   } catch {
     return null
   }
@@ -306,4 +354,37 @@ export async function getResolvedGamesForDate(
   dateIso: string,
 ) {
   return fetchGamesAroundDate(sb, dateIso)
+}
+
+export async function getBestLineupsForDate(
+  sb: SupabaseClient,
+  dateIso: string,
+): Promise<Record<string, GameLineupResult>> {
+  const games = await fetchGamesAroundDate(sb, dateIso)
+  const officialMap = await fetchOfficialLineupsForGames(sb, games)
+  const out: Record<string, GameLineupResult> = {}
+
+  for (const game of games) {
+    const official = officialMap.get(game.bdl_game_id) ?? null
+    const homeOfficial = official?.home ?? []
+    const awayOfficial = official?.away ?? []
+    const home =
+      batterCount(homeOfficial) >= 9
+        ? homeOfficial
+        : await findRecentTeamLineup(sb, game.home_team_abbrev, game.start_time_utc ?? null)
+    const away =
+      batterCount(awayOfficial) >= 9
+        ? awayOfficial
+        : await findRecentTeamLineup(sb, game.away_team_abbrev, game.start_time_utc ?? null)
+
+    out[String(game.bdl_game_id)] = {
+      game_id: game.bdl_game_id,
+      home,
+      away,
+      home_source: batterCount(homeOfficial) >= 9 ? 'official' : home.length ? 'previous_game' : 'none',
+      away_source: batterCount(awayOfficial) >= 9 ? 'official' : away.length ? 'previous_game' : 'none',
+    }
+  }
+
+  return out
 }

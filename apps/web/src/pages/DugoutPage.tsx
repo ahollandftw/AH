@@ -169,7 +169,7 @@ export default function DugoutPage() {
   type LineupPlayer = { bdl_player_id: number | null; stat_player_id: string | null; full_name: string | null; position: string | null; batting_order: number | null }
   type GameLineup = { home: LineupPlayer[]; away: LineupPlayer[]; home_source?: 'official' | 'previous_game' | 'none'; away_source?: 'official' | 'previous_game' | 'none' }
   const [lineupByGame, setLineupByGame] = useState<Record<string, GameLineup | null>>({})
-  const [lineupLoadingFor, setLineupLoadingFor] = useState<string | null>(null)
+  const [lineupsLoading, setLineupsLoading] = useState(false)
   // { [bdlGameId]: { home: pitcherName|null, away: pitcherName|null } }
   const [probablePitchers, setProbablePitchers] = useState<Record<string, { home: string | null; away: string | null }>>({})
   // { [statPlayerId]: americanOdds number }
@@ -371,6 +371,45 @@ export default function DugoutPage() {
     return () => ac.abort()
   }, [displayDate, visibleGames])
 
+  useEffect(() => {
+    const base = import.meta.env.VITE_API_BASE_URL ?? ''
+    const gameIds = visibleGames
+      .map((g) => String(g.gameId ?? ''))
+      .filter((id) => /^\d+$/.test(id))
+    if (!base || !gameIds.length) {
+      setLineupsLoading(false)
+      setLineupByGame({})
+      return
+    }
+    const ac = new AbortController()
+    setLineupsLoading(true)
+    void fetch(`${base}/bdl/lineups/slate?date=${encodeURIComponent(displayDate)}`, {
+      signal: ac.signal,
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json: { data?: Record<string, GameLineup | null> } | null) => {
+        if (!json?.data) {
+          setLineupByGame({})
+          return
+        }
+        const next: Record<string, GameLineup | null> = {}
+        for (const [gameId, lineup] of Object.entries(json.data)) {
+          next[`game:${gameId}`] = lineup
+        }
+        setLineupByGame(next)
+      })
+      .catch(() => {
+        setLineupByGame({})
+      })
+      .finally(() => {
+        if (!ac.signal.aborted) setLineupsLoading(false)
+      })
+    return () => {
+      ac.abort()
+      setLineupsLoading(false)
+    }
+  }, [displayDate, visibleGames])
+
   function toProjections(params: { date: string; team?: string; player?: string }) {
     const qp = new URLSearchParams()
     qp.set('date', params.date)
@@ -493,28 +532,6 @@ export default function DugoutPage() {
       setPlayerInputs(null)
     } finally {
       setMatchupLoading(false)
-    }
-  }
-
-  async function fetchLineup(key: string, params: { gameId?: string | null; date: string; homeTeam: string; awayTeam: string }) {
-    if (lineupByGame[key] !== undefined) return
-    const base = import.meta.env.VITE_API_BASE_URL ?? ''
-    if (!base) return
-    setLineupLoadingFor(key)
-    try {
-      const qp = new URLSearchParams({
-        date: params.date,
-        home_team: params.homeTeam,
-        away_team: params.awayTeam,
-      })
-      if (params.gameId) qp.set('game_id', params.gameId)
-      const r = await fetch(`${base}/bdl/lineup?${qp.toString()}`)
-      const json = await r.json()
-      setLineupByGame((prev) => ({ ...prev, [key]: json?.data ?? null }))
-    } catch {
-      setLineupByGame((prev) => ({ ...prev, [key]: null }))
-    } finally {
-      setLineupLoadingFor(null)
     }
   }
 
@@ -704,7 +721,9 @@ export default function DugoutPage() {
                   const isExpanded = expandedGameId === g.gameId
                   const homeNorm = normalizeTeamCode(g.homeTeam) ?? g.homeTeam
                   const weatherDisplay = getWeatherDisplay(weatherByHome[homeNorm], homeNorm)
-                  const lineupCacheKey = live?.bdl_game_id ? `game:${live.bdl_game_id}` : `pair:${displayDate}:${awayKey}:${homeKey}`
+                  const lineupCacheKey = /^\d+$/.test(String(g.gameId))
+                    ? `game:${g.gameId}`
+                    : `pair:${displayDate}:${awayKey}:${homeKey}`
                   const homerHitters = extractHomerHitters(live?.scoring_summary)
                   return (
                     <div
@@ -1029,14 +1048,6 @@ export default function DugoutPage() {
                         onClick={() => {
                           const nextExpanded = isExpanded ? null : g.gameId
                           setExpandedGameId(nextExpanded)
-                          if (nextExpanded) {
-                            void fetchLineup(lineupCacheKey, {
-                              gameId: live?.bdl_game_id ? String(live.bdl_game_id) : null,
-                              date: displayDate,
-                              homeTeam: g.homeTeam,
-                              awayTeam: g.awayTeam,
-                            })
-                          }
                         }}
                       >
                         {isExpanded ? 'Hide details' : 'Expand details'}
@@ -1068,7 +1079,7 @@ export default function DugoutPage() {
                             {/* Lineup — BDL official when available, projected fallback */}
                             {(() => {
                               const bdlLineup = lineupByGame[lineupCacheKey]
-                              const isLoadingLineup = lineupCacheKey === lineupLoadingFor
+                              const isLoadingLineup = lineupsLoading && bdlLineup === undefined
 
                               const ordinal = (n: number) =>
                                 n === 1 ? '1st' : n === 2 ? '2nd' : n === 3 ? '3rd' : `${n}th`
@@ -1088,7 +1099,6 @@ export default function DugoutPage() {
                                   source: 'official' | 'previous_game' | 'none' | undefined,
                                 ) => {
                                   const batters = entries.filter((e) => e.batting_order != null && e.batting_order > 0)
-                                  const pitcher = entries.find((e) => !e.batting_order || e.batting_order === 0)
                                   return (
                                     <div className="pg-lineupTeam">
                                       <div className="pg-lineupTeamTitle">
@@ -1132,15 +1142,6 @@ export default function DugoutPage() {
                                           </div>
                                         )
                                       })}
-                                      {pitcher && (
-                                        <div className="pg-lineupRow pg-lineupRow--pitcher">
-                                          <span className="pg-lineupOrder">P</span>
-                                          <span className="pg-lineupPos">SP</span>
-                                          <span className="pg-lineupName pg-lineupName--plain">{pitcher.full_name ?? '—'}</span>
-                                          <span className="pg-lineupProj" />
-                                          <span style={{ width: 32 }} />
-                                        </div>
-                                      )}
                                     </div>
                                   )
                                 }

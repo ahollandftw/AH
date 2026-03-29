@@ -13,7 +13,7 @@ import { calculateEdge, calculateEdgesForDate } from '../bdl/edge.js'
 import { getServiceClient } from '../supabase.js'
 import { bdlFetch, bdlFetchAll, type BdlPlay, type BdlPlateAppearance } from '../bdl/client.js'
 import { buildHrEventEnrichment } from '../bdl/hrEventEnrichment.js'
-import { getBestLineupForGame, getResolvedGamesForDate } from '../bdl/lineups.js'
+import { getBestLineupForGame, getBestLineupsForDate, getResolvedGamesForDate } from '../bdl/lineups.js'
 
 export function registerBdlRoutes(app: Express) {
   const canonTeam = (team: string): string => {
@@ -1029,6 +1029,22 @@ export function registerBdlRoutes(app: Express) {
       res.json({ data: best })
     } catch (e) {
       console.error('[bdl/lineup] failed:', e)
+      res.status(500).json({ error: e instanceof Error ? e.message : String(e) })
+    }
+  })
+
+  app.get('/bdl/lineups/slate', async (req, res) => {
+    try {
+      const date = String(req.query.date ?? '').trim()
+      if (!date) {
+        res.status(400).json({ error: 'date required' })
+        return
+      }
+      const sb = getServiceClient()
+      const data = await getBestLineupsForDate(sb, date)
+      res.json({ data })
+    } catch (e) {
+      console.error('[bdl/lineups/slate] failed:', e)
       res.status(500).json({ error: e instanceof Error ? e.message : String(e) })
     }
   })
