@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { bdlFetch } from './client.js'
+import { bdlFetch, bdlFetchAll } from './client.js'
 
 export type TeamLineupPlayer = {
   bdl_player_id: number | null
@@ -28,6 +28,10 @@ type BdlGameRow = {
 }
 
 type RawLineupEntry = {
+  game_id?: number | null
+  team?: {
+    abbreviation?: string
+  } | null
   player?: {
     id?: number
     full_name?: string
@@ -39,6 +43,7 @@ type RawLineupEntry = {
   full_name?: string
   batting_order?: number | null
   position?: string | null
+  is_probable_pitcher?: boolean | null
 }
 
 const TEAM_ALIASES: Record<string, string> = {
@@ -189,21 +194,36 @@ async function mapRawLineup(
 
 async function fetchOfficialGameLineup(
   sb: SupabaseClient,
-  gameId: number,
+  game: BdlGameRow,
 ): Promise<{ home: TeamLineupPlayer[]; away: TeamLineupPlayer[] } | null> {
   try {
-    const res = await bdlFetch<{
-      data?: {
-        home?: RawLineupEntry[]
-        away?: RawLineupEntry[]
-        home_lineup?: RawLineupEntry[]
-        away_lineup?: RawLineupEntry[]
-      }
-    }>('/mlb/v1/lineups', { game_id: gameId })
+    const rows = await bdlFetchAll<RawLineupEntry>('/mlb/v1/lineups')
+    const gameRows = rows.filter((r) => Number(r.game_id ?? 0) === game.bdl_game_id)
+    if (!gameRows.length) {
+      const res = await bdlFetch<{
+        data?: {
+          home?: RawLineupEntry[]
+          away?: RawLineupEntry[]
+          home_lineup?: RawLineupEntry[]
+          away_lineup?: RawLineupEntry[]
+        }
+      }>('/mlb/v1/lineups', { game_id: game.bdl_game_id })
 
-    const payload = res.data ?? {}
-    const homeRaw = payload.home_lineup ?? payload.home ?? []
-    const awayRaw = payload.away_lineup ?? payload.away ?? []
+      const payload = res.data ?? {}
+      const homeRaw = payload.home_lineup ?? payload.home ?? []
+      const awayRaw = payload.away_lineup ?? payload.away ?? []
+      if (!homeRaw.length && !awayRaw.length) return null
+
+      return {
+        home: await mapRawLineup(sb, homeRaw),
+        away: await mapRawLineup(sb, awayRaw),
+      }
+    }
+
+    const homeAbbrev = canonTeam(game.home_team_abbrev)
+    const awayAbbrev = canonTeam(game.away_team_abbrev)
+    const homeRaw = gameRows.filter((r) => canonTeam(r.team?.abbreviation) === homeAbbrev)
+    const awayRaw = gameRows.filter((r) => canonTeam(r.team?.abbreviation) === awayAbbrev)
     if (!homeRaw.length && !awayRaw.length) return null
 
     return {
@@ -238,7 +258,7 @@ async function findRecentTeamLineup(
   const games = (data ?? []) as BdlGameRow[]
 
   for (const game of games) {
-    const official = await fetchOfficialGameLineup(sb, game.bdl_game_id)
+    const official = await fetchOfficialGameLineup(sb, game)
     if (!official) continue
     const isHome = canonTeam(game.home_team_abbrev) === canonical
     const sideRows = isHome ? official.home : official.away
@@ -258,7 +278,7 @@ export async function getBestLineupForGame(
   },
 ): Promise<GameLineupResult> {
   const game = await resolveGameForMatchup(sb, args)
-  const official = game?.bdl_game_id ? await fetchOfficialGameLineup(sb, game.bdl_game_id) : null
+  const official = game?.bdl_game_id ? await fetchOfficialGameLineup(sb, game) : null
 
   const homeOfficial = official?.home ?? []
   const awayOfficial = official?.away ?? []
