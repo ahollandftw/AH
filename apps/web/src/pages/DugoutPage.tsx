@@ -1077,7 +1077,11 @@ export default function DugoutPage() {
                                 return <div className="pg-sub" style={{ marginTop: 12 }}>Loading lineup…</div>
                               }
 
-                              if (bdlLineup) {
+                              const hasResolvedLineup =
+                                !!bdlLineup &&
+                                ((bdlLineup.away?.length ?? 0) > 0 || (bdlLineup.home?.length ?? 0) > 0)
+
+                              if (hasResolvedLineup && bdlLineup) {
                                 const renderBdlTeam = (
                                   entries: typeof bdlLineup.away,
                                   teamCode: string,
@@ -1152,8 +1156,16 @@ export default function DugoutPage() {
                               const toTeamKey = (t: string | null | undefined) => normalizeTeamCode(t ?? '') ?? t ?? ''
                               const awayKey = normalizeTeamCode(g.awayTeam) ?? g.awayTeam
                               const homeKey = normalizeTeamCode(g.homeTeam) ?? g.homeTeam
-                              const awayLineup = rows.filter((p) => toTeamKey(p.team) === awayKey).slice().sort((a, b) => (b.hrProbability ?? -1) - (a.hrProbability ?? -1))
-                              const homeLineup = rows.filter((p) => toTeamKey(p.team) === homeKey).slice().sort((a, b) => (b.hrProbability ?? -1) - (a.hrProbability ?? -1))
+                              const awayLineup = rows
+                                .filter((p) => toTeamKey(p.team) === awayKey)
+                                .slice()
+                                .sort((a, b) => (b.hrProbability ?? -1) - (a.hrProbability ?? -1))
+                                .slice(0, 9)
+                              const homeLineup = rows
+                                .filter((p) => toTeamKey(p.team) === homeKey)
+                                .slice()
+                                .sort((a, b) => (b.hrProbability ?? -1) - (a.hrProbability ?? -1))
+                                .slice(0, 9)
 
                               if (!awayLineup.length && !homeLineup.length) {
                                 return (

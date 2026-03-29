@@ -118,28 +118,42 @@ async function fetchPlayers(sb: SupabaseClient) {
 
 async function fetchBatterEV(sb: SupabaseClient, season: number) {
   const { data } = await sb.from('stats_exit_velocity')
-    .select('player_id, attempts, avg_hit_speed, avg_hit_angle, ev95percent, brl_percent, fbld')
-    .eq('role', 'batting').eq('season', season).limit(5000)
+    .select('player_id, season, attempts, avg_hit_speed, avg_hit_angle, ev95percent, brl_percent, fbld')
+    .eq('role', 'batting')
+    .lte('season', season)
+    .order('season', { ascending: false })
+    .limit(30000)
   return data ?? []
 }
 
 async function fetchBatterHR(sb: SupabaseClient, year: number) {
   const { data } = await sb.from('stats_homeruns')
-    .select('player_id, hr_total').eq('role', 'batting').eq('type', 'adj_xhr').eq('year', year).limit(5000)
+    .select('player_id, year, hr_total')
+    .eq('role', 'batting')
+    .eq('type', 'adj_xhr')
+    .lte('year', year)
+    .order('year', { ascending: false })
+    .limit(30000)
   return data ?? []
 }
 
 async function fetchBatterArsenal(sb: SupabaseClient, season: number) {
   const { data } = await sb.from('stats_pitch_arsenal')
-    .select('player_id, pitch_type, run_value_per_100, pitch_usage, slg, woba, est_woba, whiff_percent')
-    .eq('role', 'batting').eq('season', season).limit(10000)
+    .select('player_id, season, pitch_type, run_value_per_100, pitch_usage, slg, woba, est_woba, whiff_percent')
+    .eq('role', 'batting')
+    .lte('season', season)
+    .order('season', { ascending: false })
+    .limit(40000)
   return data ?? []
 }
 
 async function fetchPitcherArsenal(sb: SupabaseClient, season: number) {
   const { data } = await sb.from('stats_pitch_arsenal')
-    .select('player_id, pitch_type, run_value_per_100, pitch_usage, slg, woba, est_woba')
-    .eq('role', 'pitching').eq('season', season).limit(10000)
+    .select('player_id, season, pitch_type, run_value_per_100, pitch_usage, slg, woba, est_woba')
+    .eq('role', 'pitching')
+    .lte('season', season)
+    .order('season', { ascending: false })
+    .limit(40000)
   return data ?? []
 }
 
@@ -168,10 +182,13 @@ async function fetchBdlPlayers(sb: SupabaseClient) {
 
 async function fetchBdlSeasonStats(sb: SupabaseClient, season: number) {
   const { data } = await sb.from('bdl_season_stats')
-    .select('bdl_player_id, batting_ab, batting_bb, batting_hr, batting_avg, batting_slg, pitching_hr, pitching_ip, pitching_era, pitching_k_per_9')
-    .eq('season', season).limit(5000)
+    .select('bdl_player_id, season, batting_ab, batting_bb, batting_hr, batting_avg, batting_slg, pitching_hr, pitching_ip, pitching_era, pitching_k_per_9')
+    .lte('season', season)
+    .order('season', { ascending: false })
+    .limit(30000)
   return (data ?? []) as {
     bdl_player_id: number
+    season?: number | null
     batting_ab: number | null
     batting_bb: number | null
     batting_hr: number | null
@@ -351,8 +368,18 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
   /* ─── Index data ──────────────────────────────────────────────── */
 
   const playerMap = new Map(players.map((p) => [p.stat_player_id, p]))
-  const evMap = new Map(evRows.map((r: any) => [r.player_id as string, r]))
-  const hrMap = new Map(hrRows.map((r: any) => [r.player_id as string, r]))
+  const evMap = new Map<string, any>()
+  for (const r of evRows as any[]) {
+    const pid = r.player_id as string
+    if (!pid || evMap.has(pid)) continue
+    evMap.set(pid, r)
+  }
+  const hrMap = new Map<string, any>()
+  for (const r of hrRows as any[]) {
+    const pid = r.player_id as string
+    if (!pid || hrMap.has(pid)) continue
+    hrMap.set(pid, r)
+  }
   const venueLower = buildVenueParkMap(parkRows)
 
   const bdlByStatId = new Map<string, typeof bdlPlayers[0]>()
@@ -360,9 +387,21 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
   for (const bp of bdlPlayers) {
     if (bp.stat_player_id) bdlByStatId.set(bp.stat_player_id, bp)
     bdlById.set(bp.bdl_id, bp)
+    if (bp.stat_player_id && !playerMap.has(bp.stat_player_id)) {
+      playerMap.set(bp.stat_player_id, {
+        stat_player_id: bp.stat_player_id,
+        slug: '',
+        name: bp.full_name ?? 'Unknown',
+        team: canon(bp.team_abbrev),
+        position: bp.position ?? null,
+      })
+    }
   }
 
-  const bdlStatsById = new Map(bdlStats.map((s) => [s.bdl_player_id, s]))
+  const bdlStatsById = new Map<number, (typeof bdlStats)[number]>()
+  for (const s of bdlStats) {
+    if (!bdlStatsById.has(s.bdl_player_id)) bdlStatsById.set(s.bdl_player_id, s)
+  }
 
   // Batted ball splits by player
   const bbByPlayer = new Map<string, { lhp?: Record<string, unknown>; rhp?: Record<string, unknown> }>()
@@ -375,8 +414,16 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
 
   // Batter pitch-type RV/100 by player
   const batterRVMap = new Map<string, Map<string, number>>()
+  const batterArsenalSeason = new Map<string, number>()
   for (const r of bArsenalRows as any[]) {
     const pid = r.player_id as string
+    const seasonNum = Number(r.season ?? 0) || 0
+    const seenSeason = batterArsenalSeason.get(pid)
+    if (seenSeason != null && seasonNum < seenSeason) continue
+    if (seenSeason == null || seasonNum > seenSeason) {
+      batterArsenalSeason.set(pid, seasonNum)
+      batterRVMap.set(pid, new Map())
+    }
     const rv = num(r.run_value_per_100)
     if (rv == null) continue
     if (!batterRVMap.has(pid)) batterRVMap.set(pid, new Map())
@@ -385,8 +432,16 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
 
   // Pitcher pitch arsenal by player_id
   const pitcherArsenalMap = new Map<string, PitchArsenalEntry[]>()
+  const pitcherArsenalSeason = new Map<string, number>()
   for (const r of pArsenalRows as any[]) {
     const pid = r.player_id as string
+    const seasonNum = Number(r.season ?? 0) || 0
+    const seenSeason = pitcherArsenalSeason.get(pid)
+    if (seenSeason != null && seasonNum < seenSeason) continue
+    if (seenSeason == null || seasonNum > seenSeason) {
+      pitcherArsenalSeason.set(pid, seasonNum)
+      pitcherArsenalMap.set(pid, [])
+    }
     const usage = num(r.pitch_usage) ?? 0
     const rv = num(r.run_value_per_100) ?? 0
     if (!pitcherArsenalMap.has(pid)) pitcherArsenalMap.set(pid, [])
@@ -542,8 +597,8 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
     const seasonPa =
       (seasonBatting?.batting_ab ?? 0) +
       (seasonBatting?.batting_bb ?? 0)
-    const attempts = num((ev as any)?.attempts) ?? (seasonPa > 0 ? seasonPa : 0)
-    const hrTotal = num((hr as any)?.hr_total) ?? seasonBatting?.batting_hr ?? 0
+    const attempts = seasonPa > 0 ? seasonPa : (num((ev as any)?.attempts) ?? 0)
+    const hrTotal = seasonBatting?.batting_hr ?? num((hr as any)?.hr_total) ?? 0
     const brlPct = num((ev as any)?.brl_percent) ?? 0
     if (attempts <= 0 && hrTotal <= 0 && brlPct <= 0) continue
 
@@ -570,9 +625,6 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
     // Batted ball splits for handedness
     const bb = bbByPlayer.get(playerId)
     const baseHrRate = hrPerPaVal ?? 0
-    const isoRaw = num((ev as any).avg_hit_speed) != null
-      ? null
-      : null
     let hrPerPaVsL: number | null = null
     let hrPerPaVsR: number | null = null
     if (bb?.lhp) {

@@ -28,6 +28,33 @@
   font-size: 0.9rem;
 }
 
+.lb-calendarDropdown {
+  margin-bottom: 18px;
+}
+
+.lb-calendarSummary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 22%, transparent);
+  background: color-mix(in srgb, var(--color-surface) 45%, transparent);
+  font-size: 0.82rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-primary) 82%, white);
+}
+
+.lb-calendarSummary::-webkit-details-marker {
+  display: none;
+}
+
+.lb-calendarDropdown[open] .lb-calendarSummary {
+  margin-bottom: 10px;
+}
+
 .lb-calendarCard {
   margin: 0 0 18px;
   padding: 16px;
@@ -438,6 +465,110 @@
 
 .lb-table tbody tr:hover {
   background: color-mix(in srgb, var(--color-primary) 10%, transparent);
+}
+
+.lb-rowInteractive {
+  cursor: pointer;
+}
+
+.lb-linkBtn {
+  border: none;
+  background: none;
+  padding: 0;
+  margin: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.lb-linkBtn:hover:not(:disabled) {
+  color: var(--color-primary);
+}
+
+.lb-linkBtn:disabled {
+  cursor: default;
+  opacity: 0.75;
+}
+
+.lb-modalBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(3, 8, 20, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 50;
+}
+
+.lb-modal {
+  width: min(860px, 100%);
+  max-height: min(88vh, 900px);
+  overflow: auto;
+  border-radius: 18px;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 28%, transparent);
+  background: linear-gradient(180deg, rgba(19, 29, 58, 0.98), rgba(14, 21, 42, 0.98));
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.42);
+  padding: 18px;
+}
+
+.lb-modalHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.lb-modalTitle {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 900;
+}
+
+.lb-closeBtn {
+  border: 1px solid color-mix(in srgb, var(--color-secondary) 20%, transparent);
+  background: color-mix(in srgb, var(--color-surface) 65%, transparent);
+  color: var(--color-text);
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.lb-statGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.lb-statCard {
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 18%, transparent);
+  background: color-mix(in srgb, var(--color-surface) 60%, transparent);
+}
+
+.lb-statCard--full {
+  grid-column: 1 / -1;
+}
+
+.lb-statTitle {
+  margin-bottom: 10px;
+  font-size: 0.78rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-secondary) 84%, transparent);
+}
+
+.lb-statPill {
+  margin-bottom: 8px;
+  padding: 9px 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--color-bg) 52%, var(--color-surface));
+  font-weight: 700;
 }
 
 .lb-warn {

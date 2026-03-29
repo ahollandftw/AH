@@ -52,6 +52,7 @@ export default function ProjectionsPage() {
   const [playerInputs, setPlayerInputs] = useState<any>(null)
   const [selectedYear, setSelectedYear] = useState<number>(2026)
   const [liveGames, setLiveGames] = useState<any[]>([])
+  const [probablePitchers, setProbablePitchers] = useState<Record<string, { home: string | null; away: string | null }>>({})
   const [displayDate, setDisplayDate] = useState(
     searchParams.get('date') ?? getAppDisplayDateIso(),
   )
@@ -80,13 +81,20 @@ export default function ProjectionsPage() {
   useEffect(() => {
     if (!supabase) return
     setLoading(true)
+    const prevDate = new Date(`${displayDate}T12:00:00Z`)
+    prevDate.setUTCDate(prevDate.getUTCDate() - 1)
+    const nextDate = new Date(`${displayDate}T12:00:00Z`)
+    nextDate.setUTCDate(nextDate.getUTCDate() + 1)
+    const prevIso = prevDate.toISOString().slice(0, 10)
+    const nextIso = nextDate.toISOString().slice(0, 10)
     void Promise.all([
       listDailyHrProjections(supabase, displayDate),
       getGamesForDate(supabase, displayDate),
       supabase
         .from('bdl_games')
-        .select('bdl_game_id,date,home_team_abbrev,away_team_abbrev,status')
-        .eq('date', displayDate),
+        .select('bdl_game_id,date,start_time_utc,home_team_abbrev,away_team_abbrev,status')
+        .gte('date', prevIso)
+        .lte('date', nextIso),
     ])
       .then(([proj, sched, live]) => {
         setRows(proj)
@@ -101,10 +109,17 @@ export default function ProjectionsPage() {
   useEffect(() => {
     if (!supabase) return
     const id = setInterval(() => {
+      const prevDate = new Date(`${displayDate}T12:00:00Z`)
+      prevDate.setUTCDate(prevDate.getUTCDate() - 1)
+      const nextDate = new Date(`${displayDate}T12:00:00Z`)
+      nextDate.setUTCDate(nextDate.getUTCDate() + 1)
+      const prevIso = prevDate.toISOString().slice(0, 10)
+      const nextIso = nextDate.toISOString().slice(0, 10)
       void supabase
         .from('bdl_games')
-        .select('bdl_game_id,date,home_team_abbrev,away_team_abbrev,status')
-        .eq('date', displayDate)
+        .select('bdl_game_id,date,start_time_utc,home_team_abbrev,away_team_abbrev,status')
+        .gte('date', prevIso)
+        .lte('date', nextIso)
         .then(({ data }) => {
           const raw = (data ?? []) as any[]
           const dayIso = displayDate
@@ -113,6 +128,17 @@ export default function ProjectionsPage() {
     }, 60000)
     return () => clearInterval(id)
   }, [displayDate, supabase])
+
+  useEffect(() => {
+    const base = import.meta.env.VITE_API_BASE_URL ?? ''
+    if (!base) return
+    void fetch(`${base}/bdl/probable-pitchers?date=${displayDate}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json: { data?: Record<string, { home: string | null; away: string | null }> } | null) => {
+        setProbablePitchers(json?.data ?? {})
+      })
+      .catch(() => {})
+  }, [displayDate])
 
   const filteredRows = useMemo(() => {
     let out = rows
@@ -153,6 +179,25 @@ export default function ProjectionsPage() {
     if (!txt) return null
     const m = txt.match(/(?:vs|@)\s+([A-Za-z]{2,4})/i)
     return normalizeTeamCode(m?.[1] ?? '')?.toUpperCase() ?? null
+  }
+
+  function displayOpponentPitcher(r: DailyProjection): { name: string | null; hand: string | null } {
+    if (r.opponentPitcher) return { name: r.opponentPitcher, hand: r.opponentPitcherHand ?? null }
+    const team = normalizeTeamCode(r.team ?? '') ?? ''
+    const opp = parseOpponentTeam(r) ?? ''
+    if (!team || !opp) return { name: null, hand: null }
+    const game = games.find((g) => {
+      const home = normalizeTeamCode(g.homeTeam) ?? g.homeTeam
+      const away = normalizeTeamCode(g.awayTeam) ?? g.awayTeam
+      return (home === team && away === opp) || (home === opp && away === team)
+    })
+    if (!game) return { name: null, hand: null }
+    const pp = probablePitchers[game.gameId]
+    if (!pp) return { name: null, hand: null }
+    const home = normalizeTeamCode(game.homeTeam) ?? game.homeTeam
+    return home === team
+      ? { name: pp.away ?? null, hand: null }
+      : { name: pp.home ?? null, hand: null }
   }
 
   function pickStatusLabel(v: boolean | null | undefined): string {
@@ -430,7 +475,9 @@ export default function ProjectionsPage() {
               {s.label}
             </div>
             <div className="pg-cards">
-              {s.data.map((r) => (
+              {s.data.map((r) => {
+                const displayPitcher = displayOpponentPitcher(r)
+                return (
                 <div
                   key={r.playerId}
                   className="pg-card"
@@ -472,10 +519,10 @@ export default function ProjectionsPage() {
                     <span className="pg-meta">
                       {(r.team ?? '—').toUpperCase()} &bull; {(r.position ?? '—').toUpperCase()}
                     </span>
-                    {r.opponentPitcher ? (
+                    {displayPitcher.name ? (
                       <span className="pg-matchup">
-                        vs {r.opponentPitcher}{' '}
-                        {r.opponentPitcherHand ? `(${r.opponentPitcherHand})` : ''}
+                        vs {displayPitcher.name}{' '}
+                        {displayPitcher.hand ? `(${displayPitcher.hand})` : ''}
                       </span>
                     ) : null}
                   </div>
@@ -506,7 +553,8 @@ export default function ProjectionsPage() {
                     ) : null}
                   </div>
                 </div>
-              ))}
+                )
+              })}
             </div>
           </div>
         ))

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useWebAuth } from '../auth/WebAuthProvider.tsx'
 
 type SortKey = 'date' | 'stadium' | 'team' | 'pitcher' | 'batter'
+type HrDetailMode = 'matchup' | 'batter' | 'pitcher'
 
 type HrEventRow = {
   id: number
@@ -67,6 +68,9 @@ export default function LeaderboardPage() {
   const [team, setTeam] = useState('')
   const [pitcher, setPitcher] = useState('')
   const [batter, setBatter] = useState('')
+  const [detailFor, setDetailFor] = useState<{ row: HrEventRow; mode: HrDetailMode } | null>(null)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [detailData, setDetailData] = useState<any>(null)
 
   const qs = useMemo(() => {
     const p = new URLSearchParams()
@@ -91,6 +95,37 @@ export default function LeaderboardPage() {
     const vals = Object.values(data?.calendar_counts ?? {})
     return vals.length ? Math.max(...vals) : 0
   }, [data?.calendar_counts])
+
+  function matchupOpponentTeam(row: HrEventRow): string | null {
+    if (row.batter_home_away === 'H') return row.away_team ?? null
+    if (row.batter_home_away === 'A') return row.home_team ?? null
+    return row.home_team ?? row.away_team ?? null
+  }
+
+  async function openDetail(row: HrEventRow, mode: HrDetailMode) {
+    if (!row.stat_player_id) return
+    const opponentTeam = matchupOpponentTeam(row)
+    if (!opponentTeam) return
+    setDetailFor({ row, mode })
+    setDetailData(null)
+    setDetailLoading(true)
+    try {
+      const qp = new URLSearchParams({
+        player_id: row.stat_player_id,
+        opponent_team: opponentTeam,
+        season: String(season),
+      })
+      if (row.pitcher_name) qp.set('pitcher_name', row.pitcher_name)
+      const res = await fetch(`${apiBase()}/bdl/matchup-card?${qp.toString()}`)
+      if (!res.ok) throw new Error(await res.text())
+      const json = await res.json()
+      setDetailData(json?.data ?? null)
+    } catch {
+      setDetailData(null)
+    } finally {
+      setDetailLoading(false)
+    }
+  }
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -131,46 +166,49 @@ export default function LeaderboardPage() {
         {data?.last_updated ? new Date(data.last_updated).toLocaleString() : '—'}
       </p>
 
-      <section className="lb-calendarCard" aria-label={`${monthLabel} home run totals`}>
-        <div className="lb-calendarHead">
-          <div>
-            <div className="lb-calendarKicker">Home Runs by Day</div>
-            <h2 className="lb-calendarTitle">{monthLabel}</h2>
+      <details className="lb-calendarDropdown">
+        <summary className="lb-calendarSummary">Show {monthLabel} HR Calendar</summary>
+        <section className="lb-calendarCard" aria-label={`${monthLabel} home run totals`}>
+          <div className="lb-calendarHead">
+            <div>
+              <div className="lb-calendarKicker">Home Runs by Day</div>
+              <h2 className="lb-calendarTitle">{monthLabel}</h2>
+            </div>
+            <div className="lb-calendarLegend">
+              {data?.calendar_counts ? `${Object.keys(data.calendar_counts).length} active days` : 'No homers logged'}
+            </div>
           </div>
-          <div className="lb-calendarLegend">
-            {data?.calendar_counts ? `${Object.keys(data.calendar_counts).length} active days` : 'No homers logged'}
+          <div className="lb-calendarWeekdays">
+            {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((label) => (
+              <div key={label} className="lb-calendarWeekday">{label}</div>
+            ))}
           </div>
-        </div>
-        <div className="lb-calendarWeekdays">
-          {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((label) => (
-            <div key={label} className="lb-calendarWeekday">{label}</div>
-          ))}
-        </div>
-        <div className="lb-calendarGrid">
-          {monthCells.map((cell, idx) => {
-            const count = cell.iso ? (data?.calendar_counts?.[cell.iso] ?? 0) : 0
-            const intensity = maxCalendarCount > 0 ? Math.max(0.14, count / maxCalendarCount) : 0
-            return (
-              <div
-                key={cell.iso ?? `blank-${idx}`}
-                className={`lb-calendarDay ${cell.iso ? '' : 'lb-calendarDay--blank'}`}
-                style={
-                  cell.iso && count > 0
-                    ? { ['--lb-calendar-alpha' as string]: String(intensity) }
-                    : undefined
-                }
-              >
-                {cell.iso ? (
-                  <>
-                    <div className="lb-calendarDate">{cell.day}</div>
-                    <div className="lb-calendarCount">{count > 0 ? `${count} HR` : '0'}</div>
-                  </>
-                ) : null}
-              </div>
-            )
-          })}
-        </div>
-      </section>
+          <div className="lb-calendarGrid">
+            {monthCells.map((cell, idx) => {
+              const count = cell.iso ? (data?.calendar_counts?.[cell.iso] ?? 0) : 0
+              const intensity = maxCalendarCount > 0 ? Math.max(0.14, count / maxCalendarCount) : 0
+              return (
+                <div
+                  key={cell.iso ?? `blank-${idx}`}
+                  className={`lb-calendarDay ${cell.iso ? '' : 'lb-calendarDay--blank'}`}
+                  style={
+                    cell.iso && count > 0
+                      ? { ['--lb-calendar-alpha' as string]: String(intensity) }
+                      : undefined
+                  }
+                >
+                  {cell.iso ? (
+                    <>
+                      <div className="lb-calendarDate">{cell.day}</div>
+                      <div className="lb-calendarCount">{count > 0 ? `${count} HR` : '0'}</div>
+                    </>
+                  ) : null}
+                </div>
+              )
+            })}
+          </div>
+        </section>
+      </details>
 
       <div className="lb-toolbar lb-toolbar--sort">
         <label className="lb-field">
@@ -298,7 +336,7 @@ export default function LeaderboardPage() {
             </thead>
             <tbody>
               {(data?.events ?? []).map((p) => (
-                <tr key={p.id}>
+                <tr key={p.id} className="lb-rowInteractive" onClick={() => void openDetail(p, 'matchup')}>
                   <td className="lb-cell-mono">{p.game_date ?? '—'}</td>
                   <td className="lb-cell-stadium" title={p.stadium ?? undefined}>
                     {p.stadium ?? '—'}
@@ -306,8 +344,32 @@ export default function LeaderboardPage() {
                   <td className="lb-cell-abbr">{p.home_team ?? '—'}</td>
                   <td className="lb-cell-abbr">{p.away_team ?? '—'}</td>
                   <td className="lb-cell-abbr">{p.batter_team ?? '—'}</td>
-                  <td title={p.batter_name ?? undefined}>{p.batter_name ?? '—'}</td>
-                  <td title={p.pitcher_name ?? undefined}>{p.pitcher_name ?? '—'}</td>
+                  <td title={p.batter_name ?? undefined}>
+                    <button
+                      type="button"
+                      className="lb-linkBtn"
+                      disabled={!p.stat_player_id}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        void openDetail(p, 'batter')
+                      }}
+                    >
+                      {p.batter_name ?? '—'}
+                    </button>
+                  </td>
+                  <td title={p.pitcher_name ?? undefined}>
+                    <button
+                      type="button"
+                      className="lb-linkBtn"
+                      disabled={!p.stat_player_id}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        void openDetail(p, 'pitcher')
+                      }}
+                    >
+                      {p.pitcher_name ?? '—'}
+                    </button>
+                  </td>
                   <td className="lb-cell-center">{p.batter_home_away ?? '—'}</td>
                   <td className="lb-cell-center">{p.pitcher_home_away ?? '—'}</td>
                   <td className="lb-cell-pitch" title={p.pitch_type ?? undefined}>
@@ -325,6 +387,85 @@ export default function LeaderboardPage() {
           </table>
         </div>
       )}
+      {detailFor ? (
+        <div className="lb-modalBackdrop" onClick={() => setDetailFor(null)}>
+          <div className="lb-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="lb-modalHead">
+              <h3 className="lb-modalTitle">
+                {detailFor.mode === 'matchup'
+                  ? `${detailFor.row.batter_name ?? 'Batter'} vs ${detailFor.row.pitcher_name ?? 'Pitcher'}`
+                  : detailFor.mode === 'batter'
+                    ? (detailFor.row.batter_name ?? 'Batter')
+                    : (detailFor.row.pitcher_name ?? 'Pitcher')}
+              </h3>
+              <button type="button" className="lb-closeBtn" onClick={() => setDetailFor(null)}>Close</button>
+            </div>
+            {detailLoading ? (
+              <p className="lb-meta">Loading stats…</p>
+            ) : !detailData ? (
+              <p className="lb-err">Stats unavailable for this selection.</p>
+            ) : detailFor.mode === 'batter' ? (
+              <div className="lb-statGrid">
+                <div className="lb-statCard">
+                  <div className="lb-statTitle">Batter Stats</div>
+                  <div className="lb-statPill">Avg EV: {detailData.batter_avg_hit_speed ?? '—'}</div>
+                  <div className="lb-statPill">EV95: {detailData.batter_ev95 ?? '—'}</div>
+                  <div className="lb-statPill">Barrel %: {detailData.batter_barrel ?? '—'}</div>
+                  <div className="lb-statPill">Hard-hit %: {detailData.batter_hard_hit ?? '—'}</div>
+                  <div className="lb-statPill">ISO: {detailData.batter_iso ?? '—'}</div>
+                  <div className="lb-statPill">FB/LD: {detailData.batter_fbld ?? '—'}</div>
+                  <div className="lb-statPill">K%: {detailData.batter_k_pct != null ? `${(Number(detailData.batter_k_pct) * 100).toFixed(1)}%` : '—'}</div>
+                  <div className="lb-statPill">BB%: {detailData.batter_bb_pct != null ? `${(Number(detailData.batter_bb_pct) * 100).toFixed(1)}%` : '—'}</div>
+                  <div className="lb-statPill">HR: {detailData.batter_season_hr ?? detailData.batter_hr ?? '—'}</div>
+                </div>
+              </div>
+            ) : detailFor.mode === 'pitcher' ? (
+              <div className="lb-statGrid">
+                <div className="lb-statCard">
+                  <div className="lb-statTitle">Pitcher Stats</div>
+                  <div className="lb-statPill">ERA: {detailData.pitcher_era ?? '—'}</div>
+                  <div className="lb-statPill">WHIP: {detailData.pitcher_whip ?? '—'}</div>
+                  <div className="lb-statPill">K/9: {detailData.pitcher_k_per_9 ?? '—'}</div>
+                  <div className="lb-statPill">HR Allowed: {detailData.pitcher_hr_allowed ?? detailData.pitcher_hr_statcast ?? '—'}</div>
+                  <div className="lb-statPill">Avg EV Allowed: {detailData.pitcher_avg_hit_speed_allowed ?? '—'}</div>
+                  <div className="lb-statPill">EV95 Allowed: {detailData.pitcher_ev95_allowed ?? '—'}</div>
+                  <div className="lb-statPill">Barrel % Allowed: {detailData.pitcher_barrel_allowed ?? '—'}</div>
+                  <div className="lb-statPill">Hard-hit % Allowed: {detailData.pitcher_hard_hit_allowed ?? '—'}</div>
+                  <div className="lb-statPill">ISO Allowed: {detailData.pitcher_iso_allowed ?? '—'}</div>
+                </div>
+              </div>
+            ) : (
+              <div className="lb-statGrid">
+                <div className="lb-statCard">
+                  <div className="lb-statTitle">Batter</div>
+                  <div className="lb-statPill">Avg EV: {detailData.batter_avg_hit_speed ?? '—'}</div>
+                  <div className="lb-statPill">Barrel %: {detailData.batter_barrel ?? '—'}</div>
+                  <div className="lb-statPill">ISO: {detailData.batter_iso ?? '—'}</div>
+                  <div className="lb-statPill">HR: {detailData.batter_season_hr ?? detailData.batter_hr ?? '—'}</div>
+                </div>
+                <div className="lb-statCard">
+                  <div className="lb-statTitle">Pitcher</div>
+                  <div className="lb-statPill">ERA: {detailData.pitcher_era ?? '—'}</div>
+                  <div className="lb-statPill">WHIP: {detailData.pitcher_whip ?? '—'}</div>
+                  <div className="lb-statPill">K/9: {detailData.pitcher_k_per_9 ?? '—'}</div>
+                  <div className="lb-statPill">HR Allowed: {detailData.pitcher_hr_allowed ?? detailData.pitcher_hr_statcast ?? '—'}</div>
+                </div>
+                {detailData.sample_ab ? (
+                  <div className="lb-statCard lb-statCard--full">
+                    <div className="lb-statTitle">BvP</div>
+                    <div className="lb-statPill">AB: {detailData.sample_ab}</div>
+                    <div className="lb-statPill">H: {detailData.h ?? 0}</div>
+                    <div className="lb-statPill">HR: {detailData.hr ?? 0}</div>
+                    <div className="lb-statPill">K: {detailData.k ?? 0}</div>
+                    <div className="lb-statPill">AVG: {detailData.avg ?? '—'}</div>
+                    <div className="lb-statPill">OPS: {detailData.ops ?? '—'}</div>
+                  </div>
+                ) : null}
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

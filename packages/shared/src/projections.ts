@@ -22,7 +22,6 @@ import {
 import {
   computeArsenalScore,
   zArsenal,
-  zPitcherFallback,
   type PitchArsenalEntry,
   type BatterVsPitchType,
 } from './models/hr/arsenal.js'
@@ -63,12 +62,46 @@ function canonicalTeam(team: string | null | undefined): string | null {
   return TEAM_ALIASES[key] ?? key
 }
 
+function shiftIsoDate(dateIso: string, days: number): string {
+  const d = new Date(`${dateIso}T12:00:00Z`)
+  d.setUTCDate(d.getUTCDate() + days)
+  return d.toISOString().slice(0, 10)
+}
+
+function utcToETDateIso(utcStr: string | null | undefined): string | null {
+  if (!utcStr) return null
+  try {
+    const d = new Date(new Date(utcStr).toLocaleString('en-US', { timeZone: 'America/New_York' }))
+    if (Number.isNaN(d.getTime())) return null
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, '0')
+    const dd = String(d.getDate()).padStart(2, '0')
+    return `${y}-${m}-${dd}`
+  } catch {
+    return null
+  }
+}
+
+function hasBrokenCapDistribution(rows: DailyProjection[]): boolean {
+  if (rows.length < 20) return false
+  const capped = rows.filter((r) => (r.hrProbability ?? 0) >= 0.3299).length
+  return capped / rows.length >= 0.9
+}
+
 /* ─── daily_hr_projections table read ────────────────────────────── */
 
 async function listDailyHrProjectionsFromTable(
   supabase: SupabaseClient,
   dateIso: string,
 ): Promise<DailyProjection[]> {
+  const games = await getGamesForDateRaw(supabase, dateIso)
+  const matchupDisplayMap = new Map<string, string>()
+  for (const g of games) {
+    const home = canonicalTeam(g.home_team) ?? g.home_team
+    const away = canonicalTeam(g.away_team) ?? g.away_team
+    matchupDisplayMap.set(home, `vs ${away}`)
+    matchupDisplayMap.set(away, `@ ${home}`)
+  }
   const { data, error } = await supabase
     .from('daily_hr_projections')
     .select(
@@ -94,7 +127,7 @@ async function listDailyHrProjectionsFromTable(
         hrProbability: prob,
         l7Hrs: row.l7_hrs ?? null,
         tier: prob != null ? probToTier(prob) : (row.tier ?? null),
-        opponent: null,
+        opponent: matchupDisplayMap.get(canonicalTeam(row.players?.team) ?? row.players?.team ?? '') ?? null,
         americanOdds: prob != null ? probToAmericanOdds(prob) : null,
         americanOddsStr: prob != null ? formatAmericanOdds(probToAmericanOdds(prob)) : null,
         source: 'daily_table' as const,
@@ -108,40 +141,45 @@ async function listDailyHrProjectionsFromTable(
 async function fetchAllBatterEV(supabase: SupabaseClient, season: number) {
   const { data } = await supabase
     .from('stats_exit_velocity')
-    .select('player_id, attempts, avg_hit_speed, ev95percent, brl_percent, fbld, gb')
-    .eq('role', 'batting').eq('season', season).limit(5000)
+    .select('player_id, season, attempts, avg_hit_speed, ev95percent, brl_percent, fbld, gb')
+    .eq('role', 'batting')
+    .lte('season', season)
+    .order('season', { ascending: false })
+    .limit(30000)
   return (data ?? []) as any[]
 }
 
 async function fetchAllBatterHR(supabase: SupabaseClient, year: number) {
   const { data } = await supabase
     .from('stats_homeruns')
-    .select('player_id, hr_total')
-    .eq('role', 'batting').eq('type', 'adj_xhr').eq('year', year).limit(2000)
+    .select('player_id, year, hr_total')
+    .eq('role', 'batting')
+    .eq('type', 'adj_xhr')
+    .lte('year', year)
+    .order('year', { ascending: false })
+    .limit(30000)
   return (data ?? []) as any[]
 }
 
 async function fetchAllBatterArsenal(supabase: SupabaseClient, season: number) {
   const { data } = await supabase
     .from('stats_pitch_arsenal')
-    .select('player_id, pitch_type, run_value_per_100, pitch_usage, slg, est_woba, woba')
-    .eq('role', 'batting').eq('season', season).limit(10000)
+    .select('player_id, season, pitch_type, run_value_per_100, pitch_usage, slg, est_woba, woba')
+    .eq('role', 'batting')
+    .lte('season', season)
+    .order('season', { ascending: false })
+    .limit(40000)
   return (data ?? []) as any[]
 }
 
 async function fetchAllPitcherArsenal(supabase: SupabaseClient, season: number) {
   const { data } = await supabase
     .from('stats_pitch_arsenal')
-    .select('player_id, team_name_alt, pitch_type, run_value_per_100, pitch_usage')
-    .eq('role', 'pitching').eq('season', season).limit(10000)
-  return (data ?? []) as any[]
-}
-
-async function fetchAllPitcherHR(supabase: SupabaseClient, year: number) {
-  const { data } = await supabase
-    .from('stats_homeruns')
-    .select('player_id, team_abbrev, hr_total, xhr')
-    .eq('role', 'pitching').eq('type', 'adj_xhr').eq('year', year).limit(5000)
+    .select('player_id, season, team_name_alt, pitch_type, run_value_per_100, pitch_usage')
+    .eq('role', 'pitching')
+    .lte('season', season)
+    .order('season', { ascending: false })
+    .limit(40000)
   return (data ?? []) as any[]
 }
 
@@ -210,22 +248,59 @@ async function calculateMatchupProjections(
   const year = await fetchMaxBattingHomerunYear(supabase)
   if (year == null) return []
 
-  const [evRows, hrRows, bArsenalRows, pArsenalRows, pHrRows, bbRows, parkRows, playersRes] =
+  const [evRows, hrRows, bArsenalRows, pArsenalRows, bbRows, parkRows, playersRes, bdlPlayersRes, bdlSeasonStatsRes] =
     await Promise.all([
       fetchAllBatterEV(supabase, year),
       fetchAllBatterHR(supabase, year),
       fetchAllBatterArsenal(supabase, year),
       fetchAllPitcherArsenal(supabase, year),
-      fetchAllPitcherHR(supabase, year),
       fetchBattedBallBatting(supabase),
       fetchParkFactors(supabase),
       supabase.from('players').select('stat_player_id,slug,name,team,position').limit(5000),
+      supabase.from('bdl_players').select('bdl_id,stat_player_id,full_name,team_abbrev,position').limit(5000),
+      supabase
+        .from('bdl_season_stats')
+        .select('bdl_player_id,season,batting_ab,batting_bb,batting_hr')
+        .lte('season', year)
+        .order('season', { ascending: false })
+        .limit(30000),
     ])
 
   const players = (playersRes.data ?? []) as any[]
-  const evMap = new Map(evRows.map((r: any) => [r.player_id, r]))
-  const hrMap = new Map(hrRows.map((r: any) => [r.player_id, r]))
+  const bdlPlayers = (bdlPlayersRes.data ?? []) as any[]
+  const bdlSeasonStats = (bdlSeasonStatsRes.data ?? []) as any[]
+  const evMap = new Map<string, any>()
+  for (const r of evRows as any[]) {
+    const pid = String(r.player_id ?? '')
+    if (!pid || evMap.has(pid)) continue
+    evMap.set(pid, r)
+  }
+  const hrMap = new Map<string, any>()
+  for (const r of hrRows as any[]) {
+    const pid = String(r.player_id ?? '')
+    if (!pid || hrMap.has(pid)) continue
+    hrMap.set(pid, r)
+  }
   const playerMap = new Map(players.map((p: any) => [p.stat_player_id, p]))
+  for (const bp of bdlPlayers) {
+    const pid = bp.stat_player_id
+    if (!pid || playerMap.has(pid)) continue
+    playerMap.set(pid, {
+      stat_player_id: pid,
+      slug: '',
+      name: bp.full_name ?? 'Unknown',
+      team: canonicalTeam(bp.team_abbrev) ?? bp.team_abbrev ?? null,
+      position: bp.position ?? null,
+    })
+  }
+  const bdlByStatId = new Map<string, any>()
+  for (const bp of bdlPlayers) {
+    if (bp.stat_player_id && !bdlByStatId.has(bp.stat_player_id)) bdlByStatId.set(bp.stat_player_id, bp)
+  }
+  const bdlStatsById = new Map<number, any>()
+  for (const row of bdlSeasonStats) {
+    if (!bdlStatsById.has(Number(row.bdl_player_id))) bdlStatsById.set(Number(row.bdl_player_id), row)
+  }
   const venueLower = buildVenueParkMap(parkRows)
 
   const bbByPlayer = new Map<string, { lhp?: Record<string, unknown>; rhp?: Record<string, unknown> }>()
@@ -238,16 +313,33 @@ async function calculateMatchupProjections(
 
   // Batter RV/100 by pitch type
   const batterRVMap = new Map<string, Map<string, number>>()
-  for (const r of bArsenalRows) {
+  const batterArsenalSeason = new Map<string, number>()
+  for (const r of bArsenalRows as any[]) {
+    const pid = String(r.player_id ?? '')
+    const seasonNum = Number(r.season ?? 0) || 0
+    const seenSeason = batterArsenalSeason.get(pid)
+    if (seenSeason != null && seasonNum < seenSeason) continue
+    if (seenSeason == null || seasonNum > seenSeason) {
+      batterArsenalSeason.set(pid, seasonNum)
+      batterRVMap.set(pid, new Map())
+    }
     const rv = num(r.run_value_per_100)
     if (rv == null) continue
-    if (!batterRVMap.has(r.player_id)) batterRVMap.set(r.player_id, new Map())
-    batterRVMap.get(r.player_id)!.set(r.pitch_type, rv)
+    if (!batterRVMap.has(pid)) batterRVMap.set(pid, new Map())
+    batterRVMap.get(pid)!.set(r.pitch_type, rv)
   }
 
   // Pitcher arsenal by team (aggregate)
   const teamPitchBuckets = new Map<string, Map<string, { totalUsage: number; totalRV: number; count: number }>>()
-  for (const r of pArsenalRows) {
+  const latestPitcherSeason = new Map<string, number>()
+  for (const r of pArsenalRows as any[]) {
+    const pid = String(r.player_id ?? '')
+    const seasonNum = Number(r.season ?? 0) || 0
+    const seenSeason = latestPitcherSeason.get(pid)
+    if (seenSeason != null && seasonNum < seenSeason) continue
+    if (seenSeason == null || seasonNum > seenSeason) {
+      latestPitcherSeason.set(pid, seasonNum)
+    }
     const t = canonicalTeam(r.team_name_alt) ?? r.team_name_alt
     if (!teamPitchBuckets.has(t)) teamPitchBuckets.set(t, new Map())
     const m = teamPitchBuckets.get(t)!
@@ -268,17 +360,6 @@ async function calculateMatchupProjections(
     teamPitcherArsenal.set(t, entries)
   }
 
-  // Pitcher HR/9 fallback by team
-  const teamHrPer9 = new Map<string, number>()
-  const teamHrAcc = new Map<string, { sum: number; count: number }>()
-  for (const r of pHrRows) {
-    const t = canonicalTeam(r.team_abbrev) ?? r.team_abbrev
-    if (!teamHrAcc.has(t)) teamHrAcc.set(t, { sum: 0, count: 0 })
-    const xhr = num(r.xhr)
-    if (xhr != null) { const a = teamHrAcc.get(t)!; a.sum += xhr; a.count += 1 }
-  }
-  for (const [t, a] of teamHrAcc) { if (a.count > 0) teamHrPer9.set(t, a.sum / a.count) }
-
   const results: DailyProjection[] = []
 
   for (const [playerId, ev] of evMap) {
@@ -289,8 +370,13 @@ async function calculateMatchupProjections(
 
     const oppTeam = opponentMap.get(pTeam) ?? null
     const hr = hrMap.get(playerId) as any
-    const attempts = num(ev.attempts) ?? 0
-    const hrTotal = num(hr?.hr_total) ?? 0
+    const bdlInfo = bdlByStatId.get(playerId) ?? null
+    const battingStats = bdlInfo?.bdl_id ? bdlStatsById.get(Number(bdlInfo.bdl_id)) ?? null : null
+    const seasonPa =
+      (num(battingStats?.batting_ab) ?? 0) +
+      (num(battingStats?.batting_bb) ?? 0)
+    const attempts = seasonPa > 0 ? seasonPa : (num(ev.attempts) ?? 0)
+    const hrTotal = num(battingStats?.batting_hr) ?? num(hr?.hr_total) ?? 0
     const brlPct = num(ev.brl_percent) ?? 0
     if (hrTotal <= 0 && brlPct <= 0) continue
 
@@ -313,11 +399,6 @@ async function calculateMatchupProjections(
       for (const [pt, rv] of batterRV) batterSplits.push({ pitchType: pt, batterRV100: rv })
       arsenalZ = zArsenal(computeArsenalScore(oppArsenal, batterSplits).raw)
     }
-    if (arsenalZ == null && oppTeam) {
-      const hp9 = teamHrPer9.get(oppTeam)
-      if (hp9 != null) arsenalZ = zPitcherFallback(hp9)
-    }
-
     const present: CalibrationCoeffKey[] = []
     const fZHrPerPa = computeZHrPerPa(hrPerPa)
     if (fZHrPerPa != null) present.push('hrPerPa')
@@ -355,9 +436,17 @@ async function calculateMatchupProjections(
 
 async function getGamesForDateRaw(supabase: SupabaseClient, dateIso: string) {
   const { data: bdl, error: bdlErr } = await supabase
-    .from('bdl_games').select('home_team_abbrev,away_team_abbrev').eq('date', dateIso)
+    .from('bdl_games')
+    .select('home_team_abbrev,away_team_abbrev,date,start_time_utc')
+    .gte('date', shiftIsoDate(dateIso, -1))
+    .lte('date', shiftIsoDate(dateIso, 1))
   if (!bdlErr && bdl?.length) {
-    return bdl.map((g) => ({ home_team: g.home_team_abbrev, away_team: g.away_team_abbrev })) as { home_team: string; away_team: string }[]
+    return bdl
+      .filter((g: any) => {
+        const etDate = utcToETDateIso(g.start_time_utc ?? null)
+        return etDate ? etDate === dateIso : g.date === dateIso
+      })
+      .map((g: any) => ({ home_team: g.home_team_abbrev, away_team: g.away_team_abbrev })) as { home_team: string; away_team: string }[]
   }
   const { data } = await supabase
     .from('schedule_games').select('home_team,away_team').eq('date', dateIso)
@@ -372,7 +461,7 @@ export async function listDailyHrProjections(
 ): Promise<DailyProjection[]> {
   const date = dateIso ?? getAppDisplayDateIso()
   const fromDaily = await listDailyHrProjectionsFromTable(supabase, date)
-  if (fromDaily.length > 0) return fromDaily
+  if (fromDaily.length > 0 && !hasBrokenCapDistribution(fromDaily)) return fromDaily
   return calculateMatchupProjections(supabase, date)
 }
 
@@ -383,13 +472,14 @@ export async function mergedHrProbabilityMapForDate(
 ): Promise<Map<string, number>> {
   const out = new Map<string, number>()
   const fromDaily = await listDailyHrProjectionsFromTable(supabase, dateIso)
-  for (const d of fromDaily) {
+  const usableDaily = hasBrokenCapDistribution(fromDaily) ? [] : fromDaily
+  for (const d of usableDaily) {
     if (d.hrProbability != null) out.set(d.playerId, d.hrProbability)
   }
 
   const hint = playerIdsHint ? new Set(playerIdsHint) : null
   const needCalc =
-    !fromDaily.length ||
+    !usableDaily.length ||
     (hint != null && [...hint].some((id) => !out.has(id)))
   if (!needCalc) return out
 
