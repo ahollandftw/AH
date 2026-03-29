@@ -231,6 +231,21 @@ async function sendHrNotifications(
 
   // Check for push tokens
   const notifyUserIds = settings.map((s: { user_id: string }) => s.user_id)
+  const notificationBody =
+    mode === 'pick'
+      ? `${playerName} just hit a home run! Your pick was correct.`
+      : `${playerName} just hit a home run.`
+
+  await sb.from('user_notifications').insert(
+    notifyUserIds.map((userId) => ({
+      user_id: userId,
+      actor_user_id: null,
+      type: 'message',
+      title: 'Home Run Alert',
+      body: notificationBody,
+    })),
+  )
+
   const { data: tokens } = await sb
     .from('user_push_tokens')
     .select('expo_push_token')
@@ -245,10 +260,7 @@ async function sendHrNotifications(
   const messages = tokens.map((t: { expo_push_token: string }) => ({
     to: t.expo_push_token,
     title: 'Home Run! ⚾',
-    body:
-      mode === 'pick'
-        ? `${playerName} just hit a home run! Your pick was correct.`
-        : `${playerName} just hit a home run.`,
+    body: notificationBody,
     sound: 'default',
   }))
 

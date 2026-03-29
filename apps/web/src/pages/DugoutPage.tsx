@@ -42,6 +42,8 @@ type WeatherDisplay = {
 
 function sportsbookLabel(vendor: string): string {
   if (!vendor) return 'Sportsbook'
+  if (vendor === 'betmgm') return 'BetMGM'
+  if (vendor === 'betrivers') return 'BetRivers'
   return vendor.charAt(0).toUpperCase() + vendor.slice(1)
 }
 
@@ -56,6 +58,46 @@ function normalizePlayerName(name: string | null | undefined): string {
     .replace(/[^a-z0-9 ]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+const SUPPORTED_SPORTSBOOKS = ['caesars', 'betmgm', 'betrivers'] as const
+
+function normalizeSportsbook(value: string | null | undefined): string {
+  const raw = String(value ?? '').toLowerCase().trim()
+  return SUPPORTED_SPORTSBOOKS.includes(raw as (typeof SUPPORTED_SPORTSBOOKS)[number]) ? raw : 'caesars'
+}
+
+function chooseBestPlayerBook(
+  props: Array<{ vendor: string | null; line_value: string | null; milestone_odds: number | null; over_odds: number | null }>,
+  preferredVendor: string,
+): { odds: number; vendor: string } | null {
+  const rankedVendors = [preferredVendor, ...SUPPORTED_SPORTSBOOKS.filter((v) => v !== preferredVendor)]
+  const bestByVendor = new Map<string, { odds: number; vendor: string; lineValue: number | null }>()
+  for (const p of props) {
+    const vendor = normalizeSportsbook(p.vendor)
+    const odds = p.milestone_odds ?? p.over_odds ?? null
+    if (odds == null) continue
+    const lineValue = Number(p.line_value ?? '')
+    const normalizedLine = Number.isFinite(lineValue) ? lineValue : null
+    const prev = bestByVendor.get(vendor)
+    const shouldReplace =
+      !prev ||
+      (normalizedLine === 0.5 && prev.lineValue !== 0.5) ||
+      (
+        normalizedLine != null &&
+        prev.lineValue != null &&
+        normalizedLine < prev.lineValue &&
+        prev.lineValue !== 0.5
+      )
+    if (shouldReplace) {
+      bestByVendor.set(vendor, { odds: Number(odds), vendor, lineValue: normalizedLine })
+    }
+  }
+  for (const vendor of rankedVendors) {
+    const hit = bestByVendor.get(vendor)
+    if (hit) return { odds: hit.odds, vendor: hit.vendor }
+  }
+  return null
 }
 
 function normalizeDeg(deg: number): number {
@@ -191,8 +233,8 @@ export default function DugoutPage() {
   // { [bdlGameId]: { home: pitcherName|null, away: pitcherName|null } }
   const [probablePitchers, setProbablePitchers] = useState<Record<string, { home: string | null; away: string | null }>>({})
   // { [statPlayerId]: americanOdds number }
-  const [playerOdds, setPlayerOdds] = useState<Record<string, number | null>>({})
-  const [defaultSportsbook, setDefaultSportsbook] = useState<string>('draftkings')
+  const [playerOdds, setPlayerOdds] = useState<Record<string, { odds: number; vendor: string } | null>>({})
+  const [defaultSportsbook, setDefaultSportsbook] = useState<string>('caesars')
 
   useEffect(() => {
     if (!supabase) return
@@ -217,7 +259,7 @@ export default function DugoutPage() {
       .eq('user_id', session.user.id)
       .maybeSingle()
       .then(({ data }) => {
-        if (data?.default_sportsbook) setDefaultSportsbook(String(data.default_sportsbook))
+        if (data?.default_sportsbook) setDefaultSportsbook(normalizeSportsbook(String(data.default_sportsbook)))
       })
   }, [supabase, session?.user.id])
 
@@ -305,37 +347,25 @@ export default function DugoutPage() {
         .in('bdl_game_id', bdlGameIds)
         .in('bdl_player_id', bdlPlayerIds)
         .eq('prop_type', 'home_runs')
-        .ilike('vendor', defaultSportsbook)
 
-      if (!props?.length) return
+      if (!props?.length) {
+        setPlayerOdds({})
+        return
+      }
       const bdlToStat = new Map<number, string>()
       for (const [sid, bid] of statToBdl) bdlToStat.set(bid, sid)
 
-      const next: Record<string, number | null> = {}
-      const bestByStat = new Map<string, { odds: number; lineValue: number | null }>()
+      const next: Record<string, { odds: number; vendor: string } | null> = {}
+      const propsByStat = new Map<string, Array<{ vendor: string | null; line_value: string | null; milestone_odds: number | null; over_odds: number | null }>>()
       for (const p of props as any[]) {
         const sid = bdlToStat.get(Number(p.bdl_player_id))
         if (!sid) continue
-        const odds = p.milestone_odds ?? p.over_odds ?? null
-        if (odds == null) continue
-        const lineValue = Number(p.line_value ?? '')
-        const normalizedLine = Number.isFinite(lineValue) ? lineValue : null
-        const prev = bestByStat.get(sid)
-        const shouldReplace =
-          !prev ||
-          (normalizedLine === 0.5 && prev.lineValue !== 0.5) ||
-          (
-            normalizedLine != null &&
-            prev.lineValue != null &&
-            normalizedLine < prev.lineValue &&
-            prev.lineValue !== 0.5
-          )
-        if (shouldReplace) {
-          bestByStat.set(sid, { odds: Number(odds), lineValue: normalizedLine })
-        }
+        if (!propsByStat.has(sid)) propsByStat.set(sid, [])
+        propsByStat.get(sid)!.push(p)
       }
-      for (const [sid, info] of bestByStat) {
-        next[sid] = info.odds
+      for (const [sid, statProps] of propsByStat) {
+        const best = chooseBestPlayerBook(statProps, defaultSportsbook)
+        if (best) next[sid] = best
       }
       setPlayerOdds(next)
     })()
@@ -357,7 +387,7 @@ export default function DugoutPage() {
   const oddsByName = useMemo(() => {
     const m = new Map<string, number>()
     for (const r of rows) {
-      const odds = playerOdds[r.playerId]
+      const odds = playerOdds[r.playerId]?.odds
       if (odds == null) continue
       const key = normalizePlayerName(r.name)
       if (!key || m.has(key)) continue
@@ -1015,9 +1045,9 @@ export default function DugoutPage() {
                               <span style={{ color: awayPalette.primary }}>
                                 {awayTop ? formatProbability(awayTop.hrProbability) : '—'}
                               </span>
-                              {awayTop && playerOdds[awayTop.playerId] != null ? (
-                                <span className="pg-batterBookOdds" title={`${defaultSportsbook} HR odds`}>
-                                  {sportsbookLabel(defaultSportsbook)} {formatBookOdds(playerOdds[awayTop.playerId])}
+                              {awayTop && playerOdds[awayTop.playerId]?.odds != null ? (
+                                <span className="pg-batterBookOdds" title={`${playerOdds[awayTop.playerId]?.vendor} HR odds`}>
+                                  {sportsbookLabel(playerOdds[awayTop.playerId]?.vendor ?? defaultSportsbook)} {formatBookOdds(playerOdds[awayTop.playerId]?.odds)}
                                 </span>
                               ) : null}
                               {awayTop && Object.prototype.hasOwnProperty.call(pickState, awayTop.playerId) ? (
@@ -1074,9 +1104,9 @@ export default function DugoutPage() {
                               <span style={{ color: homePalette.primary }}>
                                 {homeTop ? formatProbability(homeTop.hrProbability) : '—'}
                               </span>
-                              {homeTop && playerOdds[homeTop.playerId] != null ? (
-                                <span className="pg-batterBookOdds" title={`${defaultSportsbook} HR odds`}>
-                                  {sportsbookLabel(defaultSportsbook)} {formatBookOdds(playerOdds[homeTop.playerId])}
+                              {homeTop && playerOdds[homeTop.playerId]?.odds != null ? (
+                                <span className="pg-batterBookOdds" title={`${playerOdds[homeTop.playerId]?.vendor} HR odds`}>
+                                  {sportsbookLabel(playerOdds[homeTop.playerId]?.vendor ?? defaultSportsbook)} {formatBookOdds(playerOdds[homeTop.playerId]?.odds)}
                                 </span>
                               ) : null}
                               {homeTop && Object.prototype.hasOwnProperty.call(pickState, homeTop.playerId) ? (

@@ -38,12 +38,54 @@ function tierBadgeBg(k: string): string {
 
 function sportsbookLabel(vendor: string): string {
   if (!vendor) return 'Sportsbook'
+  if (vendor === 'betmgm') return 'BetMGM'
+  if (vendor === 'betrivers') return 'BetRivers'
   return vendor.charAt(0).toUpperCase() + vendor.slice(1)
 }
 
 function formatBookOdds(odds: number | null | undefined): string | null {
   if (odds == null || !Number.isFinite(odds)) return null
   return odds > 0 ? `+${odds}` : String(odds)
+}
+
+const SUPPORTED_SPORTSBOOKS = ['caesars', 'betmgm', 'betrivers'] as const
+
+function normalizeSportsbook(value: string | null | undefined): string {
+  const raw = String(value ?? '').toLowerCase().trim()
+  return SUPPORTED_SPORTSBOOKS.includes(raw as (typeof SUPPORTED_SPORTSBOOKS)[number]) ? raw : 'caesars'
+}
+
+function chooseBestPlayerBook(
+  props: Array<{ vendor: string | null; line_value: string | null; milestone_odds: number | null; over_odds: number | null }>,
+  preferredVendor: string,
+): { odds: number; vendor: string } | null {
+  const rankedVendors = [preferredVendor, ...SUPPORTED_SPORTSBOOKS.filter((v) => v !== preferredVendor)]
+  const bestByVendor = new Map<string, { odds: number; vendor: string; lineValue: number | null }>()
+  for (const p of props) {
+    const vendor = normalizeSportsbook(p.vendor)
+    const odds = p.milestone_odds ?? p.over_odds ?? null
+    if (odds == null) continue
+    const lineValue = Number(p.line_value ?? '')
+    const normalizedLine = Number.isFinite(lineValue) ? lineValue : null
+    const prev = bestByVendor.get(vendor)
+    const shouldReplace =
+      !prev ||
+      (normalizedLine === 0.5 && prev.lineValue !== 0.5) ||
+      (
+        normalizedLine != null &&
+        prev.lineValue != null &&
+        normalizedLine < prev.lineValue &&
+        prev.lineValue !== 0.5
+      )
+    if (shouldReplace) {
+      bestByVendor.set(vendor, { odds: Number(odds), vendor, lineValue: normalizedLine })
+    }
+  }
+  for (const vendor of rankedVendors) {
+    const hit = bestByVendor.get(vendor)
+    if (hit) return { odds: hit.odds, vendor: hit.vendor }
+  }
+  return null
 }
 
 export default function ProjectionsPage() {
@@ -63,8 +105,8 @@ export default function ProjectionsPage() {
   const [selectedYear, setSelectedYear] = useState<number>(2026)
   const [liveGames, setLiveGames] = useState<any[]>([])
   const [probablePitchers, setProbablePitchers] = useState<Record<string, { home: string | null; away: string | null }>>({})
-  const [playerOdds, setPlayerOdds] = useState<Record<string, number | null>>({})
-  const [defaultSportsbook, setDefaultSportsbook] = useState<string>('draftkings')
+  const [playerOdds, setPlayerOdds] = useState<Record<string, { odds: number; vendor: string } | null>>({})
+  const [defaultSportsbook, setDefaultSportsbook] = useState<string>('caesars')
   const [displayDate, setDisplayDate] = useState(
     searchParams.get('date') ?? getAppDisplayDateIso(),
   )
@@ -98,7 +140,7 @@ export default function ProjectionsPage() {
       .eq('user_id', session.user.id)
       .maybeSingle()
       .then(({ data }) => {
-        if (data?.default_sportsbook) setDefaultSportsbook(String(data.default_sportsbook))
+        if (data?.default_sportsbook) setDefaultSportsbook(normalizeSportsbook(String(data.default_sportsbook)))
       })
   }, [supabase, session?.user.id])
 
@@ -213,7 +255,6 @@ export default function ProjectionsPage() {
         .in('bdl_game_id', bdlGameIds)
         .in('bdl_player_id', bdlPlayerIds)
         .eq('prop_type', 'home_runs')
-        .ilike('vendor', defaultSportsbook)
 
       if (!props?.length) {
         setPlayerOdds({})
@@ -223,31 +264,17 @@ export default function ProjectionsPage() {
       const bdlToStat = new Map<number, string>()
       for (const [sid, bid] of statToBdl) bdlToStat.set(bid, sid)
 
-      const next: Record<string, number | null> = {}
-      const bestByStat = new Map<string, { odds: number; lineValue: number | null }>()
+      const next: Record<string, { odds: number; vendor: string } | null> = {}
+      const propsByStat = new Map<string, Array<{ vendor: string | null; line_value: string | null; milestone_odds: number | null; over_odds: number | null }>>()
       for (const p of props as any[]) {
         const sid = bdlToStat.get(Number(p.bdl_player_id))
         if (!sid) continue
-        const odds = p.milestone_odds ?? p.over_odds ?? null
-        if (odds == null) continue
-        const lineValue = Number(p.line_value ?? '')
-        const normalizedLine = Number.isFinite(lineValue) ? lineValue : null
-        const prev = bestByStat.get(sid)
-        const shouldReplace =
-          !prev ||
-          (normalizedLine === 0.5 && prev.lineValue !== 0.5) ||
-          (
-            normalizedLine != null &&
-            prev.lineValue != null &&
-            normalizedLine < prev.lineValue &&
-            prev.lineValue !== 0.5
-          )
-        if (shouldReplace) {
-          bestByStat.set(sid, { odds: Number(odds), lineValue: normalizedLine })
-        }
+        if (!propsByStat.has(sid)) propsByStat.set(sid, [])
+        propsByStat.get(sid)!.push(p)
       }
-      for (const [sid, info] of bestByStat) {
-        next[sid] = info.odds
+      for (const [sid, statProps] of propsByStat) {
+        const best = chooseBestPlayerBook(statProps, defaultSportsbook)
+        if (best) next[sid] = best
       }
       setPlayerOdds(next)
     })()
@@ -578,7 +605,8 @@ export default function ProjectionsPage() {
             <div className="pg-cards">
               {s.data.map((r) => {
                 const displayPitcher = displayOpponentPitcher(r)
-                const bookOdds = formatBookOdds(playerOdds[r.playerId])
+                const bookOdds = formatBookOdds(playerOdds[r.playerId]?.odds)
+                const bookVendor = playerOdds[r.playerId]?.vendor ?? defaultSportsbook
                 return (
                 <div
                   key={r.playerId}
@@ -633,12 +661,12 @@ export default function ProjectionsPage() {
                     <span
                       className="pg-odds"
                       style={{ color: tierColor(r.tier ?? 'D') }}
-                      title={bookOdds ? `${sportsbookLabel(defaultSportsbook)} HR odds` : 'Sportsbook HR odds unavailable'}
+                      title={bookOdds ? `${sportsbookLabel(bookVendor)} HR odds` : 'Sportsbook HR odds unavailable'}
                     >
                       {bookOdds ?? '—'}
                     </span>
                     {bookOdds ? (
-                      <span className="pg-small">{sportsbookLabel(defaultSportsbook)}</span>
+                      <span className="pg-small">{sportsbookLabel(bookVendor)}</span>
                     ) : null}
                     <span
                       className="pg-tierBadge"

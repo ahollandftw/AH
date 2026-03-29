@@ -32,6 +32,17 @@ type DailyPickRow = {
   } | null
 }
 
+const SUPPORTED_SPORTSBOOKS = [
+  { value: 'caesars', label: 'Caesars' },
+  { value: 'betmgm', label: 'BetMGM' },
+  { value: 'betrivers', label: 'BetRivers' },
+] as const
+
+function normalizeSportsbook(value: string | null | undefined): string {
+  const raw = String(value ?? '').toLowerCase().trim()
+  return SUPPORTED_SPORTSBOOKS.some((book) => book.value === raw) ? raw : 'caesars'
+}
+
 export default function AccountPage() {
   const navigate = useNavigate()
   const {
@@ -61,7 +72,7 @@ export default function AccountPage() {
   const [avatarUrl, setAvatarUrl] = useState('')
   const [visibility, setVisibility] = useState<ProfileVisibility>('private')
   const [savingProfile, setSavingProfile] = useState(false)
-  const [defaultSportsbook, setDefaultSportsbook] = useState('draftkings')
+  const [defaultSportsbook, setDefaultSportsbook] = useState('caesars')
   const [hrNotifications, setHrNotifications] = useState(true)
   const [hrLeagueNotifications, setHrLeagueNotifications] = useState(false)
   const [todayPickDate, setTodayPickDate] = useState(new Date().toISOString().slice(0, 10))
@@ -99,7 +110,7 @@ export default function AccountPage() {
         setAvatarUrl(String(data?.avatar_url ?? ''))
         const raw = String(data?.profile_visibility ?? 'private').toLowerCase()
         setVisibility(raw === 'public' || raw === 'friends' ? raw : 'private')
-        setDefaultSportsbook(String(data?.default_sportsbook ?? 'draftkings'))
+        setDefaultSportsbook(normalizeSportsbook(data?.default_sportsbook))
         setHrNotifications(data?.hr_notifications !== false)
         setHrLeagueNotifications(data?.hr_notifications_league === true)
       })
@@ -520,10 +531,11 @@ export default function AccountPage() {
                 value={defaultSportsbook}
                 onChange={(e) => setDefaultSportsbook(e.target.value)}
               >
-                <option value="draftkings">DraftKings</option>
-                <option value="fanduel">FanDuel</option>
-                <option value="betmgm">BetMGM</option>
-                <option value="fanatics">Fanatics</option>
+                {SUPPORTED_SPORTSBOOKS.map((book) => (
+                  <option key={book.value} value={book.value}>
+                    {book.label}
+                  </option>
+                ))}
               </select>
               <label className="pg-label acc-switchRow">
                 <span>Pick HR notifications</span>
