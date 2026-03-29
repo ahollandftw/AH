@@ -40,6 +40,24 @@ type WeatherDisplay = {
   roofText: string | null
 }
 
+function sportsbookLabel(vendor: string): string {
+  if (!vendor) return 'Sportsbook'
+  return vendor.charAt(0).toUpperCase() + vendor.slice(1)
+}
+
+function formatBookOdds(odds: number | null | undefined): string | null {
+  if (odds == null || !Number.isFinite(odds)) return null
+  return odds > 0 ? `+${odds}` : String(odds)
+}
+
+function normalizePlayerName(name: string | null | undefined): string {
+  return String(name ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 function normalizeDeg(deg: number): number {
   return ((deg % 360) + 360) % 360
 }
@@ -316,6 +334,18 @@ export default function DugoutPage() {
     }
     return m
   }, [rows])
+
+  const oddsByName = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const r of rows) {
+      const odds = playerOdds[r.playerId]
+      if (odds == null) continue
+      const key = normalizePlayerName(r.name)
+      if (!key || m.has(key)) continue
+      m.set(key, odds)
+    }
+    return m
+  }, [playerOdds, rows])
 
   const visibleGames = useMemo(() => {
     const pairKey = (a: string, b: string) =>
@@ -841,6 +871,13 @@ export default function DugoutPage() {
                                 <div className="pg-scoringPlays">
                                   {hrPlays.map((p: any, i: number) => {
                                     const txt = String(p?.play ?? '')
+                                    const hitterName = txt.split(/\bhomered\b/i)[0]?.trim() ?? ''
+                                    const hitterOdds = oddsByName.get(normalizePlayerName(hitterName)) ?? null
+                                    const hitterOddsText = formatBookOdds(hitterOdds)
+                                    const displayText =
+                                      hitterName && hitterOddsText
+                                        ? txt.replace(hitterName, `${hitterName} (${hitterOddsText})`)
+                                        : txt
                                     // BDL scoring summary has `inning` + `period`, but sometimes the meaning is swapped.
                                     // We infer half inning from whichever field contains TOP/BOTTOM and inning number from the other.
                                     const inningRaw = String(p?.inning ?? '').trim()
@@ -901,7 +938,7 @@ export default function DugoutPage() {
                                         <span className="pg-scoringPlayIcon" aria-hidden="true">
                                           <img className={iconClass} src={iconSrc} alt="" />
                                         </span>
-                                        <span className="pg-scoringPlayText">{txt}</span>
+                                        <span className="pg-scoringPlayText">{displayText}</span>
                                         <span className="pg-scoringPlayInning">{inningLabel}</span>
                                       </div>
                                     )
@@ -959,13 +996,9 @@ export default function DugoutPage() {
                               <span style={{ color: awayPalette.primary }}>
                                 {awayTop ? formatProbability(awayTop.hrProbability) : '—'}
                               </span>
-                              {awayTop?.americanOddsStr ? (
-                                <span className="pg-batterOdds">{awayTop.americanOddsStr}</span>
-                              ) : null}
                               {awayTop && playerOdds[awayTop.playerId] != null ? (
                                 <span className="pg-batterBookOdds" title={`${defaultSportsbook} HR odds`}>
-                                  {defaultSportsbook.charAt(0).toUpperCase() + defaultSportsbook.slice(1)}{' '}
-                                  {playerOdds[awayTop.playerId]! >= 0 ? `+${playerOdds[awayTop.playerId]}` : String(playerOdds[awayTop.playerId])}
+                                  {sportsbookLabel(defaultSportsbook)} {formatBookOdds(playerOdds[awayTop.playerId])}
                                 </span>
                               ) : null}
                               {awayTop && Object.prototype.hasOwnProperty.call(pickState, awayTop.playerId) ? (
@@ -1022,13 +1055,9 @@ export default function DugoutPage() {
                               <span style={{ color: homePalette.primary }}>
                                 {homeTop ? formatProbability(homeTop.hrProbability) : '—'}
                               </span>
-                              {homeTop?.americanOddsStr ? (
-                                <span className="pg-batterOdds">{homeTop.americanOddsStr}</span>
-                              ) : null}
                               {homeTop && playerOdds[homeTop.playerId] != null ? (
                                 <span className="pg-batterBookOdds" title={`${defaultSportsbook} HR odds`}>
-                                  {defaultSportsbook.charAt(0).toUpperCase() + defaultSportsbook.slice(1)}{' '}
-                                  {playerOdds[homeTop.playerId]! >= 0 ? `+${playerOdds[homeTop.playerId]}` : String(playerOdds[homeTop.playerId])}
+                                  {sportsbookLabel(defaultSportsbook)} {formatBookOdds(playerOdds[homeTop.playerId])}
                                 </span>
                               ) : null}
                               {homeTop && Object.prototype.hasOwnProperty.call(pickState, homeTop.playerId) ? (

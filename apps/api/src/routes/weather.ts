@@ -40,7 +40,7 @@ export function registerWeatherRoutes(app: Express) {
         return
       }
       const sb = getServiceClient()
-      await syncWeatherForDate(sb, date)
+      const syncResult = await syncWeatherForDate(sb, date)
       const rows = await listCachedWeatherForDate(sb, date)
       const match = rows.find((r) => r.home_team === (normalizeMlbHomeTeam(home) ?? home))
       if (!match) {
@@ -51,6 +51,7 @@ export function registerWeatherRoutes(app: Express) {
           lat: park.lat,
           lon: park.lon,
           error: 'No cached weather found for date',
+          sync_errors: syncResult.errors,
         })
         return
       }
@@ -104,9 +105,10 @@ export function registerWeatherRoutes(app: Express) {
         .filter(Boolean)
       const unique = [...new Set(rawList)]
       const sb = getServiceClient()
+      let syncResult: Awaited<ReturnType<typeof syncWeatherForDate>> | null = null
 
       if (config.openWeatherApiKey()) {
-        await syncWeatherForDate(sb, date)
+        syncResult = await syncWeatherForDate(sb, date)
       }
       const cached = await listCachedWeatherForDate(sb, date)
 
@@ -134,6 +136,7 @@ export function registerWeatherRoutes(app: Express) {
               lat: park.lat,
               lon: park.lon,
               error: 'No cached weather found for date',
+              sync_errors: syncResult?.errors,
             }
           }
           return {
@@ -190,4 +193,5 @@ type WeatherSlateEntry = {
   fetched_at?: string
   source?: string
   error?: string
+  sync_errors?: string[]
 }

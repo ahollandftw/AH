@@ -36,6 +36,16 @@ function tierBadgeBg(k: string): string {
   }
 }
 
+function sportsbookLabel(vendor: string): string {
+  if (!vendor) return 'Sportsbook'
+  return vendor.charAt(0).toUpperCase() + vendor.slice(1)
+}
+
+function formatBookOdds(odds: number | null | undefined): string | null {
+  if (odds == null || !Number.isFinite(odds)) return null
+  return odds > 0 ? `+${odds}` : String(odds)
+}
+
 export default function ProjectionsPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const { supabase, hasSubscription, session } = useWebAuth()
@@ -53,6 +63,8 @@ export default function ProjectionsPage() {
   const [selectedYear, setSelectedYear] = useState<number>(2026)
   const [liveGames, setLiveGames] = useState<any[]>([])
   const [probablePitchers, setProbablePitchers] = useState<Record<string, { home: string | null; away: string | null }>>({})
+  const [playerOdds, setPlayerOdds] = useState<Record<string, number | null>>({})
+  const [defaultSportsbook, setDefaultSportsbook] = useState<string>('draftkings')
   const [displayDate, setDisplayDate] = useState(
     searchParams.get('date') ?? getAppDisplayDateIso(),
   )
@@ -77,6 +89,18 @@ export default function ProjectionsPage() {
       })
     })
   }, [supabase])
+
+  useEffect(() => {
+    if (!supabase || !session?.user.id) return
+    void supabase
+      .from('user_settings')
+      .select('default_sportsbook')
+      .eq('user_id', session.user.id)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (data?.default_sportsbook) setDefaultSportsbook(String(data.default_sportsbook))
+      })
+  }, [supabase, session?.user.id])
 
   useEffect(() => {
     if (!supabase) return
@@ -140,6 +164,7 @@ export default function ProjectionsPage() {
       .catch(() => {})
   }, [displayDate])
 
+
   const filteredRows = useMemo(() => {
     let out = rows
     if (!hasSubscription && games.length > 0) {
@@ -153,6 +178,61 @@ export default function ProjectionsPage() {
     if (selectedPlayerId) out = out.filter((r) => r.playerId === selectedPlayerId)
     return out
   }, [displayDate, games, hasSubscription, rows, selectedPlayerId, selectedTeam])
+
+  useEffect(() => {
+    if (!supabase || !games.length || !filteredRows.length) {
+      setPlayerOdds({})
+      return
+    }
+    const bdlGameIds = games
+      .map((g) => Number(g.gameId))
+      .filter((id) => Number.isFinite(id) && id > 0)
+    const statIds = [...new Set(filteredRows.map((r) => r.playerId).filter(Boolean))]
+    if (!bdlGameIds.length || !statIds.length) {
+      setPlayerOdds({})
+      return
+    }
+
+    void (async () => {
+      const { data: xref } = await supabase
+        .from('bdl_players')
+        .select('bdl_id,stat_player_id')
+        .in('stat_player_id', statIds.slice(0, 400))
+      const statToBdl = new Map<string, number>(
+        (xref ?? []).map((r: any) => [String(r.stat_player_id), Number(r.bdl_id)]),
+      )
+      const bdlPlayerIds = [...statToBdl.values()].filter(Boolean)
+      if (!bdlPlayerIds.length) {
+        setPlayerOdds({})
+        return
+      }
+
+      const { data: props } = await supabase
+        .from('bdl_player_props')
+        .select('bdl_player_id,milestone_odds,over_odds,vendor')
+        .in('bdl_game_id', bdlGameIds)
+        .in('bdl_player_id', bdlPlayerIds)
+        .eq('prop_type', 'home_runs')
+        .ilike('vendor', defaultSportsbook)
+
+      if (!props?.length) {
+        setPlayerOdds({})
+        return
+      }
+
+      const bdlToStat = new Map<number, string>()
+      for (const [sid, bid] of statToBdl) bdlToStat.set(bid, sid)
+
+      const next: Record<string, number | null> = {}
+      for (const p of props as any[]) {
+        const sid = bdlToStat.get(Number(p.bdl_player_id))
+        if (!sid) continue
+        const odds = p.milestone_odds ?? p.over_odds ?? null
+        if (odds != null) next[sid] = Number(odds)
+      }
+      setPlayerOdds(next)
+    })()
+  }, [defaultSportsbook, filteredRows, games, supabase])
 
   const selectedPlayer = useMemo(
     () => rows.find((r) => r.playerId === selectedPlayerId) ?? null,
@@ -479,6 +559,7 @@ export default function ProjectionsPage() {
             <div className="pg-cards">
               {s.data.map((r) => {
                 const displayPitcher = displayOpponentPitcher(r)
+                const bookOdds = formatBookOdds(playerOdds[r.playerId])
                 return (
                 <div
                   key={r.playerId}
@@ -533,9 +614,13 @@ export default function ProjectionsPage() {
                     <span
                       className="pg-odds"
                       style={{ color: tierColor(r.tier ?? 'D') }}
+                      title={bookOdds ? `${sportsbookLabel(defaultSportsbook)} HR odds` : 'Sportsbook HR odds unavailable'}
                     >
-                      {r.americanOddsStr ?? '—'}
+                      {bookOdds ?? '—'}
                     </span>
+                    {bookOdds ? (
+                      <span className="pg-small">{sportsbookLabel(defaultSportsbook)}</span>
+                    ) : null}
                     <span
                       className="pg-tierBadge"
                       style={{
