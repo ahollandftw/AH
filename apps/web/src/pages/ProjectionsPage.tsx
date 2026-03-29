@@ -64,6 +64,30 @@ type PlayerBookOdds = {
   all: Array<{ vendor: string; odds: number }>
 }
 
+type TeamPitcherInfo = {
+  bdl_player_id: number | null
+  stat_player_id: string | null
+  full_name: string | null
+  position: string | null
+}
+
+type LineupPlayer = {
+  bdl_player_id: number | null
+  stat_player_id: string | null
+  full_name: string | null
+  position: string | null
+  batting_order: number | null
+}
+
+type GameLineup = {
+  home: LineupPlayer[]
+  away: LineupPlayer[]
+  home_pitcher?: TeamPitcherInfo | null
+  away_pitcher?: TeamPitcherInfo | null
+  home_source?: 'official' | 'previous_game' | 'none'
+  away_source?: 'official' | 'previous_game' | 'none'
+}
+
 function oddsProfitScore(odds: number): number {
   if (odds >= 0) return odds
   return 10000 / Math.abs(odds)
@@ -71,6 +95,26 @@ function oddsProfitScore(odds: number): number {
 
 function buildTooltip(all: Array<{ vendor: string; odds: number }>): string {
   return all.map((entry) => `${sportsbookLabel(entry.vendor)} ${formatBookOdds(entry.odds)}`).join('\n')
+}
+
+function normalizePlayerName(name: string | null | undefined): string {
+  return String(name ?? '')
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function extractHomerHitters(scoringSummary: any): Set<string> {
+  const out = new Set<string>()
+  const plays = Array.isArray(scoringSummary) ? scoringSummary : []
+  for (const p of plays) {
+    const txt = String(p?.play ?? '').trim()
+    if (!/home run|homer|grand slam/i.test(txt)) continue
+    const beforeHomered = txt.split(/\bhomered\b/i)[0]?.trim()
+    if (beforeHomered) out.add(normalizePlayerName(beforeHomered))
+  }
+  return out
 }
 
 function chooseBestPlayerBook(
@@ -125,6 +169,7 @@ export default function ProjectionsPage() {
   const [selectedYear, setSelectedYear] = useState<number>(2026)
   const [liveGames, setLiveGames] = useState<any[]>([])
   const [probablePitchers, setProbablePitchers] = useState<Record<string, { home: string | null; away: string | null }>>({})
+  const [lineupByGame, setLineupByGame] = useState<Record<string, GameLineup | null>>({})
   const [playerOdds, setPlayerOdds] = useState<Record<string, PlayerBookOdds | null>>({})
   const [displayDate, setDisplayDate] = useState(
     searchParams.get('date') ?? getAppDisplayDateIso(),
@@ -213,6 +258,23 @@ export default function ProjectionsPage() {
       .catch(() => {})
   }, [displayDate])
 
+  useEffect(() => {
+    const base = import.meta.env.VITE_API_BASE_URL ?? ''
+    if (!base) return
+    void fetch(`${base}/bdl/lineups/slate?date=${encodeURIComponent(displayDate)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json: { data?: Record<string, GameLineup | null> } | null) => {
+        const next: Record<string, GameLineup | null> = {}
+        for (const [gameId, lineup] of Object.entries(json?.data ?? {})) {
+          next[`game:${gameId}`] = lineup
+        }
+        setLineupByGame(next)
+      })
+      .catch(() => {
+        setLineupByGame({})
+      })
+  }, [displayDate])
+
 
   const filteredRows = useMemo(() => {
     let out = rows
@@ -294,18 +356,46 @@ export default function ProjectionsPage() {
 
   const probablePitcherByMatchup = useMemo(() => {
     const out = new Map<string, { name: string | null; hand: string | null }>()
-    const addMatchup = (homeTeam: string, awayTeam: string, gameId: string | number | null | undefined) => {
+    const addMatchup = (
+      homeTeam: string,
+      awayTeam: string,
+      gameId: string | number | null | undefined,
+      lineup?: GameLineup | null,
+    ) => {
       const home = (normalizeTeamCode(homeTeam) ?? homeTeam).toUpperCase()
       const away = (normalizeTeamCode(awayTeam) ?? awayTeam).toUpperCase()
       const pp = probablePitchers[String(gameId ?? '')]
-      if (!pp || !home || !away) return
-      out.set(`${home}|${away}`, { name: pp.away ?? null, hand: null })
-      out.set(`${away}|${home}`, { name: pp.home ?? null, hand: null })
+      if (!home || !away) return
+      const homePitcher = pp?.home ?? lineup?.home_pitcher?.full_name ?? null
+      const awayPitcher = pp?.away ?? lineup?.away_pitcher?.full_name ?? null
+      out.set(`${home}|${away}`, { name: awayPitcher, hand: null })
+      out.set(`${away}|${home}`, { name: homePitcher, hand: null })
     }
-    for (const game of games) addMatchup(game.homeTeam, game.awayTeam, game.gameId)
-    for (const game of liveGames) addMatchup(game.home_team_abbrev, game.away_team_abbrev, game.bdl_game_id)
+    for (const game of games) {
+      addMatchup(game.homeTeam, game.awayTeam, game.gameId, lineupByGame[`game:${game.gameId}`] ?? null)
+    }
+    for (const game of liveGames) {
+      addMatchup(
+        game.home_team_abbrev,
+        game.away_team_abbrev,
+        game.bdl_game_id,
+        lineupByGame[`game:${game.bdl_game_id}`] ?? null,
+      )
+    }
+    for (const game of games) {
+      const home = (normalizeTeamCode(game.homeTeam) ?? game.homeTeam).toUpperCase()
+      const away = (normalizeTeamCode(game.awayTeam) ?? game.awayTeam).toUpperCase()
+      const lineup = lineupByGame[`game:${game.gameId}`] ?? null
+      if (!home || !away || !lineup) continue
+      if (!out.get(`${home}|${away}`)?.name && lineup.away_pitcher?.full_name) {
+        out.set(`${home}|${away}`, { name: lineup.away_pitcher.full_name, hand: null })
+      }
+      if (!out.get(`${away}|${home}`)?.name && lineup.home_pitcher?.full_name) {
+        out.set(`${away}|${home}`, { name: lineup.home_pitcher.full_name, hand: null })
+      }
+    }
     return out
-  }, [games, liveGames, probablePitchers])
+  }, [games, liveGames, lineupByGame, probablePitchers])
 
   const sections = useMemo(
     () =>
@@ -316,6 +406,21 @@ export default function ProjectionsPage() {
       })),
     [filteredRows],
   )
+
+  const gameResultByMatchup = useMemo(() => {
+    const out = new Map<string, { started: boolean; homerHitters: Set<string> }>()
+    for (const game of liveGames) {
+      const home = (normalizeTeamCode(game.home_team_abbrev) ?? game.home_team_abbrev ?? '').toUpperCase()
+      const away = (normalizeTeamCode(game.away_team_abbrev) ?? game.away_team_abbrev ?? '').toUpperCase()
+      if (!home || !away) continue
+      const status = String(game.status ?? '').toLowerCase()
+      const started = !/scheduled|pre|not started/.test(status)
+      const homerHitters = extractHomerHitters(game.scoring_summary)
+      out.set(`${home}|${away}`, { started, homerHitters })
+      out.set(`${away}|${home}`, { started, homerHitters })
+    }
+    return out
+  }, [liveGames])
 
   const selectedCount = useMemo(
     () => Object.keys(pickState).length,
@@ -452,12 +557,13 @@ export default function ProjectionsPage() {
     setPlayerInputs(null)
     const opponentTeam = parseOpponentTeam(r)
     if (!opponentTeam) return
+    const displayPitcher = displayOpponentPitcher(r)
     setMatchupLoading(true)
     try {
       const base = import.meta.env.VITE_API_BASE_URL ?? ''
       const [matchupRes, evRes, hrRes] = await Promise.all([
         fetch(
-          `${base}/bdl/matchup-card?player_id=${encodeURIComponent(r.playerId)}&opponent_team=${encodeURIComponent(opponentTeam)}&season=${selectedYear}${r.opponentPitcher ? `&pitcher_name=${encodeURIComponent(r.opponentPitcher)}` : ''}`,
+          `${base}/bdl/matchup-card?player_id=${encodeURIComponent(r.playerId)}&opponent_team=${encodeURIComponent(opponentTeam)}&season=${selectedYear}${displayPitcher.name ? `&pitcher_name=${encodeURIComponent(displayPitcher.name)}` : ''}`,
         ),
         supabase
           ?.from('stats_exit_velocity')
@@ -622,10 +728,21 @@ export default function ProjectionsPage() {
                 const bookOdds = formatBookOdds(bestBook?.bestOdds)
                 const bookVendor = bestBook?.bestVendor ?? ''
                 const oddsTooltip = bestBook ? buildTooltip(bestBook.all) : 'Sportsbook HR odds unavailable'
+                const team = (normalizeTeamCode(r.team ?? '') ?? '').toUpperCase()
+                const opp = (displayOpponentTeam(r) ?? '').toUpperCase()
+                const gameResult = team && opp ? gameResultByMatchup.get(`${team}|${opp}`) ?? null : null
+                const playerKey = normalizePlayerName(r.name)
+                const didHomer = !!gameResult?.homerHitters.has(playerKey)
+                const projectionStateClass =
+                  didHomer
+                    ? 'pg-card--projection-hit'
+                    : gameResult?.started
+                      ? 'pg-card--projection-miss'
+                      : 'pg-card--projection-pending'
                 return (
                 <div
                   key={r.playerId}
-                  className="pg-card"
+                  className={`pg-card pg-card--projection ${projectionStateClass}`}
                   onClick={() => void openMatchup(r)}
                   role="button"
                   tabIndex={0}

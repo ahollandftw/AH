@@ -40,6 +40,30 @@ type WeatherDisplay = {
   roofText: string | null
 }
 
+type TeamPitcherInfo = {
+  bdl_player_id: number | null
+  stat_player_id: string | null
+  full_name: string | null
+  position: string | null
+}
+
+type LineupPlayer = {
+  bdl_player_id: number | null
+  stat_player_id: string | null
+  full_name: string | null
+  position: string | null
+  batting_order: number | null
+}
+
+type GameLineup = {
+  home: LineupPlayer[]
+  away: LineupPlayer[]
+  home_pitcher?: TeamPitcherInfo | null
+  away_pitcher?: TeamPitcherInfo | null
+  home_source?: 'official' | 'previous_game' | 'none'
+  away_source?: 'official' | 'previous_game' | 'none'
+}
+
 function sportsbookLabel(vendor: string): string {
   if (!vendor) return 'Sportsbook'
   if (vendor === 'draftkings') return 'DraftKings'
@@ -246,8 +270,6 @@ export default function DugoutPage() {
   const [selectedYear, setSelectedYear] = useState<number>(2026)
   const [playerInputs, setPlayerInputs] = useState<any>(null)
   const [weatherByHome, setWeatherByHome] = useState<Record<string, WeatherSlateEntry>>({})
-  type LineupPlayer = { bdl_player_id: number | null; stat_player_id: string | null; full_name: string | null; position: string | null; batting_order: number | null }
-  type GameLineup = { home: LineupPlayer[]; away: LineupPlayer[]; home_source?: 'official' | 'previous_game' | 'none'; away_source?: 'official' | 'previous_game' | 'none' }
   const [lineupByGame, setLineupByGame] = useState<Record<string, GameLineup | null>>({})
   const [lineupsLoading, setLineupsLoading] = useState(false)
   // { [bdlGameId]: { home: pitcherName|null, away: pitcherName|null } }
@@ -567,22 +589,65 @@ export default function DugoutPage() {
     return `${parts[0][0] ?? ''}${parts[1][0] ?? ''}`.toUpperCase()
   }
 
+  function parseOpponentTeam(r: DailyProjection): string | null {
+    const txt = (r.opponent ?? '').trim()
+    if (!txt) return null
+    const m = txt.match(/(?:vs|@)\s+([A-Za-z]{2,4})/i)
+    return normalizeTeamCode(m?.[1] ?? '')?.toUpperCase() ?? null
+  }
+
+  function matchupPitchersForTeams(gameId?: string | number | null): { home: string | null; away: string | null } {
+    const lineup = /^\d+$/.test(String(gameId ?? ''))
+      ? lineupByGame[`game:${gameId}`] ?? null
+      : null
+    const probable = probablePitchers[String(gameId ?? '')]
+    return {
+      home: probable?.home ?? lineup?.home_pitcher?.full_name ?? null,
+      away: probable?.away ?? lineup?.away_pitcher?.full_name ?? null,
+    }
+  }
+
+  function displayOpponentPitcher(r: DailyProjection): string | null {
+    if (r.opponentPitcher) return r.opponentPitcher
+    const team = (normalizeTeamCode(r.team ?? '') ?? '').toUpperCase()
+    const opp = (parseOpponentTeam(r) ?? '').toUpperCase()
+    if (!team || !opp) return null
+    const scheduleGame =
+      games.find((g) => {
+        const home = (normalizeTeamCode(g.homeTeam) ?? g.homeTeam).toUpperCase()
+        const away = (normalizeTeamCode(g.awayTeam) ?? g.awayTeam).toUpperCase()
+        return (home === team && away === opp) || (home === opp && away === team)
+      }) ?? null
+    const liveGame =
+      liveGames.find((g) => {
+        const home = (normalizeTeamCode(g.home_team_abbrev) ?? g.home_team_abbrev).toUpperCase()
+        const away = (normalizeTeamCode(g.away_team_abbrev) ?? g.away_team_abbrev).toUpperCase()
+        return (home === team && away === opp) || (home === opp && away === team)
+      }) ?? null
+    const home = (normalizeTeamCode(scheduleGame?.homeTeam ?? liveGame?.home_team_abbrev ?? '') ?? '').toUpperCase()
+    const away = (normalizeTeamCode(scheduleGame?.awayTeam ?? liveGame?.away_team_abbrev ?? '') ?? '').toUpperCase()
+    const gameId = liveGame?.bdl_game_id ?? scheduleGame?.gameId ?? null
+    if (!home || !away) return null
+    const pitchers = matchupPitchersForTeams(gameId)
+    return team === home ? pitchers.away : pitchers.home
+  }
+
   async function openMatchup(r: DailyProjection) {
     setMatchupFor(r)
     setMatchupData(null)
     setPlayerInputs(null)
-    const match = String(r.opponent ?? '').match(/(?:vs|@)\s+([A-Za-z]{2,4})/i)
-    const opponentTeam = normalizeTeamCode(match?.[1] ?? '') ?? ''
+    const opponentTeam = parseOpponentTeam(r) ?? ''
     if (!opponentTeam) return
     setMatchupLoading(true)
     try {
       const base = import.meta.env.VITE_API_BASE_URL ?? ''
+      const opponentPitcher = displayOpponentPitcher(r)
       const q = new URLSearchParams({
         player_id: r.playerId,
         opponent_team: opponentTeam,
         season: String(selectedYear),
       })
-      if (r.opponentPitcher) q.set('pitcher_name', r.opponentPitcher)
+      if (opponentPitcher) q.set('pitcher_name', opponentPitcher)
       const [matchupRes, evRes, hrRes] = await Promise.all([
         fetch(`${base}/bdl/matchup-card?${q.toString()}`),
         supabase
@@ -1174,11 +1239,14 @@ export default function DugoutPage() {
                           <div className="pg-gameRows">
                             {/* Probable pitchers — BDL feed takes priority, fallback to projection data */}
                             {(() => {
+                              const lineupPitchers = /^\d+$/.test(String(g.gameId))
+                                ? lineupByGame[`game:${g.gameId}`] ?? null
+                                : null
                               const bdlPitchers = live?.bdl_game_id ? probablePitchers[String(live.bdl_game_id)] : null
                               // BDL: home pitcher faces away batters; away pitcher faces home batters
-                              const awayTeamPitcher = bdlPitchers?.home ?? homeTop?.opponentPitcher
+                              const awayTeamPitcher = bdlPitchers?.home ?? lineupPitchers?.home_pitcher?.full_name ?? homeTop?.opponentPitcher
                               const awayTeamPitcherHand = bdlPitchers ? null : homeTop?.opponentPitcherHand
-                              const homeTeamPitcher = bdlPitchers?.away ?? awayTop?.opponentPitcher
+                              const homeTeamPitcher = bdlPitchers?.away ?? lineupPitchers?.away_pitcher?.full_name ?? awayTop?.opponentPitcher
                               const homeTeamPitcherHand = bdlPitchers ? null : awayTop?.opponentPitcherHand
                               return (
                                 <div className="pg-gameLine">
@@ -1195,6 +1263,7 @@ export default function DugoutPage() {
                             {/* Lineup — BDL official when available, projected fallback */}
                             {(() => {
                               const bdlLineup = lineupByGame[lineupCacheKey]
+                              const bdlPitchers = live?.bdl_game_id ? probablePitchers[String(live.bdl_game_id)] : null
                               const isLoadingLineup = lineupsLoading && bdlLineup === undefined
 
                               const ordinal = (n: number) =>
@@ -1213,6 +1282,7 @@ export default function DugoutPage() {
                                   entries: typeof bdlLineup.away,
                                   teamCode: string,
                                   source: 'official' | 'previous_game' | 'none' | undefined,
+                                  teamPitcher: string | null,
                                 ) => {
                                   const batters = entries.filter((e) => e.batting_order != null && e.batting_order > 0)
                                   return (
@@ -1220,6 +1290,13 @@ export default function DugoutPage() {
                                       <div className="pg-lineupTeamTitle">
                                         {teamCode}
                                         {source === 'previous_game' ? <span className="pg-lineupBadge">Projected</span> : null}
+                                      </div>
+                                      <div className="pg-lineupPitcherRow pg-lineupRow pg-lineupRow--pitcher">
+                                        <span className="pg-lineupOrder">SP</span>
+                                        <span className="pg-lineupPos">P</span>
+                                        <span className="pg-lineupName pg-lineupName--plain">{teamPitcher ?? '—'}</span>
+                                        <span className="pg-lineupProj">Pitcher</span>
+                                        <span style={{ width: 32 }} />
                                       </div>
                                       {batters.map((p, idx) => {
                                         const proj = p.stat_player_id
@@ -1263,8 +1340,18 @@ export default function DugoutPage() {
                                 }
                                 return (
                                   <div className="pg-lineupGrid" style={{ marginTop: 12 }}>
-                                    {renderBdlTeam(bdlLineup.away, g.awayTeam, bdlLineup.away_source)}
-                                    {renderBdlTeam(bdlLineup.home, g.homeTeam, bdlLineup.home_source)}
+                                    {renderBdlTeam(
+                                      bdlLineup.away,
+                                      g.awayTeam,
+                                      bdlLineup.away_source,
+                                      bdlPitchers?.home ?? bdlLineup.home_pitcher?.full_name ?? homeTop?.opponentPitcher ?? null,
+                                    )}
+                                    {renderBdlTeam(
+                                      bdlLineup.home,
+                                      g.homeTeam,
+                                      bdlLineup.home_source,
+                                      bdlPitchers?.away ?? bdlLineup.away_pitcher?.full_name ?? awayTop?.opponentPitcher ?? null,
+                                    )}
                                   </div>
                                 )
                               }
@@ -1292,9 +1379,16 @@ export default function DugoutPage() {
                                 )
                               }
 
-                              const renderProjTeam = (lineup: typeof awayLineup, teamCode: string) => (
+                              const renderProjTeam = (lineup: typeof awayLineup, teamCode: string, teamPitcher: string | null) => (
                                 <div className="pg-lineupTeam">
                                   <div className="pg-lineupTeamTitle">{teamCode} <span className="pg-lineupBadge">Projected</span></div>
+                                  <div className="pg-lineupPitcherRow pg-lineupRow pg-lineupRow--pitcher">
+                                    <span className="pg-lineupOrder">SP</span>
+                                    <span className="pg-lineupPos">P</span>
+                                    <span className="pg-lineupName pg-lineupName--plain">{teamPitcher ?? '—'}</span>
+                                    <span className="pg-lineupProj">Pitcher</span>
+                                    <span style={{ width: 32 }} />
+                                  </div>
                                   {lineup.map((p, idx) => {
                                     const hasPick = Object.prototype.hasOwnProperty.call(pickState, p.playerId)
                                     const isHomer = didPlayerHomer(p.name, homerHitters)
@@ -1322,8 +1416,16 @@ export default function DugoutPage() {
 
                               return (
                                 <div className="pg-lineupGrid" style={{ marginTop: 12 }}>
-                                  {renderProjTeam(awayLineup, g.awayTeam)}
-                                  {renderProjTeam(homeLineup, g.homeTeam)}
+                                  {renderProjTeam(
+                                    awayLineup,
+                                    g.awayTeam,
+                                    probablePitchers[String(live?.bdl_game_id ?? g.gameId)]?.home ?? homeTop?.opponentPitcher ?? null,
+                                  )}
+                                  {renderProjTeam(
+                                    homeLineup,
+                                    g.homeTeam,
+                                    probablePitchers[String(live?.bdl_game_id ?? g.gameId)]?.away ?? awayTop?.opponentPitcher ?? null,
+                                  )}
                                 </div>
                               )
                             })()}

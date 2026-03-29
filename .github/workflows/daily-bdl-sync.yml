@@ -9,13 +9,13 @@ on:
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - name: Trigger daily sync
         run: |
           curl -sf -X POST "${{ secrets.API_BASE_URL }}/bdl/sync/daily" \
             -H "Content-Type: application/json" \
-            --max-time 120
+            --max-time 900
         env:
           API_BASE_URL: ${{ secrets.API_BASE_URL }}
 

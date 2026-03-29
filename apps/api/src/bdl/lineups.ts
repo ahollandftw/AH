@@ -9,12 +9,21 @@ export type TeamLineupPlayer = {
   batting_order: number | null
 }
 
+export type TeamPitcherInfo = {
+  bdl_player_id: number | null
+  stat_player_id: string | null
+  full_name: string | null
+  position: string | null
+}
+
 export type TeamLineupSource = 'official' | 'previous_game' | 'none'
 
 export type GameLineupResult = {
   game_id: number | null
   home: TeamLineupPlayer[]
   away: TeamLineupPlayer[]
+  home_pitcher: TeamPitcherInfo | null
+  away_pitcher: TeamPitcherInfo | null
   home_source: TeamLineupSource
   away_source: TeamLineupSource
 }
@@ -202,6 +211,19 @@ function mapRawLineupEntries(
     .sort((a, b) => orderValue(a.batting_order) - orderValue(b.batting_order))
 }
 
+function firstPitcher(rows: TeamLineupPlayer[]): TeamPitcherInfo | null {
+  const pitcher =
+    rows.find((r) => String(r.position ?? '').toUpperCase() === 'P') ??
+    rows.find((r) => r.batting_order == null)
+  if (!pitcher) return null
+  return {
+    bdl_player_id: pitcher.bdl_player_id,
+    stat_player_id: pitcher.stat_player_id,
+    full_name: pitcher.full_name,
+    position: pitcher.position,
+  }
+}
+
 async function mapRawLineup(
   sb: SupabaseClient,
   entries: RawLineupEntry[],
@@ -344,6 +366,8 @@ export async function getBestLineupForGame(
     game_id: game?.bdl_game_id ?? args.gameId ?? null,
     home,
     away,
+    home_pitcher: firstPitcher(homeOfficial) ?? firstPitcher(home),
+    away_pitcher: firstPitcher(awayOfficial) ?? firstPitcher(away),
     home_source: batterCount(homeOfficial) >= 9 ? 'official' : home.length ? 'previous_game' : 'none',
     away_source: batterCount(awayOfficial) >= 9 ? 'official' : away.length ? 'previous_game' : 'none',
   }
@@ -381,6 +405,8 @@ export async function getBestLineupsForDate(
       game_id: game.bdl_game_id,
       home,
       away,
+      home_pitcher: firstPitcher(homeOfficial) ?? firstPitcher(home),
+      away_pitcher: firstPitcher(awayOfficial) ?? firstPitcher(away),
       home_source: batterCount(homeOfficial) >= 9 ? 'official' : home.length ? 'previous_game' : 'none',
       away_source: batterCount(awayOfficial) >= 9 ? 'official' : away.length ? 'previous_game' : 'none',
     }

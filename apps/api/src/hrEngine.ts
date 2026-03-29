@@ -10,7 +10,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { getServiceClient } from './supabase.js'
 import { config } from './config.js'
 import { bdlFetch } from './bdl/client.js'
-import { getBestLineupForGame, getResolvedGamesForDate } from './bdl/lineups.js'
+import { getBestLineupForGame, getBestLineupsForDate, getResolvedGamesForDate, type GameLineupResult } from './bdl/lineups.js'
 import { listCachedWeatherForDate, syncWeatherForDate } from './weather/cache.js'
 import {
   getBallparkForHomeTeam,
@@ -228,40 +228,21 @@ async function fetchMaxBattingYear(sb: SupabaseClient): Promise<number | null> {
 
 /* ─── BDL lineup + probable pitcher helpers ──────────────────────── */
 
-type BdlProbablePitcherEntry = {
-  game_id: number
-  home_probable_pitcher?: { id: number; full_name: string } | null
-  away_probable_pitcher?: { id: number; full_name: string } | null
-}
-
-function shiftIsoDate(dateIso: string, days: number): string {
-  const d = new Date(`${dateIso}T12:00:00Z`)
-  d.setUTCDate(d.getUTCDate() + days)
-  return d.toISOString().slice(0, 10)
-}
-
 async function fetchBdlProbablePitchers(
   sb: SupabaseClient,
   date: string,
 ): Promise<Map<number, { home: number | null; away: number | null }>> {
   const map = new Map<number, { home: number | null; away: number | null }>()
-  const resolvedGames = await getResolvedGamesForDate(sb, date)
-  const validGameIds = new Set(resolvedGames.map((g) => Number(g.bdl_game_id)))
-  if (!validGameIds.size) return map
-
-  for (const d of [date, shiftIsoDate(date, -1), shiftIsoDate(date, 1)]) {
-    try {
-      const res = await bdlFetch<{ data?: BdlProbablePitcherEntry[] }>('/mlb/v1/probable_pitchers', { 'dates[]': d })
-      for (const e of res.data ?? []) {
-        if (!validGameIds.has(Number(e.game_id))) continue
-        map.set(e.game_id, {
-          home: e.home_probable_pitcher?.id ?? null,
-          away: e.away_probable_pitcher?.id ?? null,
-        })
-      }
-    } catch (e) {
-      console.warn('[hr-engine] probable pitchers fetch failed:', e)
+  try {
+    const lineups = await getBestLineupsForDate(sb, date)
+    for (const [gameId, lineup] of Object.entries(lineups) as Array<[string, GameLineupResult]>) {
+      map.set(Number(gameId), {
+        home: lineup.home_pitcher?.bdl_player_id ?? null,
+        away: lineup.away_pitcher?.bdl_player_id ?? null,
+      })
     }
+  } catch (e) {
+    console.warn('[hr-engine] lineup pitcher fetch failed:', e)
   }
   return map
 }
