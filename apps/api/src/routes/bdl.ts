@@ -946,18 +946,37 @@ export function registerBdlRoutes(app: Express) {
       const date = String(req.query.date ?? '').trim()
       if (!date) { res.status(400).json({ error: 'date required' }); return }
 
+      type BdlProbablePitcherEntry = {
+        game_id: number
+        home_probable_pitcher?: { id: number; full_name: string } | null
+        away_probable_pitcher?: { id: number; full_name: string } | null
+      }
+      type BdlProbablePitchersResponse = { data?: BdlProbablePitcherEntry[] }
+
       const sb = getServiceClient()
-      const lineups = await getBestLineupsForDate(sb, date)
-      if (!Object.keys(lineups).length) {
+      const resolvedGames = await getResolvedGamesForDate(sb, date)
+      const validGameIds = new Set(resolvedGames.map((g) => Number(g.bdl_game_id)))
+      if (!validGameIds.size) {
         res.json({ data: {} })
         return
       }
 
+      let entries: BdlProbablePitcherEntry[] = []
+      for (const d of [date, shiftIsoDate(date, -1), shiftIsoDate(date, 1)]) {
+        try {
+          const raw = await bdlFetch<BdlProbablePitchersResponse>('/mlb/v1/probable_pitchers', { 'dates[]': d })
+          entries.push(...(raw?.data ?? []))
+        } catch {
+          // ignore split-date misses from BDL and keep scanning adjacent days
+        }
+      }
+
       const out: Record<number, { home: string | null; away: string | null }> = {}
-      for (const [gameId, lineup] of Object.entries(lineups)) {
-        out[Number(gameId)] = {
-          home: lineup.home_pitcher?.full_name ?? null,
-          away: lineup.away_pitcher?.full_name ?? null,
+      for (const e of entries) {
+        if (!validGameIds.has(Number(e.game_id))) continue
+        out[e.game_id] = {
+          home: e.home_probable_pitcher?.full_name ?? null,
+          away: e.away_probable_pitcher?.full_name ?? null,
         }
       }
       res.json({ data: out })

@@ -378,6 +378,14 @@ body,
   margin: 10px 0 10px;
 }
 
+.pg-searchWrap {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: min(100%, 290px);
+}
+
 .pg-label {
   color: color-mix(in srgb, var(--color-secondary) 80%, transparent);
   font-size: 0.78rem;
@@ -388,7 +396,8 @@ body,
 
 .pg-date,
 .acc-select,
-.wl-input {
+.wl-input,
+.pg-input {
   background: linear-gradient(
     to bottom,
     color-mix(in srgb, var(--color-surface) 82%, transparent),
@@ -404,9 +413,15 @@ body,
 
 .pg-date:focus,
 .acc-select:focus,
-.wl-input:focus {
+.wl-input:focus,
+.pg-input:focus {
   border-color: var(--color-primary);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 28%, transparent);
+}
+
+.pg-input--search {
+  width: 100%;
+  min-width: 220px;
 }
 
 /* Friends — add-a-friend panel (obvious entry point) */
@@ -838,14 +853,29 @@ body,
     );
 }
 
+.pg-card--projection:hover,
+.pg-card--projection:focus-visible {
+  border-color: rgba(255, 255, 255, 0.96);
+}
+
 .pg-card--projection-hit {
   border-color: rgba(70, 255, 170, 0.92);
   box-shadow: inset 0 0 0 1px rgba(70, 255, 170, 0.16);
 }
 
+.pg-card--projection-hit:hover,
+.pg-card--projection-hit:focus-visible {
+  border-color: rgba(70, 255, 170, 1);
+}
+
 .pg-card--projection-miss {
   border-color: rgba(255, 100, 100, 0.92);
   box-shadow: inset 0 0 0 1px rgba(255, 100, 100, 0.12);
+}
+
+.pg-card--projection-miss:hover,
+.pg-card--projection-miss:focus-visible {
+  border-color: rgba(255, 120, 120, 1);
 }
 
 .pg-card--stack {

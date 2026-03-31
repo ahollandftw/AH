@@ -9,12 +9,25 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      API_BASE_URL: ${{ vars.API_BASE_URL || secrets.API_BASE_URL }}
     steps:
+      - name: Validate API base URL
+        run: |
+          if [ -z "$API_BASE_URL" ]; then
+            echo "API_BASE_URL is not configured in GitHub Actions vars or secrets."
+            exit 1
+          fi
+          case "$API_BASE_URL" in
+            http://*|https://*) ;;
+            *)
+              echo "API_BASE_URL must be a full http(s) URL, got: $API_BASE_URL"
+              exit 1
+              ;;
+          esac
       - name: Refresh projections for games starting within 60 minutes
         run: |
-          curl -sf -X POST "${{ secrets.API_BASE_URL }}/bdl/sync/projections/upcoming" \
+          curl -sf -X POST "$API_BASE_URL/bdl/sync/projections/upcoming" \
             -H "Content-Type: application/json" \
             -d '{"window_minutes":60}' \
             --max-time 120
-        env:
-          API_BASE_URL: ${{ secrets.API_BASE_URL }}

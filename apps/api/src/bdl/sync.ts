@@ -508,21 +508,9 @@ export async function syncMatchupsForTodayGames(): Promise<{ synced: number }> {
 /* ─── 7. Full daily sync (called at 10 AM CT) ────────────────────── */
 
 export async function runDailySync(): Promise<Record<string, unknown>> {
-  const errors: string[] = []
-  const step = async <T>(label: string, fn: () => Promise<T>, fallback: T): Promise<T> => {
-    try {
-      return await fn()
-    } catch (e) {
-      const msg = e instanceof Error ? (e.stack ?? e.message) : String(e)
-      console.error(`[daily-sync] ${label} failed:`, e)
-      errors.push(`${label}: ${msg}`)
-      return fallback
-    }
-  }
-
-  const players = await step('syncActivePlayers', () => syncActivePlayers(), { synced: 0, matched: 0 })
-  const games = await step('syncGames', () => syncGames(), { synced: 0, active: 0 })
-  const seasonStats = await step('syncSeasonStats', () => syncSeasonStats(2026), { synced: 0 })
+  const players = await syncActivePlayers()
+  const games = await syncGames()
+  const seasonStats = await syncSeasonStats(2026)
 
   // Sync props for each game today
   const today = todayET()
@@ -533,23 +521,21 @@ export async function runDailySync(): Promise<Record<string, unknown>> {
     .eq('date', today)
   let propsTotal = 0
   for (const g of todayGames ?? []) {
-    const r = await step(`syncPlayerProps(${g.bdl_game_id})`, () => syncPlayerProps(g.bdl_game_id), { synced: 0 })
+    const r = await syncPlayerProps(g.bdl_game_id)
     propsTotal += r.synced
   }
 
   // Bulk BvP matchup sync for all today's batters
-  const matchups = await step('syncMatchupsForTodayGames', () => syncMatchupsForTodayGames(), { synced: 0 })
+  const matchups = await syncMatchupsForTodayGames()
 
   // Run the HR projection engine and persist results for fast frontend reads
   let projections: { computed: number; saved: number } = { computed: 0, saved: 0 }
-  projections = await step(
-    'runAndSaveProjections',
-    async () => {
-      const { runAndSaveProjections } = await import('../hrEngine.js')
-      return runAndSaveProjections(today)
-    },
-    projections,
-  )
+  try {
+    const { runAndSaveProjections } = await import('../hrEngine.js')
+    projections = await runAndSaveProjections(today)
+  } catch (e) {
+    console.error('[daily-sync] HR projection engine failed:', e)
+  }
 
-  return { ok: errors.length === 0, errors, players, games, seasonStats, propsTotal, matchups, projections }
+  return { players, games, seasonStats, propsTotal, matchups, projections }
 }

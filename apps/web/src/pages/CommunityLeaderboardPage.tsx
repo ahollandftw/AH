@@ -18,8 +18,7 @@ type UserPickRow = {
 }
 
 function todayIso(): string {
-  const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }))
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  return new Date().toISOString().slice(0, 10)
 }
 
 export default function CommunityLeaderboardPage() {
@@ -32,24 +31,20 @@ export default function CommunityLeaderboardPage() {
   const [selectedPicks, setSelectedPicks] = useState<UserPickRow[]>([])
 
   useEffect(() => {
-    const base = import.meta.env.VITE_API_BASE_URL ?? ''
-    if (!base) return
+    if (!supabase) return
     void (async () => {
       setLoading(true)
       setErr(null)
-      try {
-        const res = await fetch(`${base}/leaderboard/picks`)
-        if (!res.ok) throw new Error(await res.text())
-        const json = (await res.json()) as { rows?: LeaderboardRow[] }
-        setRows(json.rows ?? [])
-      } catch (error) {
-        setErr(error instanceof Error ? error.message : String(error))
+      const { data, error } = await supabase.rpc('user_pick_leaderboard', { limit_rows: 200 })
+      if (error) {
+        setErr(error.message)
         setRows([])
-      } finally {
-        setLoading(false)
+      } else {
+        setRows((data ?? []) as LeaderboardRow[])
       }
+      setLoading(false)
     })()
-  }, [])
+  }, [supabase])
 
   useEffect(() => {
     if (!supabase || !selectedUserId) {

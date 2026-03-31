@@ -171,6 +171,7 @@ export default function ProjectionsPage() {
   const [probablePitchers, setProbablePitchers] = useState<Record<string, { home: string | null; away: string | null }>>({})
   const [lineupByGame, setLineupByGame] = useState<Record<string, GameLineup | null>>({})
   const [playerOdds, setPlayerOdds] = useState<Record<string, PlayerBookOdds | null>>({})
+  const [playerQuery, setPlayerQuery] = useState(searchParams.get('q') ?? '')
   const [displayDate, setDisplayDate] = useState(
     searchParams.get('date') ?? getAppDisplayDateIso(),
   )
@@ -210,7 +211,7 @@ export default function ProjectionsPage() {
       getGamesForDate(supabase, displayDate),
       supabase
         .from('bdl_games')
-        .select('bdl_game_id,date,start_time_utc,home_team_abbrev,away_team_abbrev,status')
+        .select('bdl_game_id,date,start_time_utc,home_team_abbrev,away_team_abbrev,status,scoring_summary')
         .gte('date', prevIso)
         .lte('date', nextIso),
     ])
@@ -235,7 +236,7 @@ export default function ProjectionsPage() {
       const nextIso = nextDate.toISOString().slice(0, 10)
       void supabase
         .from('bdl_games')
-        .select('bdl_game_id,date,start_time_utc,home_team_abbrev,away_team_abbrev,status')
+        .select('bdl_game_id,date,start_time_utc,home_team_abbrev,away_team_abbrev,status,scoring_summary')
         .gte('date', prevIso)
         .lte('date', nextIso)
         .then(({ data }) => {
@@ -287,8 +288,12 @@ export default function ProjectionsPage() {
     }
     if (selectedTeam) out = out.filter((r) => (normalizeTeamCode(r.team ?? '') ?? '').toUpperCase() === selectedTeam)
     if (selectedPlayerId) out = out.filter((r) => r.playerId === selectedPlayerId)
+    if (playerQuery.trim()) {
+      const q = normalizePlayerName(playerQuery)
+      out = out.filter((r) => normalizePlayerName(r.name).includes(q))
+    }
     return out
-  }, [displayDate, games, hasSubscription, rows, selectedPlayerId, selectedTeam])
+  }, [displayDate, games, hasSubscription, playerQuery, rows, selectedPlayerId, selectedTeam])
 
   useEffect(() => {
     if (!supabase || !games.length || !filteredRows.length) {
@@ -408,16 +413,16 @@ export default function ProjectionsPage() {
   )
 
   const gameResultByMatchup = useMemo(() => {
-    const out = new Map<string, { started: boolean; homerHitters: Set<string> }>()
+    const out = new Map<string, { completed: boolean; homerHitters: Set<string> }>()
     for (const game of liveGames) {
       const home = (normalizeTeamCode(game.home_team_abbrev) ?? game.home_team_abbrev ?? '').toUpperCase()
       const away = (normalizeTeamCode(game.away_team_abbrev) ?? game.away_team_abbrev ?? '').toUpperCase()
       if (!home || !away) continue
       const status = String(game.status ?? '').toLowerCase()
-      const started = !/scheduled|pre|not started/.test(status)
+      const completed = /final|completed|postponed|canceled/.test(status)
       const homerHitters = extractHomerHitters(game.scoring_summary)
-      out.set(`${home}|${away}`, { started, homerHitters })
-      out.set(`${away}|${home}`, { started, homerHitters })
+      out.set(`${home}|${away}`, { completed, homerHitters })
+      out.set(`${away}|${home}`, { completed, homerHitters })
     }
     return out
   }, [liveGames])
@@ -664,6 +669,17 @@ export default function ProjectionsPage() {
             <option key={y} value={y}>{y}</option>
           ))}
         </select>
+        <div className="pg-searchWrap">
+          <label htmlFor="proj-search" className="pg-label">Player Search</label>
+          <input
+            id="proj-search"
+            className="pg-input pg-input--search"
+            type="text"
+            value={playerQuery}
+            placeholder="Search player..."
+            onChange={(e) => setPlayerQuery(e.target.value)}
+          />
+        </div>
         {(selectedTeam || selectedPlayerId) && (
           <button
             type="button"
@@ -680,10 +696,7 @@ export default function ProjectionsPage() {
         )}
       </div>
       <p className="pg-sub">
-        {displayDate} &mdash; {games.length} game{games.length !== 1 ? 's' : ''} &mdash;{' '}
-        {filteredRows.length && filteredRows[0]?.source === 'hr_model'
-          ? 'Matchup-based HR model — grouped by tier.'
-          : 'Daily launch — grouped by tier.'}
+        {displayDate} &mdash; {games.length} game{games.length !== 1 ? 's' : ''} &mdash; Matchup-based HR model — grouped by tier.
       </p>
       {!hasSubscription ? (
         <p className="pg-sub">Free preview: one random game. Subscribe to unlock full projections.</p>
@@ -731,12 +744,11 @@ export default function ProjectionsPage() {
                 const team = (normalizeTeamCode(r.team ?? '') ?? '').toUpperCase()
                 const opp = (displayOpponentTeam(r) ?? '').toUpperCase()
                 const gameResult = team && opp ? gameResultByMatchup.get(`${team}|${opp}`) ?? null : null
-                const playerKey = normalizePlayerName(r.name)
-                const didHomer = !!gameResult?.homerHitters.has(playerKey)
+                const didHomer = gameResult ? gameResult.homerHitters.has(normalizePlayerName(r.name)) : false
                 const projectionStateClass =
                   didHomer
                     ? 'pg-card--projection-hit'
-                    : gameResult?.started
+                    : gameResult?.completed
                       ? 'pg-card--projection-miss'
                       : 'pg-card--projection-pending'
                 return (

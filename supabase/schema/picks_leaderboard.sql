@@ -117,34 +117,12 @@ as $$
     au.id as user_id,
     coalesce(nullif(us.display_name, ''), split_part(au.email, '@', 1)) as display_name,
     us.avatar_url,
-    coalesce(
-      sum(
-        case
-          when udp.hit is true then 1
-          when udp.hit is false then 0
-          when coalesce(psd.home_runs, 0) > 0 then 1
-          else 0
-        end
-      ),
-      0
-    )::bigint as hits,
+    coalesce(sum(case when coalesce(psd.home_runs, 0) > 0 then 1 else 0 end), 0)::bigint as hits,
     count(udp.player_id)::bigint as total_picks,
     case
       when count(udp.player_id) = 0 then 0::numeric
       else round(
-        (
-          coalesce(
-            sum(
-              case
-                when udp.hit is true then 1
-                when udp.hit is false then 0
-                when coalesce(psd.home_runs, 0) > 0 then 1
-                else 0
-              end
-            ),
-            0
-          )::numeric / count(udp.player_id)::numeric
-        ) * 100,
+        (coalesce(sum(case when coalesce(psd.home_runs, 0) > 0 then 1 else 0 end), 0)::numeric / count(udp.player_id)::numeric) * 100,
         2
       )
     end as hit_pct
@@ -204,11 +182,7 @@ as $$
     udp.player_id,
     p.name as player_name,
     p.team,
-    case
-      when udp.hit is true then true
-      when udp.hit is false then false
-      else coalesce(psd.home_runs, 0) > 0
-    end as was_hit
+    coalesce(psd.home_runs, 0) > 0 as was_hit
   from allowed
   join public.user_daily_picks udp
     on udp.user_id = target_user_id

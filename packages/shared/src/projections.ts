@@ -466,7 +466,9 @@ export async function listDailyHrProjections(
   const date = dateIso ?? getAppDisplayDateIso()
   const fromDaily = await listDailyHrProjectionsFromTable(supabase, date)
   if (fromDaily.length > 0 && !hasBrokenCapDistribution(fromDaily)) return fromDaily
-  return calculateMatchupProjections(supabase, date)
+  const fromCalc = await calculateMatchupProjections(supabase, date)
+  if (fromCalc.length > 0) return fromCalc
+  return []
 }
 
 export async function mergedHrProbabilityMapForDate(
