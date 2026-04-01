@@ -913,6 +913,7 @@ export default function ProjectionsPage() {
               ) : (
                 <>
                 {(() => {
+                  const modalPitcher = matchupData?.pitcher_name ?? displayOpponentPitcher(matchupFor).name
                   const batterGreen = {
                     iso: matchupData?.batter_iso != null && Number(matchupData.batter_iso) >= 0.25,
                     barrel: matchupData?.batter_barrel != null && Number(matchupData.batter_barrel) >= 10,
@@ -1117,11 +1118,11 @@ export default function ProjectionsPage() {
                             </div>
                           ) : null}
 
-                          {matchupData?.pitcher_name ? (
+                          {modalPitcher ? (
                             <div className="pg-matchupGrid">
                               <div>
                                 <div className="pg-label">Pitcher</div>
-                                <div className="pg-matchupName">{matchupData.pitcher_name}</div>
+                                <div className="pg-matchupName">{modalPitcher}</div>
                                 <div className="pg-small">ERA: {matchupData.pitcher_era ?? '—'} &bull; K: {matchupData.pitcher_k ?? '—'} &bull; WHIP: {matchupData.pitcher_whip ?? '—'}</div>
                               </div>
                               <div>

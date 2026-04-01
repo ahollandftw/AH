@@ -1544,12 +1544,20 @@ export default function DugoutPage() {
       {matchupFor ? (
         <div className="pg-modalBackdrop" onClick={() => { setMatchupFor(null); setMatchupTab('default') }}>
           <div className="pg-modal pg-modal--matchup" onClick={(e) => e.stopPropagation()}>
+            {(() => {
+              const modalPitcherName =
+                matchupData?.pitcher_name ??
+                displayOpponentPitcher(matchupFor) ??
+                matchupFor.opponentPitcher ??
+                matchupFor.opponent
+              return (
+                <>
             {/* Header */}
             <div className="pg-modalHead">
               <h3 className="pg-modalTitle">
                 {matchupFor.name}
                 <span className="pg-modalVs"> vs </span>
-                {matchupData?.pitcher_name ?? (matchupFor.opponentPitcher ?? matchupFor.opponent)}
+                {modalPitcherName}
               </h3>
               <button type="button" className="pg-clearBtn" onClick={() => { setMatchupFor(null); setMatchupTab('default') }}>✕ Close</button>
             </div>
@@ -1565,11 +1573,11 @@ export default function DugoutPage() {
                       className="pg-avatar pg-avatar--lg"
                       style={{ background: 'linear-gradient(140deg, #334155, #1e293b)', color: '#94a3b8' }}
                     >
-                      {initials(matchupData?.pitcher_name ?? matchupFor.opponentPitcher)}
+                      {initials(modalPitcherName)}
                     </div>
                     <div className="pg-matchupPlayerInfo">
                       <div className="pg-matchupRole">Pitcher</div>
-                      <div className="pg-matchupPlayerName">{matchupData?.pitcher_name ?? matchupFor.opponentPitcher ?? '—'}</div>
+                      <div className="pg-matchupPlayerName">{modalPitcherName ?? '—'}</div>
                     </div>
                   </div>
                   <div className="pg-matchupVsDivider">VS</div>
@@ -1841,6 +1849,9 @@ export default function DugoutPage() {
                 )}
               </div>
             )}
+                </>
+              )
+            })()}
           </div>
         </div>
       ) : null}

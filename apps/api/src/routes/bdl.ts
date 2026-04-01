@@ -368,7 +368,8 @@ export function registerBdlRoutes(app: Express) {
     try {
       const statPlayerId = String(req.query.player_id ?? '').trim()
       const opponentTeam = canonTeam(String(req.query.opponent_team ?? ''))
-      const pitcherNameQ = String(req.query.pitcher_name ?? '').trim().toLowerCase()
+      const pitcherNameRaw = String(req.query.pitcher_name ?? '').trim()
+      const pitcherNameQ = pitcherNameRaw.toLowerCase()
       const season = Number(req.query.season ?? 2026) || 2026
       if (!statPlayerId || !opponentTeam) {
         res.status(400).json({ error: 'player_id and opponent_team required' })
@@ -447,8 +448,8 @@ export function registerBdlRoutes(app: Express) {
         .filter((r) => r.pitcher_team === opponentTeam)
         .sort((a, b) => b.at_bats - a.at_bats)
 
-      const requestedPitcher = pitcherNameQ
-        ? await resolveBdlPitcherByNameAndTeam(sb, pitcherNameQ, opponentTeam)
+      const requestedPitcher = pitcherNameRaw
+        ? await resolveBdlPitcherByNameAndTeam(sb, pitcherNameRaw, opponentTeam)
         : null
       const byName = pitcherNameQ
         ? candidates.find((c) => {
@@ -472,6 +473,20 @@ export function registerBdlRoutes(app: Express) {
               slg: null,
               ops: null,
             }
+          : pitcherNameRaw
+            ? {
+                pitcher_bdl_id: null,
+                pitcher_name: pitcherNameRaw,
+                pitcher_team: opponentTeam,
+                at_bats: 0,
+                hits: 0,
+                home_runs: 0,
+                strikeouts: 0,
+                avg: null,
+                obp: null,
+                slg: null,
+                ops: null,
+              }
           : null) ??
         candidates[0] ??
         null

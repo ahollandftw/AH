@@ -20,7 +20,7 @@ function Layout() {
   const navigate = useNavigate()
   const { session, supabase, waiverAccepted } = useWebAuth()
   const [bootReady, setBootReady] = useState(false)
-  const [bootProgress, setBootProgress] = useState(8)
+  const [bootProgress, setBootProgress] = useState(0)
   const [bootMessageIdx, setBootMessageIdx] = useState(0)
   const [profileName, setProfileName] = useState<string | null>(null)
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
@@ -32,6 +32,7 @@ function Layout() {
     'BYE BYE BASEBALL on deck...',
     'Warming up the long balls...',
   ]
+  const bootSequence = useRef<string[]>([])
   const fullLinks = [
     ['/dugout', 'Scoreboard', '⚾'],
     ['/projections', 'Projections', '📈'],
@@ -70,13 +71,25 @@ function Layout() {
   useEffect(() => {
     const today = getAppDisplayDateIso()
     const base = import.meta.env.VITE_API_BASE_URL ?? ''
+    const maxBootMs = 10000
     const startedAt = Date.now()
+    const shuffled = [...bootMessages].sort(() => Math.random() - 0.5).slice(0, 2)
+    bootSequence.current = shuffled.length === 2 ? shuffled : bootMessages.slice(0, 2)
+    setBootMessageIdx(0)
+    setBootProgress(0)
     const progressTimer = window.setInterval(() => {
-      setBootProgress((value) => Math.min(value + 9, 92))
-    }, 180)
-    const messageTimer = window.setInterval(() => {
-      setBootMessageIdx((value) => (value + 1) % bootMessages.length)
-    }, 1200)
+      const elapsed = Date.now() - startedAt
+      setBootProgress(Math.min(100, (elapsed / maxBootMs) * 100))
+      if (elapsed >= 5000) setBootMessageIdx(1)
+    }, 100)
+    const finishBoot = () => {
+      window.clearInterval(progressTimer)
+      setBootProgress(100)
+      setBootReady(true)
+    }
+    const timeoutId = window.setTimeout(() => {
+      finishBoot()
+    }, maxBootMs)
     const warmup = Promise.allSettled([
       base ? fetch(`${base}/bdl/probable-pitchers?date=${today}`) : Promise.resolve(null),
       base ? fetch(`${base}/bdl/lineups/slate?date=${encodeURIComponent(today)}`) : Promise.resolve(null),
@@ -84,19 +97,14 @@ function Layout() {
       supabase ? supabase.from('bdl_games').select('bdl_game_id').eq('date', today).limit(1) : Promise.resolve(null),
     ])
     void warmup.finally(() => {
-      const remaining = Math.max(0, 1400 - (Date.now() - startedAt))
-      window.setTimeout(() => {
-        window.clearInterval(progressTimer)
-        window.clearInterval(messageTimer)
-        setBootProgress(100)
-        window.setTimeout(() => setBootReady(true), 180)
-      }, remaining)
+      window.clearTimeout(timeoutId)
+      finishBoot()
     })
     return () => {
       window.clearInterval(progressTimer)
-      window.clearInterval(messageTimer)
+      window.clearTimeout(timeoutId)
     }
-  }, [bootMessages.length, supabase])
+  }, [supabase])
 
   useEffect(() => {
     if (!supabase || !session?.user.id) {
@@ -178,7 +186,7 @@ function Layout() {
           <div className="appBoot-logoFrame" style={{ ['--logo-url' as string]: `url("${appLogo}")` }}>
             <div className="appBoot-logoMask" aria-hidden="true" />
           </div>
-          <div className="appBoot-copy">{bootMessages[bootMessageIdx]}</div>
+          <div className="appBoot-copy">{bootSequence.current[bootMessageIdx] ?? bootMessages[bootMessageIdx] ?? bootMessages[0]}</div>
           <div className="appBoot-bar">
             <div className="appBoot-barFill" style={{ width: `${bootProgress}%` }} />
           </div>
