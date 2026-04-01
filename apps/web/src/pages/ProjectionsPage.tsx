@@ -261,26 +261,28 @@ export default function ProjectionsPage() {
   }, [supabase, displayDate])
 
   useEffect(() => {
-    if (projectionModelTab !== 'weighted') return
     const base = import.meta.env.VITE_API_BASE_URL ?? ''
-    if (!base) return
-    let cancelled = false
+    if (!base) {
+      setWeightedRows([])
+      return
+    }
+    const ac = new AbortController()
     setWeightedLoading(true)
-    void fetch(`${base}/bdl/projections/weighted?date=${encodeURIComponent(displayDate)}`)
+    void fetch(`${base}/bdl/projections/weighted?date=${encodeURIComponent(displayDate)}`, {
+      signal: ac.signal,
+    })
       .then((r) => (r.ok ? r.json() : null))
       .then((json: { rows?: DailyProjection[] } | null) => {
-        if (!cancelled) setWeightedRows(json?.rows ?? [])
+        if (!ac.signal.aborted) setWeightedRows(json?.rows ?? [])
       })
       .catch(() => {
-        if (!cancelled) setWeightedRows([])
+        if (!ac.signal.aborted) setWeightedRows([])
       })
       .finally(() => {
-        if (!cancelled) setWeightedLoading(false)
+        if (!ac.signal.aborted) setWeightedLoading(false)
       })
-    return () => {
-      cancelled = true
-    }
-  }, [displayDate, projectionModelTab])
+    return () => ac.abort()
+  }, [displayDate])
 
   useEffect(() => {
     if (!supabase) return
@@ -466,10 +468,9 @@ export default function ProjectionsPage() {
   }
 
   function displayOpponentPitcher(r: DailyProjection): { name: string | null; hand: string | null } {
-    if (r.opponentPitcher) return { name: r.opponentPitcher, hand: r.opponentPitcherHand ?? null }
     const team = (normalizeTeamCode(r.team ?? '') ?? '').toUpperCase()
     const opp = (parseOpponentTeam(r) ?? '').toUpperCase()
-    if (!team || !opp) return { name: null, hand: null }
+    if (!team || !opp) return { name: r.opponentPitcher ?? null, hand: r.opponentPitcherHand ?? null }
     const scheduleGame =
       games.find((g) => {
         const home = (normalizeTeamCode(g.homeTeam) ?? g.homeTeam).toUpperCase()
@@ -485,11 +486,11 @@ export default function ProjectionsPage() {
     const home = (normalizeTeamCode(scheduleGame?.homeTeam ?? liveGame?.home_team_abbrev ?? '') ?? '').toUpperCase()
     const away = (normalizeTeamCode(scheduleGame?.awayTeam ?? liveGame?.away_team_abbrev ?? '') ?? '').toUpperCase()
     const gameId = liveGame?.bdl_game_id ?? scheduleGame?.gameId ?? null
-    if (!home || !away) return { name: null, hand: null }
+    if (!home || !away) return { name: r.opponentPitcher ?? null, hand: r.opponentPitcherHand ?? null }
     const pitchers = matchupPitchersForTeams(gameId)
     return {
-      name: team === home ? pitchers.away : pitchers.home,
-      hand: null,
+      name: (team === home ? pitchers.away : pitchers.home) ?? r.opponentPitcher ?? null,
+      hand: r.opponentPitcherHand ?? null,
     }
   }
 
@@ -859,9 +860,6 @@ export default function ProjectionsPage() {
                     <span className="pg-matchup">
                       {(displayOpponentTeam(r) ?? '—').toUpperCase()} &bull; {displayPitcher.name ?? '—'}
                       {displayPitcher.hand ? ` (${displayPitcher.hand})` : ''}
-                    </span>
-                    <span className="pg-small">
-                      {(r.position ?? '—').toUpperCase()}
                     </span>
                   </div>
                   <div className="pg-right">

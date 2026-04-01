@@ -787,7 +787,7 @@ export async function runDailyProjections(
     const adjustedMatchupHrRate =
       pitchArsenalWeight != null
         ? matchupHrRate != null
-          ? matchupHrRate * clamp(1 + (pitchArsenalWeight * 0.10), 0.82, 1.22)
+          ? matchupHrRate * clamp(1 + (pitchArsenalWeight * 0.22), 0.68, 1.42)
           : null
         : matchupHrRate
     const adjustedZMatchup = zMatchup(adjustedMatchupHrRate)

@@ -1,5 +1,6 @@
 import { BrowserRouter, Link, Navigate, Outlet, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { useEffect, useRef, useState } from 'react'
+import { getAppDisplayDateIso } from '@kinetic/shared'
 import { WebAuthProvider } from './auth/WebAuthProvider.tsx'
 import { useWebAuth } from './auth/WebAuthProvider.tsx'
 import LeaderboardPage from './pages/LeaderboardPage.tsx'
@@ -18,21 +19,30 @@ function Layout() {
   const { pathname } = useLocation()
   const navigate = useNavigate()
   const { session, supabase, waiverAccepted } = useWebAuth()
+  const [bootReady, setBootReady] = useState(false)
+  const [bootProgress, setBootProgress] = useState(8)
+  const [bootMessageIdx, setBootMessageIdx] = useState(0)
   const [profileName, setProfileName] = useState<string | null>(null)
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
+  const bootMessages = [
+    'SANTA MARIA loading the bombs...',
+    'FIRST PITCH CRUSHING in progress...',
+    'BYE BYE BASEBALL on deck...',
+    'Warming up the long balls...',
+  ]
   const fullLinks = [
     ['/dugout', 'Scoreboard', '⚾'],
     ['/projections', 'Projections', '📈'],
-    ['/stats', 'Homer Tracking', <img src={hrIcon64} alt="" style={{ width: 18, height: 18, objectFit: 'contain' }} />],
+    ['/stats', 'Homers', <img src={hrIcon64} alt="" style={{ width: 18, height: 18, objectFit: 'contain' }} />],
     ['/community', 'Leaderboard', '🏆'],
     ['/wall', 'Wall of Bang', '💥'],
   ] as const
   const menuLinks = [
     ['/dugout', 'Scoreboard'],
     ['/projections', 'Projections'],
-    ['/stats', 'Homer Tracking'],
+    ['/stats', 'Homers'],
     ['/community', 'Leaderboard'],
     ['/wall', 'Wall of Bang'],
     ['/friends', 'Friends'],
@@ -48,7 +58,7 @@ function Layout() {
     const pageName =
       pathname === '/dugout' ? 'Scoreboard'
       : pathname === '/projections' ? 'Projections'
-      : pathname === '/stats' ? 'Homer Tracking'
+      : pathname === '/stats' ? 'Homers'
       : pathname === '/community' ? 'Leaderboard'
       : pathname === '/wall' ? 'Wall of Bang'
       : pathname === '/friends' ? 'Friends'
@@ -57,6 +67,37 @@ function Layout() {
       : 'Scoreboard'
     document.title = `AnalyticHustle | ${pageName}`
   }, [pathname])
+  useEffect(() => {
+    const today = getAppDisplayDateIso()
+    const base = import.meta.env.VITE_API_BASE_URL ?? ''
+    const startedAt = Date.now()
+    const progressTimer = window.setInterval(() => {
+      setBootProgress((value) => Math.min(value + 9, 92))
+    }, 180)
+    const messageTimer = window.setInterval(() => {
+      setBootMessageIdx((value) => (value + 1) % bootMessages.length)
+    }, 1200)
+    const warmup = Promise.allSettled([
+      base ? fetch(`${base}/bdl/probable-pitchers?date=${today}`) : Promise.resolve(null),
+      base ? fetch(`${base}/bdl/lineups/slate?date=${encodeURIComponent(today)}`) : Promise.resolve(null),
+      base ? fetch(`${base}/bdl/projections/weighted?date=${encodeURIComponent(today)}`) : Promise.resolve(null),
+      supabase ? supabase.from('bdl_games').select('bdl_game_id').eq('date', today).limit(1) : Promise.resolve(null),
+    ])
+    void warmup.finally(() => {
+      const remaining = Math.max(0, 1400 - (Date.now() - startedAt))
+      window.setTimeout(() => {
+        window.clearInterval(progressTimer)
+        window.clearInterval(messageTimer)
+        setBootProgress(100)
+        window.setTimeout(() => setBootReady(true), 180)
+      }, remaining)
+    })
+    return () => {
+      window.clearInterval(progressTimer)
+      window.clearInterval(messageTimer)
+    }
+  }, [bootMessages.length, supabase])
+
   useEffect(() => {
     if (!supabase || !session?.user.id) {
       setProfileName(null)
@@ -132,6 +173,17 @@ function Layout() {
 
   return (
     <div className="appRoot">
+      {!bootReady ? (
+        <div className="appBoot">
+          <div className="appBoot-logoFrame" style={{ ['--logo-url' as string]: `url("${appLogo}")` }}>
+            <div className="appBoot-logoMask" aria-hidden="true" />
+          </div>
+          <div className="appBoot-copy">{bootMessages[bootMessageIdx]}</div>
+          <div className="appBoot-bar">
+            <div className="appBoot-barFill" style={{ width: `${bootProgress}%` }} />
+          </div>
+        </div>
+      ) : null}
       <header className="topBanner" role="banner" aria-label="AnalyticHustle header">
         <div className="topBanner-side" ref={menuRef}>
           {!(session && !waiverAccepted) ? (

@@ -15,6 +15,9 @@ import { bdlFetch, bdlFetchAll, type BdlPlay, type BdlPlateAppearance } from '..
 import { buildHrEventEnrichment } from '../bdl/hrEventEnrichment.js'
 import { getBestLineupForGame, getBestLineupsForDate, getResolvedGamesForDate } from '../bdl/lineups.js'
 
+const weightedProjectionCache = new Map<string, { rows: unknown[]; cachedAt: number }>()
+const WEIGHTED_PROJECTION_CACHE_TTL_MS = 15 * 60 * 1000
+
 export function registerBdlRoutes(app: Express) {
   const normalizeName = (name: string): string =>
     name
@@ -95,11 +98,58 @@ export function registerBdlRoutes(app: Express) {
     )
     return match?.player_id ? String(match.player_id) : null
   }
+  const resolveBdlPitcherByNameAndTeam = async (
+    sb: ReturnType<typeof getServiceClient>,
+    fullName: string | null | undefined,
+    opponentTeam: string,
+  ): Promise<{ bdl_id: number | null; full_name: string | null; team_abbrev: string | null; stat_player_id: string | null } | null> => {
+    const raw = String(fullName ?? '').trim()
+    if (!raw || !opponentTeam) return null
+    const normalizedTarget = normalizeName(raw)
+    const targetVariants = new Set([
+      normalizedTarget,
+      normalizeName(raw.replace(/\s+/g, ', ')),
+    ])
+    const teamVariants = Array.from(
+      new Set([
+        opponentTeam,
+        opponentTeam === 'TBR' ? 'TB' : opponentTeam,
+        opponentTeam === 'WSN' ? 'WSH' : opponentTeam,
+      ]),
+    )
+    const { data } = await sb
+      .from('bdl_players')
+      .select('bdl_id,full_name,team_abbrev,stat_player_id,position')
+      .in('team_abbrev', teamVariants)
+      .limit(80)
+    const rows = (data ?? []).filter((row: any) => /^(P|SP|RP)$/i.test(String(row.position ?? '').trim()))
+    const exact = rows.find((row: any) => targetVariants.has(normalizeName(String(row.full_name ?? ''))))
+    if (exact) {
+      return {
+        bdl_id: Number(exact.bdl_id ?? 0) || null,
+        full_name: exact.full_name ?? null,
+        team_abbrev: exact.team_abbrev ?? null,
+        stat_player_id: exact.stat_player_id ?? null,
+      }
+    }
+    const loose = rows.find((row: any) => {
+      const candidate = normalizeName(String(row.full_name ?? ''))
+      return candidate.includes(normalizedTarget) || normalizedTarget.includes(candidate)
+    })
+    if (!loose) return null
+    return {
+      bdl_id: Number(loose.bdl_id ?? 0) || null,
+      full_name: loose.full_name ?? null,
+      team_abbrev: loose.team_abbrev ?? null,
+      stat_player_id: loose.stat_player_id ?? null,
+    }
+  }
   /* ── Daily sync (called by cron or manually) ─────────────────── */
 
   app.post('/bdl/sync/daily', async (_req, res) => {
     try {
       const result = await runDailySync()
+      weightedProjectionCache.clear()
       res.json({ ok: true, ...result })
     } catch (e) {
       res.status(500).json({ error: String(e) })
@@ -228,6 +278,7 @@ export function registerBdlRoutes(app: Express) {
       const { runAndSaveProjections } = await import('../hrEngine.js')
       const date = typeof req.body?.date === 'string' ? req.body.date : undefined
       const result = await runAndSaveProjections(date)
+      weightedProjectionCache.clear()
       res.json({ ok: true, ...result })
     } catch (e) {
       console.error('[bdl/sync/projections] failed:', e)
@@ -249,9 +300,16 @@ export function registerBdlRoutes(app: Express) {
 
   app.get('/bdl/projections/weighted', async (req, res) => {
     try {
-      const { runWeightedPitchArsenalProjections } = await import('../hrEngine.js')
       const date = typeof req.query?.date === 'string' ? req.query.date : undefined
+      const cacheKey = date ?? 'today'
+      const cached = weightedProjectionCache.get(cacheKey)
+      if (cached && (Date.now() - cached.cachedAt) < WEIGHTED_PROJECTION_CACHE_TTL_MS) {
+        res.json({ ok: true, rows: cached.rows, cached: true })
+        return
+      }
+      const { runWeightedPitchArsenalProjections } = await import('../hrEngine.js')
       const rows = await runWeightedPitchArsenalProjections(date)
+      weightedProjectionCache.set(cacheKey, { rows, cachedAt: Date.now() })
       res.json({ ok: true, rows })
     } catch (e) {
       console.error('[bdl/projections/weighted] failed:', e)
@@ -389,13 +447,34 @@ export function registerBdlRoutes(app: Express) {
         .filter((r) => r.pitcher_team === opponentTeam)
         .sort((a, b) => b.at_bats - a.at_bats)
 
+      const requestedPitcher = pitcherNameQ
+        ? await resolveBdlPitcherByNameAndTeam(sb, pitcherNameQ, opponentTeam)
+        : null
       const byName = pitcherNameQ
         ? candidates.find((c) => {
             const nm = String(c.pitcher_name ?? '').toLowerCase()
             return nm === pitcherNameQ || nm.includes(pitcherNameQ) || pitcherNameQ.includes(nm)
           }) ?? null
         : null
-      let best = byName ?? candidates[0] ?? null
+      let best =
+        byName ??
+        (requestedPitcher
+          ? {
+              pitcher_bdl_id: requestedPitcher.bdl_id,
+              pitcher_name: requestedPitcher.full_name,
+              pitcher_team: canonTeam(String(requestedPitcher.team_abbrev ?? opponentTeam)),
+              at_bats: 0,
+              hits: 0,
+              home_runs: 0,
+              strikeouts: 0,
+              avg: null,
+              obp: null,
+              slg: null,
+              ops: null,
+            }
+          : null) ??
+        candidates[0] ??
+        null
       if (!best) {
         const { data: oppTeamPlayer } = await sb
           .from('bdl_players')
@@ -438,6 +517,21 @@ export function registerBdlRoutes(app: Express) {
               })
               .filter((r) => r.pitcher_team === opponentTeam)
               .sort((a, b) => b.at_bats - a.at_bats)[0] ?? null
+          if (!best && requestedPitcher) {
+            best = {
+              pitcher_bdl_id: requestedPitcher.bdl_id,
+              pitcher_name: requestedPitcher.full_name,
+              pitcher_team: canonTeam(String(requestedPitcher.team_abbrev ?? opponentTeam)),
+              at_bats: 0,
+              hits: 0,
+              home_runs: 0,
+              strikeouts: 0,
+              avg: null,
+              obp: null,
+              slg: null,
+              ops: null,
+            }
+          }
         }
       }
       const [pitcherStatsRes, batterStatsRes] = await Promise.all([

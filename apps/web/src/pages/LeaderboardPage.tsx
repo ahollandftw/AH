@@ -17,7 +17,6 @@ type HrEventRow = {
   pitcher_home_away: string | null
   pitch_type: string | null
   distance: number | null
-  today_probability: number | null
   stat_player_id: string | null
 }
 
@@ -27,15 +26,10 @@ type HomersResponse = {
   count: number
   calendar_month?: string
   calendar_counts?: Record<string, number>
+  calendar_game_counts?: Record<string, number>
   events: HrEventRow[]
 }
-
 const apiBase = () => import.meta.env.VITE_API_BASE_URL ?? ''
-
-function fmtPct(x: number | null | undefined): string {
-  if (x == null || Number.isNaN(x)) return '—'
-  return `${(x * 100).toFixed(1)}%`
-}
 
 function buildMonthCells(monthIso: string): Array<{ iso: string | null; day: number | null }> {
   const [yearStr, monthStr] = monthIso.split('-')
@@ -68,6 +62,7 @@ export default function LeaderboardPage() {
   const [team, setTeam] = useState('')
   const [pitcher, setPitcher] = useState('')
   const [batter, setBatter] = useState('')
+  const [pitchType, setPitchType] = useState('')
   const [detailFor, setDetailFor] = useState<{ row: HrEventRow; mode: HrDetailMode } | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailData, setDetailData] = useState<any>(null)
@@ -81,8 +76,9 @@ export default function LeaderboardPage() {
     if (team.trim()) p.set('team', team.trim())
     if (pitcher.trim()) p.set('pitcher', pitcher.trim())
     if (batter.trim()) p.set('batter', batter.trim())
+    if (pitchType.trim()) p.set('pitch_type', pitchType.trim())
     return p.toString()
-  }, [season, sort, dir, stadium, team, pitcher, batter])
+  }, [season, sort, dir, stadium, team, pitcher, batter, pitchType])
 
   const monthIso = data?.calendar_month ?? `${season}-03`
   const monthLabel = useMemo(() => {
@@ -95,6 +91,30 @@ export default function LeaderboardPage() {
     const vals = Object.values(data?.calendar_counts ?? {})
     return vals.length ? Math.max(...vals) : 0
   }, [data?.calendar_counts])
+  const calendarRunningAvg = useMemo(() => {
+    const entries = Object.entries(data?.calendar_counts ?? {}).sort(([a], [b]) => a.localeCompare(b))
+    const out: Record<string, number> = {}
+    let total = 0
+    let days = 0
+    for (const [iso, count] of entries) {
+      total += count
+      days += 1
+      out[iso] = total / days
+    }
+    return out
+  }, [data?.calendar_counts])
+  const filterOptions = useMemo(() => {
+    const unique = (values: Array<string | null | undefined>) =>
+      [...new Set(values.map((value) => String(value ?? '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b))
+    const events = data?.events ?? []
+    return {
+      stadiums: unique(events.map((row) => row.stadium)),
+      teams: unique(events.map((row) => row.batter_team)),
+      pitchers: unique(events.map((row) => row.pitcher_name)),
+      batters: unique(events.map((row) => row.batter_name)),
+      pitchTypes: unique(events.map((row) => row.pitch_type)),
+    }
+  }, [data?.events])
 
   function matchupOpponentTeam(row: HrEventRow): string | null {
     if (row.batter_home_away === 'H') return row.away_team ?? null
@@ -152,7 +172,7 @@ export default function LeaderboardPage() {
         <h1 className="lb-title">Homer Tracking</h1>
         <p className="lb-meta">Subscription required.</p>
         <p className="lb-err">
-          Homer Tracking is locked on free accounts. Visit Account to manage your subscription.
+          Homers is locked on free accounts. Visit Account to manage your subscription.
         </p>
       </div>
     )
@@ -160,7 +180,7 @@ export default function LeaderboardPage() {
 
   return (
     <div className="lb-wrap">
-      <h1 className="lb-title">Homer Tracking</h1>
+      <h1 className="lb-title">Homers</h1>
       <p className="lb-meta">
         Last updated:{' '}
         {data?.last_updated ? new Date(data.last_updated).toLocaleString() : '—'}
@@ -200,7 +220,12 @@ export default function LeaderboardPage() {
                   {cell.iso ? (
                     <>
                       <div className="lb-calendarDate">{cell.day}</div>
-                      <div className="lb-calendarCount">{count > 0 ? `${count} HR` : '0'}</div>
+                      <div className="lb-calendarMeta">{cell.iso}</div>
+                      <div className="lb-calendarCount">{count} HR</div>
+                      <div className="lb-calendarMeta">{data?.calendar_game_counts?.[cell.iso] ?? 0} games</div>
+                      <div className="lb-calendarMeta">
+                        Avg/day: {calendarRunningAvg[cell.iso] != null ? calendarRunningAvg[cell.iso]!.toFixed(2) : '0.00'}
+                      </div>
                     </>
                   ) : null}
                 </div>
@@ -246,43 +271,68 @@ export default function LeaderboardPage() {
         <div className="lb-toolbar lb-toolbar--filters">
           <label className="lb-field lb-field--grow">
             <span className="lb-fieldLabel">Stadium</span>
-            <input
-              className="lb-input"
-              placeholder="Contains…"
+            <select
+              className="lb-select"
               value={stadium}
               onChange={(e) => setStadium(e.target.value)}
-              autoComplete="off"
-            />
+            >
+              <option value="">All stadiums</option>
+              {filterOptions.stadiums.map((value) => (
+                <option key={value} value={value}>{value}</option>
+              ))}
+            </select>
           </label>
           <label className="lb-field lb-field--grow">
             <span className="lb-fieldLabel">Team</span>
-            <input
-              className="lb-input"
-              placeholder="e.g. NYY, SF"
+            <select
+              className="lb-select"
               value={team}
               onChange={(e) => setTeam(e.target.value)}
-              autoComplete="off"
-            />
+            >
+              <option value="">All teams</option>
+              {filterOptions.teams.map((value) => (
+                <option key={value} value={value}>{value}</option>
+              ))}
+            </select>
           </label>
           <label className="lb-field lb-field--grow">
             <span className="lb-fieldLabel">Pitcher</span>
-            <input
-              className="lb-input"
-              placeholder="Last name…"
+            <select
+              className="lb-select"
               value={pitcher}
               onChange={(e) => setPitcher(e.target.value)}
-              autoComplete="off"
-            />
+            >
+              <option value="">All pitchers</option>
+              {filterOptions.pitchers.map((value) => (
+                <option key={value} value={value}>{value}</option>
+              ))}
+            </select>
           </label>
           <label className="lb-field lb-field--grow">
             <span className="lb-fieldLabel">Batter</span>
-            <input
-              className="lb-input"
-              placeholder="Last name…"
+            <select
+              className="lb-select"
               value={batter}
               onChange={(e) => setBatter(e.target.value)}
-              autoComplete="off"
-            />
+            >
+              <option value="">All batters</option>
+              {filterOptions.batters.map((value) => (
+                <option key={value} value={value}>{value}</option>
+              ))}
+            </select>
+          </label>
+          <label className="lb-field lb-field--grow">
+            <span className="lb-fieldLabel">Pitch type</span>
+            <select
+              className="lb-select"
+              value={pitchType}
+              onChange={(e) => setPitchType(e.target.value)}
+            >
+              <option value="">All pitch types</option>
+              {filterOptions.pitchTypes.map((value) => (
+                <option key={value} value={value}>{value}</option>
+              ))}
+            </select>
           </label>
           <div className="lb-field lb-field--btn">
             <span className="lb-fieldLabel lb-fieldLabel--ghost">Apply</span>
@@ -316,7 +366,6 @@ export default function LeaderboardPage() {
               <col className="lb-col-ha" />
               <col className="lb-col-pitch" />
               <col className="lb-col-dist" />
-              <col className="lb-col-pct" />
             </colgroup>
             <thead>
               <tr>
@@ -331,7 +380,6 @@ export default function LeaderboardPage() {
                 <th scope="col">Pit H/A</th>
                 <th scope="col">Pitch</th>
                 <th scope="col">Dist.</th>
-                <th scope="col">Today %</th>
               </tr>
             </thead>
             <tbody>
@@ -377,9 +425,6 @@ export default function LeaderboardPage() {
                   </td>
                   <td className="lb-cell-mono lb-cell-center">
                     {p.distance != null ? `${p.distance}′` : '—'}
-                  </td>
-                  <td className="lb-cell-mono lb-cell-pct">
-                    {p.today_probability != null ? fmtPct(p.today_probability) : '—'}
                   </td>
                 </tr>
               ))}
