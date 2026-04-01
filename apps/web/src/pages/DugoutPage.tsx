@@ -266,6 +266,7 @@ export default function DugoutPage() {
   const [matchupLoading, setMatchupLoading] = useState(false)
   const [matchupFor, setMatchupFor] = useState<DailyProjection | null>(null)
   const [matchupData, setMatchupData] = useState<any>(null)
+  const [matchupTab, setMatchupTab] = useState<'default' | 'pitch'>('default')
   const [liveGames, setLiveGames] = useState<any[]>([])
   const [selectedYear, setSelectedYear] = useState<number>(2026)
   const [playerInputs, setPlayerInputs] = useState<any>(null)
@@ -635,6 +636,7 @@ export default function DugoutPage() {
   async function openMatchup(r: DailyProjection) {
     setMatchupFor(r)
     setMatchupData(null)
+    setMatchupTab('default')
     setPlayerInputs(null)
     const opponentTeam = parseOpponentTeam(r) ?? ''
     if (!opponentTeam) return
@@ -1450,7 +1452,7 @@ export default function DugoutPage() {
         </>
       )}
       {matchupFor ? (
-        <div className="pg-modalBackdrop" onClick={() => setMatchupFor(null)}>
+        <div className="pg-modalBackdrop" onClick={() => { setMatchupFor(null); setMatchupTab('default') }}>
           <div className="pg-modal pg-modal--matchup" onClick={(e) => e.stopPropagation()}>
             {/* Header */}
             <div className="pg-modalHead">
@@ -1459,7 +1461,7 @@ export default function DugoutPage() {
                 <span className="pg-modalVs"> vs </span>
                 {matchupData?.pitcher_name ?? (matchupFor.opponentPitcher ?? matchupFor.opponent)}
               </h3>
-              <button type="button" className="pg-clearBtn" onClick={() => setMatchupFor(null)}>✕ Close</button>
+              <button type="button" className="pg-clearBtn" onClick={() => { setMatchupFor(null); setMatchupTab('default') }}>✕ Close</button>
             </div>
 
             {matchupLoading ? (
@@ -1516,6 +1518,25 @@ export default function DugoutPage() {
                   </div>
                 )}
 
+                <div className="pg-matchupTabs">
+                  <button
+                    type="button"
+                    className={`pg-matchupTab ${matchupTab === 'default' ? 'is-active' : ''}`}
+                    onClick={() => setMatchupTab('default')}
+                  >
+                    Default
+                  </button>
+                  <button
+                    type="button"
+                    className={`pg-matchupTab ${matchupTab === 'pitch' ? 'is-active' : ''}`}
+                    onClick={() => setMatchupTab('pitch')}
+                  >
+                    Pitch
+                  </button>
+                </div>
+
+                {matchupTab === 'default' ? (
+                <>
                 {/* Stats: pitcher left, batter right */}
                 <div className="pg-matchupStatsGrid">
                   {/* Pitcher stats */}
@@ -1566,26 +1587,72 @@ export default function DugoutPage() {
                     </div>
                   </div>
                 </div>
-
-                {/* Pitch type breakdown */}
-                {Array.isArray(matchupData?.pitch_type_matchup) && matchupData.pitch_type_matchup.length > 0 && (
-                  <div className="pg-pitchSection">
-                    <div className="pg-matchupStatHead">Pitch Type Breakdown</div>
-                    <div className="pg-pitchTypeGrid">
-                      {matchupData.pitch_type_matchup.map((r: any, idx: number) => {
-                        const iso = r?.batter_iso != null ? Number(r.batter_iso) : null
-                        const usage = r?.usage != null ? Number(r.usage) : null
-                        return (
-                          <div key={idx} className={`pg-pitchTypeRow ${iso != null && iso >= 0.25 ? 'pg-pitchTypeRow--hot' : ''}`}>
-                            <span className="pg-pitchName">{r?.pitch_name ?? r?.pitch_type ?? 'Pitch'}</span>
-                            <span className="pg-pitchUsage">{usage != null ? `${usage.toFixed(0)}% usage` : '—'}</span>
-                            <span className="pg-pitchStat">Batter ISO: {iso != null ? iso.toFixed(3) : '—'}</span>
-                            <span className="pg-pitchStat">Pitcher SLG allowed: {r?.pitcher_slg_allowed != null ? Number(r.pitcher_slg_allowed).toFixed(3) : '—'}</span>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  </div>
+                </>
+                ) : (
+                  (() => {
+                    const pitchRows = Array.isArray(matchupData?.pitch_arsenal_matchup) && matchupData.pitch_arsenal_matchup.length > 0
+                      ? matchupData.pitch_arsenal_matchup
+                      : Array.isArray(matchupData?.pitch_type_matchup)
+                        ? matchupData.pitch_type_matchup
+                        : []
+                    if (!pitchRows.length) {
+                      return (
+                        <div className="pg-bvpSection pg-bvpSection--empty">
+                          <div className="pg-bvpLabel">Pitch Arsenal</div>
+                          <p className="pg-sub">No pitch arsenal data found for this matchup.</p>
+                        </div>
+                      )
+                    }
+                    return (
+                      <div className="pg-arsenalGrid">
+                        {pitchRows.map((r: any, idx: number) => {
+                          const usage = r?.usage != null ? Number(r.usage) : null
+                          const batterIso = r?.batter_iso != null ? Number(r.batter_iso) : null
+                          const usageBig = usage != null && usage >= 20
+                          const batterHot = batterIso != null && batterIso >= 0.25
+                          const num = (value: unknown, digits = 3) =>
+                            value != null && Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : '—'
+                          const pct = (value: unknown, digits = 1) =>
+                            value != null && Number.isFinite(Number(value)) ? `${Number(value).toFixed(digits)}%` : '—'
+                          return (
+                            <div key={`${r?.pitch_type ?? r?.pitch_name ?? 'pitch'}-${idx}`} className="pg-arsenalCard">
+                              <div className="pg-arsenalTop">
+                                <div>
+                                  <div className="pg-arsenalPitch">{r?.pitch_name ?? r?.pitch_type ?? 'Pitch'}</div>
+                                  <div className="pg-small">{r?.pitch_type ?? '—'}</div>
+                                </div>
+                                <span className={`pg-pill ${usageBig ? 'is-green' : ''}`}>
+                                  Usage {usage != null ? `${usage.toFixed(1)}%` : '—'}
+                                </span>
+                              </div>
+                              <div className="pg-arsenalStats">
+                                <div className="pg-arsenalSide">
+                                  <div className="pg-label">Pitcher</div>
+                                  <div className="pg-arsenalMetric">BA allowed: {num(r?.pitcher_ba_allowed)}</div>
+                                  <div className="pg-arsenalMetric">SLG allowed: {num(r?.pitcher_slg_allowed)}</div>
+                                  <div className="pg-arsenalMetric">wOBA allowed: {num(r?.pitcher_woba_allowed)}</div>
+                                  <div className="pg-arsenalMetric">xSLG allowed: {num(r?.pitcher_est_slg_allowed)}</div>
+                                  <div className="pg-arsenalMetric">xwOBA allowed: {num(r?.pitcher_est_woba_allowed)}</div>
+                                  <div className="pg-arsenalMetric">Hard-hit allowed: {pct(r?.pitcher_hard_hit_percent)}</div>
+                                </div>
+                                <div className="pg-arsenalSide">
+                                  <div className="pg-label">Batter Vs This Pitch</div>
+                                  <div className={`pg-arsenalMetric ${batterHot ? 'is-green' : ''}`}>ISO: {num(r?.batter_iso)}</div>
+                                  <div className="pg-arsenalMetric">BA: {num(r?.batter_ba)}</div>
+                                  <div className="pg-arsenalMetric">SLG: {num(r?.batter_slg)}</div>
+                                  <div className="pg-arsenalMetric">wOBA: {num(r?.batter_woba)}</div>
+                                  <div className="pg-arsenalMetric">xSLG: {num(r?.batter_est_slg)}</div>
+                                  <div className="pg-arsenalMetric">xwOBA: {num(r?.batter_est_woba)}</div>
+                                  <div className="pg-arsenalMetric">K%: {pct(r?.batter_k_percent)}</div>
+                                  <div className="pg-arsenalMetric">Hard-hit %: {pct(r?.batter_hard_hit_percent)}</div>
+                                </div>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )
+                  })()
                 )}
 
                 {!matchupData && !playerInputs && (

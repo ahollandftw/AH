@@ -133,7 +133,7 @@ async function fetchBatterHR(sb: SupabaseClient, year: number) {
 
 async function fetchBatterArsenal(sb: SupabaseClient, season: number) {
   const { data } = await sb.from('stats_pitch_arsenal')
-    .select('player_id, season, pitch_type, run_value_per_100, pitch_usage, slg, woba, est_woba, whiff_percent')
+    .select('player_id, season, pitch_type, pitch_name, run_value_per_100, pitch_usage, ba, slg, woba, est_woba, whiff_percent')
     .eq('role', 'batting')
     .lte('season', season)
     .order('season', { ascending: false })
@@ -143,7 +143,7 @@ async function fetchBatterArsenal(sb: SupabaseClient, season: number) {
 
 async function fetchPitcherArsenal(sb: SupabaseClient, season: number) {
   const { data } = await sb.from('stats_pitch_arsenal')
-    .select('player_id, season, pitch_type, run_value_per_100, pitch_usage, slg, woba, est_woba')
+    .select('player_id, season, pitch_type, pitch_name, run_value_per_100, pitch_usage, ba, slg, woba, est_woba')
     .eq('role', 'pitching')
     .lte('season', season)
     .order('season', { ascending: false })
@@ -339,18 +339,99 @@ export interface EngineProjection {
   zMatchup: number | null
   americanOdds:    number
   americanOddsStr: string
+  pitchArsenalWeight: number | null
+  modelVariant?: 'default' | 'weighted_pitch_arsenal'
 }
 
-export async function runDailyProjections(dateOverride?: string): Promise<EngineProjection[]> {
+type ProjectionModelVariant = 'default' | 'weighted_pitch_arsenal'
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value))
+}
+
+function pitchKey(row: { pitch_type?: string | null; pitch_name?: string | null }): string {
+  return String(row.pitch_type ?? row.pitch_name ?? '').trim().toUpperCase()
+}
+
+function safeMetric(v: unknown): number | null {
+  const n = num(v)
+  return n != null && Number.isFinite(n) ? n : null
+}
+
+function computeWeightedPitchArsenalScore(
+  batterRows: any[],
+  pitcherRows: any[],
+): number | null {
+  if (!batterRows.length || !pitcherRows.length) return null
+
+  const batterByPitch = new Map<string, any>()
+  for (const row of batterRows) {
+    const key = pitchKey(row)
+    if (!key || batterByPitch.has(key)) continue
+    batterByPitch.set(key, row)
+  }
+
+  let weightedScore = 0
+  let weightTotal = 0
+  for (const pitcherRow of pitcherRows) {
+    const key = pitchKey(pitcherRow)
+    if (!key) continue
+    const batterRow = batterByPitch.get(key)
+    if (!batterRow) continue
+    const usage = Math.max(0, safeMetric(pitcherRow.pitch_usage) ?? 0)
+    const weight = usage > 0 ? usage : 1
+    const batterBa = safeMetric(batterRow.ba)
+    const batterSlg = safeMetric(batterRow.slg)
+    const batterWoba = safeMetric(batterRow.woba)
+    const batterEstWoba = safeMetric(batterRow.est_woba)
+    const pitcherBaAllowed = safeMetric(pitcherRow.ba)
+    const pitcherSlgAllowed = safeMetric(pitcherRow.slg)
+    const pitcherWobaAllowed = safeMetric(pitcherRow.woba)
+    const pitcherEstWobaAllowed = safeMetric(pitcherRow.est_woba)
+
+    const batterCompositeParts = [
+      batterBa != null ? (batterBa - 0.245) / 0.035 : null,
+      batterSlg != null ? (batterSlg - 0.390) / 0.080 : null,
+      batterWoba != null ? (batterWoba - 0.320) / 0.040 : null,
+      batterEstWoba != null ? (batterEstWoba - 0.320) / 0.040 : null,
+    ].filter((value): value is number => value != null && Number.isFinite(value))
+
+    const pitcherCompositeParts = [
+      pitcherBaAllowed != null ? (pitcherBaAllowed - 0.245) / 0.035 : null,
+      pitcherSlgAllowed != null ? (pitcherSlgAllowed - 0.390) / 0.080 : null,
+      pitcherWobaAllowed != null ? (pitcherWobaAllowed - 0.320) / 0.040 : null,
+      pitcherEstWobaAllowed != null ? (pitcherEstWobaAllowed - 0.320) / 0.040 : null,
+    ].filter((value): value is number => value != null && Number.isFinite(value))
+
+    if (!batterCompositeParts.length && !pitcherCompositeParts.length) continue
+    const batterComposite = batterCompositeParts.length
+      ? batterCompositeParts.reduce((sum, value) => sum + value, 0) / batterCompositeParts.length
+      : 0
+    const pitcherComposite = pitcherCompositeParts.length
+      ? pitcherCompositeParts.reduce((sum, value) => sum + value, 0) / pitcherCompositeParts.length
+      : 0
+
+    weightedScore += ((batterComposite * 0.55) + (pitcherComposite * 0.45)) * weight
+    weightTotal += weight
+  }
+
+  if (weightTotal <= 0) return null
+  return clamp(weightedScore / weightTotal, -1.5, 1.5)
+}
+
+export async function runDailyProjections(
+  dateOverride?: string,
+  modelVariant: ProjectionModelVariant = 'default',
+): Promise<EngineProjection[]> {
   const date = dateOverride ?? todayET()
   const sb = getServiceClient()
-  console.log(`[hr-engine] Running projections for ${date}…`)
+  console.log(`[hr-engine] Running ${modelVariant} projections for ${date}…`)
 
   const year = await fetchMaxBattingYear(sb)
   if (!year) { console.warn('[hr-engine] No stats year found'); return [] }
 
   const [
-    games, players, evRows, hrRows, bbRows, parkRows, bdlPlayers, bdlStats, standardBattingRows, standardPitchingRows,
+    games, players, evRows, hrRows, bbRows, parkRows, bdlPlayers, bdlStats, standardBattingRows, standardPitchingRows, batterArsenalRows, pitcherArsenalRows,
   ] = await Promise.all([
     fetchGames(sb, date),
     fetchPlayers(sb),
@@ -362,6 +443,8 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
     fetchBdlSeasonStats(sb, 2026),
     fetchStandardBatting(sb),
     fetchStandardPitching(sb),
+    fetchBatterArsenal(sb, year),
+    fetchPitcherArsenal(sb, year),
   ])
 
   if (!games.length) { console.log('[hr-engine] No games today'); return [] }
@@ -441,6 +524,21 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
   for (const row of standardPitchingRows) {
     if (!row.player_id || standardPitchingMap.has(row.player_id)) continue
     standardPitchingMap.set(row.player_id, { tbf: row.tbf, hr: row.hr })
+  }
+
+  const batterArsenalMap = new Map<string, any[]>()
+  for (const row of batterArsenalRows as any[]) {
+    const playerId = String(row.player_id ?? '')
+    if (!playerId) continue
+    if (!batterArsenalMap.has(playerId)) batterArsenalMap.set(playerId, [])
+    batterArsenalMap.get(playerId)!.push(row)
+  }
+  const pitcherArsenalMap = new Map<string, any[]>()
+  for (const row of pitcherArsenalRows as any[]) {
+    const playerId = String(row.player_id ?? '')
+    if (!playerId) continue
+    if (!pitcherArsenalMap.has(playerId)) pitcherArsenalMap.set(playerId, [])
+    pitcherArsenalMap.get(playerId)!.push(row)
   }
 
   /* ─── Build game context ──────────────────────────────────────── */
@@ -610,6 +708,8 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
     const oppPitcherName   = side === 'home' ? ctx.awayPitcherName   : ctx.homePitcherName
     const oppPitcherHrPerPaAllowed =
       side === 'home' ? ctx.awayPitcherHrPerPaAllowed : ctx.homePitcherHrPerPaAllowed
+    const oppPitcherStatId =
+      side === 'home' ? ctx.awayPitcherStatId : ctx.homePitcherStatId
 
     // Batter hand from BDL
     const { bats: batterHand } = parseBatsThrows(bdlInfo?.bats_throws)
@@ -678,15 +778,29 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
 
     const expPA = expectedPaForSpot(lineupPos)
 
+    const pitchArsenalWeight = modelVariant === 'weighted_pitch_arsenal'
+      ? computeWeightedPitchArsenalScore(
+          batterArsenalMap.get(playerId) ?? [],
+          oppPitcherStatId ? (pitcherArsenalMap.get(oppPitcherStatId) ?? []) : [],
+        )
+      : null
+    const adjustedMatchupHrRate =
+      pitchArsenalWeight != null
+        ? matchupHrRate != null
+          ? matchupHrRate * clamp(1 + (pitchArsenalWeight * 0.10), 0.82, 1.22)
+          : null
+        : matchupHrRate
+    const adjustedZMatchup = zMatchup(adjustedMatchupHrRate)
+
     const features: NormalizedFeatures = {
-      zMatchup:      fZMatchup,
+      zMatchup:      adjustedZMatchup,
       zPark:         fZPark,
       zHandedness:   fZHand,
       zWeather:      fZWeather,
       zRecentForm:   fZRecent,
       zLineupSpot:   fZLineup,
       expectedPA:    expPA,
-      matchupHrRate,
+      matchupHrRate: adjustedMatchupHrRate,
       featuresPresent: present,
     }
 
@@ -710,10 +824,12 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
       lambda: out.lambda,
       expectedPA: expPA,
       dataQuality: out.dataQuality,
-      matchupHrRate,
-      zMatchup: fZMatchup,
+      matchupHrRate: adjustedMatchupHrRate,
+      zMatchup: adjustedZMatchup,
       americanOdds,
       americanOddsStr: formatAmericanOdds(americanOdds),
+      pitchArsenalWeight,
+      modelVariant,
     })
   }
 
@@ -733,7 +849,7 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
       ),
     ),
   )
-  console.log(`[hr-engine] Computed ${results.length} projections. Top: ${results[0]?.name ?? 'none'} ${(results[0]?.hrProbability * 100)?.toFixed(1)}%`)
+  console.log(`[hr-engine] Computed ${results.length} ${modelVariant} projections. Top: ${results[0]?.name ?? 'none'} ${(results[0]?.hrProbability * 100)?.toFixed(1)}%`)
   return results
 }
 
@@ -741,7 +857,7 @@ export async function runDailyProjections(dateOverride?: string): Promise<Engine
 
 export async function runAndSaveProjections(dateOverride?: string): Promise<{ computed: number; saved: number }> {
   const date = dateOverride ?? todayET()
-  const projections = await runDailyProjections(date)
+  const projections = await runDailyProjections(date, 'default')
   if (!projections.length) return { computed: 0, saved: 0 }
 
   const sb = getServiceClient()
@@ -776,6 +892,10 @@ export async function runAndSaveProjections(dateOverride?: string): Promise<{ co
 
   console.log(`[hr-engine] Saved ${saved}/${projections.length} projections for ${date}`)
   return { computed: projections.length, saved }
+}
+
+export async function runWeightedPitchArsenalProjections(dateOverride?: string): Promise<EngineProjection[]> {
+  return runDailyProjections(dateOverride, 'weighted_pitch_arsenal')
 }
 
 export async function runUpcomingLineupRefresh(windowMinutes = 60) {

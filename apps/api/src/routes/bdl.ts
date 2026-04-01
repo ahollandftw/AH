@@ -247,6 +247,18 @@ export function registerBdlRoutes(app: Express) {
     }
   })
 
+  app.get('/bdl/projections/weighted', async (req, res) => {
+    try {
+      const { runWeightedPitchArsenalProjections } = await import('../hrEngine.js')
+      const date = typeof req.query?.date === 'string' ? req.query.date : undefined
+      const rows = await runWeightedPitchArsenalProjections(date)
+      res.json({ ok: true, rows })
+    } catch (e) {
+      console.error('[bdl/projections/weighted] failed:', e)
+      res.status(500).json({ error: e instanceof Error ? e.message : String(e) })
+    }
+  })
+
   /* ── Live monitor control ────────────────────────────────────── */
 
   app.post('/bdl/live/start', (_req, res) => {

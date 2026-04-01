@@ -188,6 +188,9 @@ export default function ProjectionsPage() {
   const { supabase, hasSubscription, session } = useWebAuth()
   const [loading, setLoading] = useState(true)
   const [rows, setRows] = useState<DailyProjection[]>([])
+  const [weightedRows, setWeightedRows] = useState<DailyProjection[]>([])
+  const [weightedLoading, setWeightedLoading] = useState(false)
+  const [projectionModelTab, setProjectionModelTab] = useState<'default' | 'weighted'>('default')
   const [games, setGames] = useState<ScheduleGame[]>([])
   const [availableDates, setAvailableDates] = useState<string[]>([])
   const [pickState, setPickState] = useState<Record<string, boolean | null>>({})
@@ -258,6 +261,28 @@ export default function ProjectionsPage() {
   }, [supabase, displayDate])
 
   useEffect(() => {
+    if (projectionModelTab !== 'weighted') return
+    const base = import.meta.env.VITE_API_BASE_URL ?? ''
+    if (!base) return
+    let cancelled = false
+    setWeightedLoading(true)
+    void fetch(`${base}/bdl/projections/weighted?date=${encodeURIComponent(displayDate)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json: { rows?: DailyProjection[] } | null) => {
+        if (!cancelled) setWeightedRows(json?.rows ?? [])
+      })
+      .catch(() => {
+        if (!cancelled) setWeightedRows([])
+      })
+      .finally(() => {
+        if (!cancelled) setWeightedLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [displayDate, projectionModelTab])
+
+  useEffect(() => {
     if (!supabase) return
     const id = setInterval(() => {
       const prevDate = new Date(`${displayDate}T12:00:00Z`)
@@ -308,9 +333,10 @@ export default function ProjectionsPage() {
       })
   }, [displayDate])
 
+  const activeRows = projectionModelTab === 'weighted' ? weightedRows : rows
 
   const filteredRows = useMemo(() => {
-    let out = rows
+    let out = activeRows
     if (!hasSubscription && games.length > 0) {
       const idx =
         displayDate.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0) % games.length
@@ -325,7 +351,7 @@ export default function ProjectionsPage() {
       out = out.filter((r) => normalizePlayerName(r.name).includes(q))
     }
     return out
-  }, [displayDate, games, hasSubscription, playerQuery, rows, selectedPlayerId, selectedTeam])
+  }, [activeRows, displayDate, games, hasSubscription, playerQuery, selectedPlayerId, selectedTeam])
 
   useEffect(() => {
     if (!supabase || !games.length || !filteredRows.length) {
@@ -387,8 +413,8 @@ export default function ProjectionsPage() {
   }, [filteredRows, games, supabase])
 
   const selectedPlayer = useMemo(
-    () => rows.find((r) => r.playerId === selectedPlayerId) ?? null,
-    [rows, selectedPlayerId],
+    () => activeRows.find((r) => r.playerId === selectedPlayerId) ?? null,
+    [activeRows, selectedPlayerId],
   )
 
   function matchupPitchersForTeams(gameId?: string | number | null): { home: string | null; away: string | null } {
@@ -519,7 +545,7 @@ export default function ProjectionsPage() {
       setPickMsg('Sign in to use targets.')
       return
     }
-    const player = rows.find((r) => r.playerId === playerId)
+    const player = activeRows.find((r) => r.playerId === playerId)
     const playerTeam = normalizeTeamCode(player?.team ?? '')
     const locked = liveGames.some((g) => {
       const a = normalizeTeamCode(g.away_team_abbrev ?? '')
@@ -716,8 +742,24 @@ export default function ProjectionsPage() {
           </button>
         )}
       </div>
+      <div className="pg-matchupTabs" style={{ marginBottom: 10 }}>
+        <button
+          type="button"
+          className={`pg-matchupTab ${projectionModelTab === 'default' ? 'is-active' : ''}`}
+          onClick={() => setProjectionModelTab('default')}
+        >
+          AH Default
+        </button>
+        <button
+          type="button"
+          className={`pg-matchupTab ${projectionModelTab === 'weighted' ? 'is-active' : ''}`}
+          onClick={() => setProjectionModelTab('weighted')}
+        >
+          Weighted Pitch Arsenal
+        </button>
+      </div>
       <p className="pg-sub">
-        {displayDate} &mdash; {games.length} game{games.length !== 1 ? 's' : ''} &mdash; Matchup-based HR model — grouped by tier.
+        {displayDate} &mdash; {games.length} game{games.length !== 1 ? 's' : ''} &mdash; {projectionModelTab === 'weighted' ? 'Weighted pitch arsenal model' : 'Matchup-based HR model'} — grouped by tier.
       </p>
       {!hasSubscription ? (
         <p className="pg-sub">Free preview: one random game. Subscribe to unlock full projections.</p>
@@ -738,7 +780,7 @@ export default function ProjectionsPage() {
           ) : null}
         </div>
       )}
-      {loading ? (
+      {(loading || (projectionModelTab === 'weighted' && weightedLoading)) ? (
         <div className="lb-skel">
           {Array.from({ length: 8 }).map((_, i) => (
             <div key={i} className="lb-skelRow" />
