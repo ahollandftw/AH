@@ -16,6 +16,14 @@ import { buildHrEventEnrichment } from '../bdl/hrEventEnrichment.js'
 import { getBestLineupForGame, getBestLineupsForDate, getResolvedGamesForDate } from '../bdl/lineups.js'
 
 export function registerBdlRoutes(app: Express) {
+  const normalizeName = (name: string): string =>
+    name
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z\s]/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
   const canonTeam = (team: string): string => {
     const t = team.trim().toUpperCase()
     if (t === 'TB' || t === 'TBR') return 'TBR'
@@ -55,6 +63,37 @@ export function registerBdlRoutes(app: Express) {
     if (weightSum > 0) return weightedSum / weightSum
     if (!vals.length) return null
     return vals.reduce((a, b) => a + b, 0) / vals.length
+  }
+  const resolveStatPlayerIdByName = async (
+    sb: ReturnType<typeof getServiceClient>,
+    fullName: string | null | undefined,
+  ): Promise<string | null> => {
+    const raw = String(fullName ?? '').trim()
+    if (!raw) return null
+
+    const directLookups = await Promise.all([
+      sb.from('players').select('stat_player_id').eq('name', raw).limit(1).maybeSingle(),
+      sb.from('stats_standard').select('player_id').eq('player_name', raw).limit(1).maybeSingle(),
+    ])
+    const directId =
+      (directLookups[0].data as { stat_player_id?: string | null } | null)?.stat_player_id ??
+      (directLookups[1].data as { player_id?: string | null } | null)?.player_id ??
+      null
+    if (directId) return String(directId)
+
+    const parts = raw.split(/\s+/).filter(Boolean)
+    if (parts.length < 2) return null
+    const reversed = `${parts[parts.length - 1]}, ${parts.slice(0, -1).join(' ')}`
+    const { data: arsenalRows } = await sb
+      .from('stats_pitch_arsenal')
+      .select('player_id,last_name_first_name')
+      .ilike('last_name_first_name', `${parts[parts.length - 1]}%`)
+      .limit(50)
+    const targetNames = new Set([normalizeName(raw), normalizeName(reversed)])
+    const match = (arsenalRows ?? []).find((row: any) =>
+      targetNames.has(normalizeName(String(row.last_name_first_name ?? ''))),
+    )
+    return match?.player_id ? String(match.player_id) : null
   }
   /* ── Daily sync (called by cron or manually) ─────────────────── */
 
@@ -433,8 +472,9 @@ export function registerBdlRoutes(app: Express) {
       const batterHrSeason = Number((batterStatsRes as any)?.[0]?.data?.year ?? 0) || null
       let usedSeason = batterEvSeason ?? batterHrSeason ?? season
 
-      // Pitch-type matchup: pitcher's top pitches by usage + batter ISO vs those pitch types.
+      // Pitch-type matchup: pitcher's arsenal + batter results against those same pitches only.
       let pitchTypeMatchup: any[] = []
+      let pitchArsenalMatchup: any[] = []
       let batterArsenalRows: any[] = []
       let pitcherArsenalRows: any[] = []
       try {
@@ -445,7 +485,9 @@ export function registerBdlRoutes(app: Express) {
             .select('stat_player_id')
             .eq('bdl_id', best.pitcher_bdl_id)
             .maybeSingle()
-          const pitcherStatId = (pitX as any)?.stat_player_id ?? null
+          const pitcherStatId =
+            (pitX as any)?.stat_player_id ??
+            (await resolveStatPlayerIdByName(sb, best?.pitcher_name ?? null))
 
           const [pitcherArsRes, batterArsRes] = await Promise.all([
             pitcherStatId
@@ -477,10 +519,9 @@ export function registerBdlRoutes(app: Express) {
           pitcherArsenalRows = (pitcherArsRes.data ?? []).filter((r: any) => Number(r.season ?? 0) === (latestPitcherSeason ?? usedSeason))
           batterArsenalRows = (batterArsRes.data ?? []).filter((r: any) => Number(r.season ?? 0) === (latestBatterSeason ?? usedSeason))
 
-          const topPitcherRows = pitcherArsenalRows
+          const sortedPitcherRows = pitcherArsenalRows
             .slice()
             .sort((a: any, b: any) => Number(b?.pitch_usage ?? 0) - Number(a?.pitch_usage ?? 0))
-            .slice(0, 5)
 
           const batterByType = new Map<string, any>()
           for (const r of batterArsenalRows) {
@@ -489,7 +530,7 @@ export function registerBdlRoutes(app: Express) {
             if (!batterByType.has(key)) batterByType.set(key, r)
           }
 
-          pitchTypeMatchup = topPitcherRows.map((p: any) => {
+          pitchArsenalMatchup = sortedPitcherRows.map((p: any) => {
             const key = String(p.pitch_type ?? p.pitch_name ?? '').toUpperCase()
             const b = batterByType.get(key) ?? null
             const batterIso =
@@ -499,20 +540,28 @@ export function registerBdlRoutes(app: Express) {
               pitch_type: p.pitch_type ?? null,
               pitch_name: p.pitch_name ?? null,
               usage: p.pitch_usage != null ? Number(p.pitch_usage) : null,
+              season: p?.season != null ? Number(p.season) : null,
               batter_iso: batterIso,
               batter_slg: b?.slg != null ? Number(b.slg) : null,
               batter_ba: b?.ba != null ? Number(b.ba) : null,
+              batter_woba: b?.woba != null ? Number(b.woba) : null,
               batter_est_slg: b?.est_slg != null ? Number(b.est_slg) : null,
               batter_est_woba: b?.est_woba != null ? Number(b.est_woba) : null,
+              batter_k_percent: b?.k_percent != null ? Number(b.k_percent) : null,
+              batter_hard_hit_percent: b?.hard_hit_percent != null ? Number(b.hard_hit_percent) : null,
               pitcher_slg_allowed: pitcherSlgAllowed,
               pitcher_ba_allowed: p?.ba != null ? Number(p.ba) : null,
+              pitcher_woba_allowed: p?.woba != null ? Number(p.woba) : null,
               pitcher_est_slg_allowed: p?.est_slg != null ? Number(p.est_slg) : null,
               pitcher_est_woba_allowed: p?.est_woba != null ? Number(p.est_woba) : null,
+              pitcher_hard_hit_percent: p?.hard_hit_percent != null ? Number(p.hard_hit_percent) : null,
             }
           })
+          pitchTypeMatchup = pitchArsenalMatchup.slice(0, 5)
         }
       } catch {
         pitchTypeMatchup = []
+        pitchArsenalMatchup = []
       }
 
       // Pitcher Statcast mirrors (role=pitching) — same categories as batter where the schema has them.
@@ -608,6 +657,7 @@ export function registerBdlRoutes(app: Express) {
           opponent_team: opponentTeam,
           pitcher_name: best?.pitcher_name ?? null,
           pitch_type_matchup: pitchTypeMatchup,
+          pitch_arsenal_matchup: pitchArsenalMatchup,
           sample_ab: best?.at_bats ?? null,
           h: best?.hits ?? null,
           hr: best?.home_runs ?? null,

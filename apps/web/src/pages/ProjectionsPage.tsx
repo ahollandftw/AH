@@ -88,6 +88,27 @@ type GameLineup = {
   away_source?: 'official' | 'previous_game' | 'none'
 }
 
+type MatchupPitchRow = {
+  pitch_type: string | null
+  pitch_name: string | null
+  usage: number | null
+  season?: number | null
+  batter_iso: number | null
+  batter_slg: number | null
+  batter_ba: number | null
+  batter_woba: number | null
+  batter_est_slg: number | null
+  batter_est_woba: number | null
+  batter_k_percent: number | null
+  batter_hard_hit_percent: number | null
+  pitcher_slg_allowed: number | null
+  pitcher_ba_allowed: number | null
+  pitcher_woba_allowed: number | null
+  pitcher_est_slg_allowed: number | null
+  pitcher_est_woba_allowed: number | null
+  pitcher_hard_hit_percent: number | null
+}
+
 function oddsProfitScore(odds: number): number {
   if (odds >= 0) return odds
   return 10000 / Math.abs(odds)
@@ -103,6 +124,16 @@ function normalizePlayerName(name: string | null | undefined): string {
     .replace(/[^a-z0-9 ]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+function formatMetric(value: number | null | undefined, digits = 3): string {
+  if (value == null || !Number.isFinite(value)) return '—'
+  return Number(value).toFixed(digits)
+}
+
+function formatPercent(value: number | null | undefined, digits = 1): string {
+  if (value == null || !Number.isFinite(value)) return '—'
+  return `${Number(value).toFixed(digits)}%`
 }
 
 function extractHomerHitters(scoringSummary: any): Set<string> {
@@ -165,6 +196,7 @@ export default function ProjectionsPage() {
   const [matchupLoading, setMatchupLoading] = useState(false)
   const [matchupFor, setMatchupFor] = useState<DailyProjection | null>(null)
   const [matchupData, setMatchupData] = useState<any>(null)
+  const [matchupTab, setMatchupTab] = useState<'default' | 'pitch'>('default')
   const [playerInputs, setPlayerInputs] = useState<any>(null)
   const [selectedYear, setSelectedYear] = useState<number>(2026)
   const [liveGames, setLiveGames] = useState<any[]>([])
@@ -359,48 +391,16 @@ export default function ProjectionsPage() {
     [rows, selectedPlayerId],
   )
 
-  const probablePitcherByMatchup = useMemo(() => {
-    const out = new Map<string, { name: string | null; hand: string | null }>()
-    const addMatchup = (
-      homeTeam: string,
-      awayTeam: string,
-      gameId: string | number | null | undefined,
-      lineup?: GameLineup | null,
-    ) => {
-      const home = (normalizeTeamCode(homeTeam) ?? homeTeam).toUpperCase()
-      const away = (normalizeTeamCode(awayTeam) ?? awayTeam).toUpperCase()
-      const pp = probablePitchers[String(gameId ?? '')]
-      if (!home || !away) return
-      const homePitcher = pp?.home ?? lineup?.home_pitcher?.full_name ?? null
-      const awayPitcher = pp?.away ?? lineup?.away_pitcher?.full_name ?? null
-      out.set(`${home}|${away}`, { name: awayPitcher, hand: null })
-      out.set(`${away}|${home}`, { name: homePitcher, hand: null })
+  function matchupPitchersForTeams(gameId?: string | number | null): { home: string | null; away: string | null } {
+    const lineup = /^\d+$/.test(String(gameId ?? ''))
+      ? lineupByGame[`game:${gameId}`] ?? null
+      : null
+    const probable = probablePitchers[String(gameId ?? '')]
+    return {
+      home: probable?.home ?? lineup?.home_pitcher?.full_name ?? null,
+      away: probable?.away ?? lineup?.away_pitcher?.full_name ?? null,
     }
-    for (const game of games) {
-      addMatchup(game.homeTeam, game.awayTeam, game.gameId, lineupByGame[`game:${game.gameId}`] ?? null)
-    }
-    for (const game of liveGames) {
-      addMatchup(
-        game.home_team_abbrev,
-        game.away_team_abbrev,
-        game.bdl_game_id,
-        lineupByGame[`game:${game.bdl_game_id}`] ?? null,
-      )
-    }
-    for (const game of games) {
-      const home = (normalizeTeamCode(game.homeTeam) ?? game.homeTeam).toUpperCase()
-      const away = (normalizeTeamCode(game.awayTeam) ?? game.awayTeam).toUpperCase()
-      const lineup = lineupByGame[`game:${game.gameId}`] ?? null
-      if (!home || !away || !lineup) continue
-      if (!out.get(`${home}|${away}`)?.name && lineup.away_pitcher?.full_name) {
-        out.set(`${home}|${away}`, { name: lineup.away_pitcher.full_name, hand: null })
-      }
-      if (!out.get(`${away}|${home}`)?.name && lineup.home_pitcher?.full_name) {
-        out.set(`${away}|${home}`, { name: lineup.home_pitcher.full_name, hand: null })
-      }
-    }
-    return out
-  }, [games, liveGames, lineupByGame, probablePitchers])
+  }
 
   const sections = useMemo(
     () =>
@@ -444,7 +444,27 @@ export default function ProjectionsPage() {
     const team = (normalizeTeamCode(r.team ?? '') ?? '').toUpperCase()
     const opp = (parseOpponentTeam(r) ?? '').toUpperCase()
     if (!team || !opp) return { name: null, hand: null }
-    return probablePitcherByMatchup.get(`${team}|${opp}`) ?? { name: null, hand: null }
+    const scheduleGame =
+      games.find((g) => {
+        const home = (normalizeTeamCode(g.homeTeam) ?? g.homeTeam).toUpperCase()
+        const away = (normalizeTeamCode(g.awayTeam) ?? g.awayTeam).toUpperCase()
+        return (home === team && away === opp) || (home === opp && away === team)
+      }) ?? null
+    const liveGame =
+      liveGames.find((g) => {
+        const home = (normalizeTeamCode(g.home_team_abbrev) ?? g.home_team_abbrev).toUpperCase()
+        const away = (normalizeTeamCode(g.away_team_abbrev) ?? g.away_team_abbrev).toUpperCase()
+        return (home === team && away === opp) || (home === opp && away === team)
+      }) ?? null
+    const home = (normalizeTeamCode(scheduleGame?.homeTeam ?? liveGame?.home_team_abbrev ?? '') ?? '').toUpperCase()
+    const away = (normalizeTeamCode(scheduleGame?.awayTeam ?? liveGame?.away_team_abbrev ?? '') ?? '').toUpperCase()
+    const gameId = liveGame?.bdl_game_id ?? scheduleGame?.gameId ?? null
+    if (!home || !away) return { name: null, hand: null }
+    const pitchers = matchupPitchersForTeams(gameId)
+    return {
+      name: team === home ? pitchers.away : pitchers.home,
+      hand: null,
+    }
   }
 
   function displayOpponentTeam(r: DailyProjection): string | null {
@@ -559,6 +579,7 @@ export default function ProjectionsPage() {
   async function openMatchup(r: DailyProjection) {
     setMatchupFor(r)
     setMatchupData(null)
+    setMatchupTab('default')
     setPlayerInputs(null)
     const opponentTeam = parseOpponentTeam(r)
     if (!opponentTeam) return
@@ -839,17 +860,18 @@ export default function ProjectionsPage() {
         ))
       )}
       {matchupFor ? (
-        <div className="pg-modalBackdrop" onClick={() => setMatchupFor(null)}>
-          <div className="pg-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="pg-modalBackdrop" onClick={() => { setMatchupFor(null); setMatchupTab('default') }}>
+          <div className="pg-modal pg-modal--matchup" onClick={(e) => e.stopPropagation()}>
             <div className="pg-modalHead">
               <h3>Matchup Comparison</h3>
-              <button type="button" className="pg-clearBtn" onClick={() => setMatchupFor(null)}>Close</button>
+              <button type="button" className="pg-clearBtn" onClick={() => { setMatchupFor(null); setMatchupTab('default') }}>Close</button>
             </div>
-            <p className="pg-sub">{matchupFor.name} {matchupFor.opponent ?? ''}</p>
-            {matchupLoading ? (
-              <p className="pg-sub">Loading matchup...</p>
-            ) : (
-              <>
+            <div className="pg-matchupBody">
+              <p className="pg-sub">{matchupFor.name} {matchupFor.opponent ?? ''}</p>
+              {matchupLoading ? (
+                <p className="pg-sub">Loading matchup...</p>
+              ) : (
+                <>
                 {(() => {
                   const batterGreen = {
                     iso: matchupData?.batter_iso != null && Number(matchupData.batter_iso) >= 0.25,
@@ -876,242 +898,316 @@ export default function ProjectionsPage() {
                   const pitchRows = Array.isArray(matchupData?.pitch_type_matchup)
                     ? matchupData.pitch_type_matchup
                     : []
+                  const pitchArsenalRows = Array.isArray(matchupData?.pitch_arsenal_matchup)
+                    ? (matchupData.pitch_arsenal_matchup as MatchupPitchRow[])
+                    : []
                   return (
                     <>
-                      <div style={{ marginTop: 10 }}>
-                        <div className="pg-label">
-                          Power / Contact / Plate skills ({matchupData?.season ?? selectedYear})
-                        </div>
-                        <div className="pg-matchupGrid">
-                          <div>
-                            <div className="pg-label" style={{ marginTop: 0 }}>
-                              Pitcher
-                            </div>
-                            <div className="pg-statStack">
-                              <div className={`pg-matchStat ${pitcherRed.era ? 'is-green' : ''}`}>
-                                ERA: {matchupData?.pitcher_era ?? '—'}
-                                <span className={`pg-edgeHint ${pitcherRed.era ? 'is-green' : ''}`}>
-                                  Green light: 4.50+
-                                </span>
-                              </div>
-                              <div className={`pg-matchStat ${pitcherRed.whip ? 'is-green' : ''}`}>
-                                WHIP: {matchupData?.pitcher_whip ?? '—'}
-                                <span className={`pg-edgeHint ${pitcherRed.whip ? 'is-green' : ''}`}>
-                                  Green light: 1.30+
-                                </span>
-                              </div>
-                              <div
-                                className={`pg-matchStat ${pitcherRed.hrAllowed ? 'is-green' : ''}`}
-                              >
-                                HR allowed: {matchupData?.pitcher_hr_allowed ?? '—'}
-                                <span
-                                  className={`pg-edgeHint ${pitcherRed.hrAllowed ? 'is-green' : ''}`}
-                                >
-                                  Green light: 20+
-                                </span>
-                              </div>
-                              <div className={`pg-matchStat ${pitcherRed.k9 ? 'is-green' : ''}`}>
-                                K/9: {matchupData?.pitcher_k_per_9 ?? '—'}
-                                <span className={`pg-edgeHint ${pitcherRed.k9 ? 'is-green' : ''}`}>
-                                  Green light: 8.0 or lower
-                                </span>
-                              </div>
-                            </div>
-                          </div>
-                          <div>
-                            <div className="pg-label" style={{ marginTop: 0 }}>
-                              Batter
-                            </div>
-                            <div className="pg-statStack">
-                              <div className={`pg-matchStat ${batterGreen.iso ? 'is-green' : ''}`}>
-                                ISO: {matchupData?.batter_iso ?? '—'}
-                                <span className={`pg-edgeHint ${batterGreen.iso ? 'is-green' : ''}`}>
-                                  Green light: 0.250+
-                                </span>
-                              </div>
-                              <div
-                                className={`pg-matchStat ${batterGreen.barrel ? 'is-green' : ''}`}
-                              >
-                                Barrel %: {matchupData?.batter_barrel ?? '—'}
-                                <span
-                                  className={`pg-edgeHint ${batterGreen.barrel ? 'is-green' : ''}`}
-                                >
-                                  Green light: 10%+
-                                </span>
-                              </div>
-                              <div
-                                className={`pg-matchStat ${batterGreen.hardHit ? 'is-green' : ''}`}
-                              >
-                                Hard-hit %: {matchupData?.batter_hard_hit ?? '—'}
-                                <span
-                                  className={`pg-edgeHint ${batterGreen.hardHit ? 'is-green' : ''}`}
-                                >
-                                  Green light: 40%+
-                                </span>
-                              </div>
-                              <div
-                                className={`pg-matchStat ${batterGreen.avgEv ? 'is-green' : ''}`}
-                              >
-                                Avg EV: {matchupData?.batter_avg_hit_speed ?? '—'}
-                                <span
-                                  className={`pg-edgeHint ${batterGreen.avgEv ? 'is-green' : ''}`}
-                                >
-                                  Green light: 90+ mph
-                                </span>
-                              </div>
-                              <div
-                                className={`pg-matchStat ${batterGreen.fbld ? 'is-green' : ''}`}
-                              >
-                                FB/LD: {matchupData?.batter_fbld ?? '—'}
-                                <span
-                                  className={`pg-edgeHint ${batterGreen.fbld ? 'is-green' : ''}`}
-                                >
-                                  Green light: 0.45+
-                                </span>
-                              </div>
-                              <div className="pg-matchStat">
-                                K%: {matchupData?.batter_k_pct != null ? `${(Number(matchupData.batter_k_pct) * 100).toFixed(1)}%` : '—'}
-                                <span className="pg-edgeHint">Lower is better</span>
-                              </div>
-                              <div className="pg-matchStat">
-                                BB%: {matchupData?.batter_bb_pct != null ? `${(Number(matchupData.batter_bb_pct) * 100).toFixed(1)}%` : '—'}
-                                <span className="pg-edgeHint">Higher is better</span>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      {pitchRows.length ? (
+                      {matchupData?.sample_ab ? (
                         <div style={{ marginTop: 10 }}>
-                          <div className="pg-label">Pitch-type matchup (pitcher top usage)</div>
-                          <div className="pg-pitchTypeGrid">
-                            {pitchRows.map((r: any, idx: number) => {
-                              const iso = r?.batter_iso != null ? Number(r.batter_iso) : null
-                              const usage = r?.usage != null ? Number(r.usage) : null
-                              const isoGreen = iso != null && iso >= 0.25
-                              const usageBig = usage != null && usage >= 25
-                              return (
-                                <div key={idx} className="pg-pitchTypeRow">
-                                  <div className="pg-pitchTypeTop">
-                                    <span>{r?.pitch_name ?? r?.pitch_type ?? 'Pitch'}</span>
-                                    <span style={{ color: 'var(--color-muted)', fontWeight: 800 }}>
-                                      {usage != null ? `${usage.toFixed(1)}%` : '—'}
-                                    </span>
-                                  </div>
-                                  <div className="pg-pitchTypeMeta">
-                                    <span className={`pg-pill ${usageBig ? 'is-green' : ''}`}>
-                                      Usage {usage != null ? `${usage.toFixed(1)}%` : '—'}
-                                    </span>
-                                    <span className={`pg-pill ${isoGreen ? 'is-green' : ''}`}>
-                                      Batter ISO {iso != null ? iso.toFixed(3) : '—'}
-                                    </span>
-                                    <span className="pg-pill">
-                                      Pitcher SLG allowed{' '}
-                                      {r?.pitcher_slg_allowed != null
-                                        ? Number(r.pitcher_slg_allowed).toFixed(3)
-                                        : '—'}
-                                    </span>
-                                  </div>
-                                </div>
-                              )
-                            })}
+                          <div className="pg-label">Batter vs Pitcher</div>
+                          <div className="pg-bvpRow">
+                            <span className="pg-bvpStat">AB: {matchupData.sample_ab}</span>
+                            <span className="pg-bvpStat">H: {matchupData.h ?? 0}</span>
+                            <span className="pg-bvpStat">HR: {matchupData.hr ?? 0}</span>
+                            <span className="pg-bvpStat">K: {matchupData.k ?? 0}</span>
+                            <span className="pg-bvpStat">AVG: {matchupData.avg ?? '—'}</span>
+                            <span className="pg-bvpStat">OPS: {matchupData.ops ?? '—'}</span>
                           </div>
                         </div>
                       ) : null}
+                      <div className="pg-matchupTabs" style={{ marginTop: 10 }}>
+                        <button
+                          type="button"
+                          className={`pg-matchupTab ${matchupTab === 'default' ? 'is-active' : ''}`}
+                          onClick={() => setMatchupTab('default')}
+                        >
+                          Default
+                        </button>
+                        <button
+                          type="button"
+                          className={`pg-matchupTab ${matchupTab === 'pitch' ? 'is-active' : ''}`}
+                          onClick={() => setMatchupTab('pitch')}
+                        >
+                          Pitch
+                        </button>
+                      </div>
+
+                      {matchupTab === 'default' ? (
+                        <>
+                          <div style={{ marginTop: 10 }}>
+                            <div className="pg-label">
+                              Power / Contact / Plate skills ({matchupData?.season ?? selectedYear})
+                            </div>
+                            <div className="pg-matchupGrid">
+                              <div>
+                                <div className="pg-label" style={{ marginTop: 0 }}>
+                                  Pitcher
+                                </div>
+                                <div className="pg-statStack">
+                                  <div className={`pg-matchStat ${pitcherRed.era ? 'is-green' : ''}`}>
+                                    ERA: {matchupData?.pitcher_era ?? '—'}
+                                    <span className={`pg-edgeHint ${pitcherRed.era ? 'is-green' : ''}`}>
+                                      Green light: 4.50+
+                                    </span>
+                                  </div>
+                                  <div className={`pg-matchStat ${pitcherRed.whip ? 'is-green' : ''}`}>
+                                    WHIP: {matchupData?.pitcher_whip ?? '—'}
+                                    <span className={`pg-edgeHint ${pitcherRed.whip ? 'is-green' : ''}`}>
+                                      Green light: 1.30+
+                                    </span>
+                                  </div>
+                                  <div
+                                    className={`pg-matchStat ${pitcherRed.hrAllowed ? 'is-green' : ''}`}
+                                  >
+                                    HR allowed: {matchupData?.pitcher_hr_allowed ?? '—'}
+                                    <span
+                                      className={`pg-edgeHint ${pitcherRed.hrAllowed ? 'is-green' : ''}`}
+                                    >
+                                      Green light: 20+
+                                    </span>
+                                  </div>
+                                  <div className={`pg-matchStat ${pitcherRed.k9 ? 'is-green' : ''}`}>
+                                    K/9: {matchupData?.pitcher_k_per_9 ?? '—'}
+                                    <span className={`pg-edgeHint ${pitcherRed.k9 ? 'is-green' : ''}`}>
+                                      Green light: 8.0 or lower
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+                              <div>
+                                <div className="pg-label" style={{ marginTop: 0 }}>
+                                  Batter
+                                </div>
+                                <div className="pg-statStack">
+                                  <div className={`pg-matchStat ${batterGreen.iso ? 'is-green' : ''}`}>
+                                    ISO: {matchupData?.batter_iso ?? '—'}
+                                    <span className={`pg-edgeHint ${batterGreen.iso ? 'is-green' : ''}`}>
+                                      Green light: 0.250+
+                                    </span>
+                                  </div>
+                                  <div
+                                    className={`pg-matchStat ${batterGreen.barrel ? 'is-green' : ''}`}
+                                  >
+                                    Barrel %: {matchupData?.batter_barrel ?? '—'}
+                                    <span
+                                      className={`pg-edgeHint ${batterGreen.barrel ? 'is-green' : ''}`}
+                                    >
+                                      Green light: 10%+
+                                    </span>
+                                  </div>
+                                  <div
+                                    className={`pg-matchStat ${batterGreen.hardHit ? 'is-green' : ''}`}
+                                  >
+                                    Hard-hit %: {matchupData?.batter_hard_hit ?? '—'}
+                                    <span
+                                      className={`pg-edgeHint ${batterGreen.hardHit ? 'is-green' : ''}`}
+                                    >
+                                      Green light: 40%+
+                                    </span>
+                                  </div>
+                                  <div
+                                    className={`pg-matchStat ${batterGreen.avgEv ? 'is-green' : ''}`}
+                                  >
+                                    Avg EV: {matchupData?.batter_avg_hit_speed ?? '—'}
+                                    <span
+                                      className={`pg-edgeHint ${batterGreen.avgEv ? 'is-green' : ''}`}
+                                    >
+                                      Green light: 90+ mph
+                                    </span>
+                                  </div>
+                                  <div
+                                    className={`pg-matchStat ${batterGreen.fbld ? 'is-green' : ''}`}
+                                  >
+                                    FB/LD: {matchupData?.batter_fbld ?? '—'}
+                                    <span
+                                      className={`pg-edgeHint ${batterGreen.fbld ? 'is-green' : ''}`}
+                                    >
+                                      Green light: 0.45+
+                                    </span>
+                                  </div>
+                                  <div className="pg-matchStat">
+                                    K%: {matchupData?.batter_k_pct != null ? `${(Number(matchupData.batter_k_pct) * 100).toFixed(1)}%` : '—'}
+                                    <span className="pg-edgeHint">Lower is better</span>
+                                  </div>
+                                  <div className="pg-matchStat">
+                                    BB%: {matchupData?.batter_bb_pct != null ? `${(Number(matchupData.batter_bb_pct) * 100).toFixed(1)}%` : '—'}
+                                    <span className="pg-edgeHint">Higher is better</span>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          {pitchRows.length ? (
+                            <div style={{ marginTop: 10 }}>
+                              <div className="pg-label">Pitch-type matchup (pitcher top usage)</div>
+                              <div className="pg-pitchTypeGrid">
+                                {pitchRows.map((r: any, idx: number) => {
+                                  const iso = r?.batter_iso != null ? Number(r.batter_iso) : null
+                                  const usage = r?.usage != null ? Number(r.usage) : null
+                                  const isoGreen = iso != null && iso >= 0.25
+                                  const usageBig = usage != null && usage >= 25
+                                  return (
+                                    <div key={idx} className="pg-pitchTypeRow">
+                                      <div className="pg-pitchTypeTop">
+                                        <span>{r?.pitch_name ?? r?.pitch_type ?? 'Pitch'}</span>
+                                        <span style={{ color: 'var(--color-muted)', fontWeight: 800 }}>
+                                          {usage != null ? `${usage.toFixed(1)}%` : '—'}
+                                        </span>
+                                      </div>
+                                      <div className="pg-pitchTypeMeta">
+                                        <span className={`pg-pill ${usageBig ? 'is-green' : ''}`}>
+                                          Usage {usage != null ? `${usage.toFixed(1)}%` : '—'}
+                                        </span>
+                                        <span className={`pg-pill ${isoGreen ? 'is-green' : ''}`}>
+                                          Batter ISO {iso != null ? iso.toFixed(3) : '—'}
+                                        </span>
+                                        <span className="pg-pill">
+                                          Pitcher SLG allowed{' '}
+                                          {r?.pitcher_slg_allowed != null
+                                            ? Number(r.pitcher_slg_allowed).toFixed(3)
+                                            : '—'}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            </div>
+                          ) : null}
+
+                          {matchupData?.pitcher_name ? (
+                            <div className="pg-matchupGrid">
+                              <div>
+                                <div className="pg-label">Pitcher</div>
+                                <div className="pg-matchupName">{matchupData.pitcher_name}</div>
+                                <div className="pg-small">ERA: {matchupData.pitcher_era ?? '—'} &bull; K: {matchupData.pitcher_k ?? '—'} &bull; WHIP: {matchupData.pitcher_whip ?? '—'}</div>
+                              </div>
+                              <div>
+                                <div className="pg-label">Batter</div>
+                                <div className="pg-matchupName">{matchupData.batter_name}</div>
+                                <div className="pg-small">HR: {matchupData.batter_season_hr ?? matchupData.batter_hr ?? '—'} &bull; Avg EV: {matchupData.batter_avg_hit_speed ?? '—'} &bull; Barrel: {matchupData.batter_barrel ?? '—'}%</div>
+                              </div>
+                            </div>
+                          ) : null}
+
+                          <div style={{ marginTop: 10 }}>
+                            <div className="pg-label">
+                              Pitcher vs Batter (advantage by stat) ({matchupData?.season ?? playerInputs?.season ?? selectedYear})
+                            </div>
+                            <div className="pg-matchupGrid">
+                              <div>
+                                <div className="pg-label" style={{ marginTop: 0 }}>Pitcher</div>
+                                <div className="pg-statStack">
+                                  <div className="pg-matchStat">
+                                    ERA: {matchupData?.pitcher_era ?? '—'}
+                                    <span className="pg-edgeHint">Advantage: Pitcher (lower)</span>
+                                  </div>
+                                  <div className="pg-matchStat">
+                                    K: {matchupData?.pitcher_k ?? '—'}
+                                    <span className="pg-edgeHint">Advantage: Pitcher (higher)</span>
+                                  </div>
+                                  <div className="pg-matchStat">
+                                    WHIP: {matchupData?.pitcher_whip ?? '—'}
+                                    <span className="pg-edgeHint">Advantage: Pitcher (lower)</span>
+                                  </div>
+                                  <div className="pg-matchStat">
+                                    HR allowed: {matchupData?.pitcher_hr_allowed ?? '—'}
+                                    <span className="pg-edgeHint">Advantage: Pitcher (lower)</span>
+                                  </div>
+                                </div>
+                              </div>
+                              <div>
+                                <div className="pg-label" style={{ marginTop: 0 }}>Batter</div>
+                                <div className="pg-statStack">
+                                  <div className="pg-matchStat">
+                                    EV95: {matchupData?.batter_ev95 ?? playerInputs?.ev95percent ?? '—'}
+                                    <span className="pg-edgeHint">Advantage: Batter (higher)</span>
+                                  </div>
+                                  <div className="pg-matchStat">
+                                    Barrel %: {matchupData?.batter_barrel ?? playerInputs?.brl_percent ?? '—'}
+                                    <span className="pg-edgeHint">Advantage: Batter (higher)</span>
+                                  </div>
+                                  <div className="pg-matchStat">
+                                    Avg EV: {matchupData?.batter_avg_hit_speed ?? playerInputs?.avg_hit_speed ?? '—'}
+                                    <span className="pg-edgeHint">Advantage: Batter (higher)</span>
+                                  </div>
+                                  <div className="pg-matchStat">
+                                    FB/LD: {matchupData?.batter_fbld ?? playerInputs?.fbld ?? '—'}
+                                    <span className="pg-edgeHint">Advantage: Batter (higher)</span>
+                                  </div>
+                                  <div className="pg-matchStat">
+                                    HR Total: {matchupData?.batter_hr ?? playerInputs?.hr_total ?? '—'}
+                                    <span className="pg-edgeHint">Advantage: Batter (higher)</span>
+                                  </div>
+                                  <div className="pg-matchStat">
+                                    Attempts: {matchupData?.batter_attempts ?? playerInputs?.attempts ?? '—'}
+                                    <span className="pg-edgeHint">Advantage: Batter (more PAs)</span>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </>
+                      ) : pitchArsenalRows.length ? (
+                        <div className="pg-arsenalGrid" style={{ marginTop: 10 }}>
+                          {pitchArsenalRows.map((row, idx) => {
+                            const usage = row.usage != null ? Number(row.usage) : null
+                            const batterIso = row.batter_iso != null ? Number(row.batter_iso) : null
+                            const usageBig = usage != null && usage >= 20
+                            const batterHot = batterIso != null && batterIso >= 0.25
+                            return (
+                              <div key={`${row.pitch_type ?? row.pitch_name ?? 'pitch'}-${idx}`} className="pg-arsenalCard">
+                                <div className="pg-arsenalTop">
+                                  <div>
+                                    <div className="pg-arsenalPitch">{row.pitch_name ?? row.pitch_type ?? 'Pitch'}</div>
+                                    <div className="pg-small">{row.pitch_type ?? '—'}</div>
+                                  </div>
+                                  <span className={`pg-pill ${usageBig ? 'is-green' : ''}`}>
+                                    Usage {usage != null ? `${usage.toFixed(1)}%` : '—'}
+                                  </span>
+                                </div>
+                                <div className="pg-arsenalStats">
+                                  <div className="pg-arsenalSide">
+                                    <div className="pg-label">Pitcher</div>
+                                    <div className="pg-arsenalMetric">BA allowed: {formatMetric(row.pitcher_ba_allowed)}</div>
+                                    <div className="pg-arsenalMetric">SLG allowed: {formatMetric(row.pitcher_slg_allowed)}</div>
+                                    <div className="pg-arsenalMetric">wOBA allowed: {formatMetric(row.pitcher_woba_allowed)}</div>
+                                    <div className="pg-arsenalMetric">xSLG allowed: {formatMetric(row.pitcher_est_slg_allowed)}</div>
+                                    <div className="pg-arsenalMetric">xwOBA allowed: {formatMetric(row.pitcher_est_woba_allowed)}</div>
+                                    <div className="pg-arsenalMetric">Hard-hit allowed: {formatPercent(row.pitcher_hard_hit_percent)}</div>
+                                  </div>
+                                  <div className="pg-arsenalSide">
+                                    <div className="pg-label">Batter Vs This Pitch</div>
+                                    <div className={`pg-arsenalMetric ${batterHot ? 'is-green' : ''}`}>ISO: {formatMetric(row.batter_iso)}</div>
+                                    <div className="pg-arsenalMetric">BA: {formatMetric(row.batter_ba)}</div>
+                                    <div className="pg-arsenalMetric">SLG: {formatMetric(row.batter_slg)}</div>
+                                    <div className="pg-arsenalMetric">wOBA: {formatMetric(row.batter_woba)}</div>
+                                    <div className="pg-arsenalMetric">xSLG: {formatMetric(row.batter_est_slg)}</div>
+                                    <div className="pg-arsenalMetric">xwOBA: {formatMetric(row.batter_est_woba)}</div>
+                                    <div className="pg-arsenalMetric">K%: {formatPercent(row.batter_k_percent)}</div>
+                                    <div className="pg-arsenalMetric">Hard-hit %: {formatPercent(row.batter_hard_hit_percent)}</div>
+                                  </div>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      ) : (
+                        <p className="pg-sub" style={{ marginTop: 10 }}>
+                          No pitch arsenal matchup data found for this pitcher/batter pairing.
+                        </p>
+                      )}
                     </>
                   )
                 })()}
-
-                {matchupData?.pitcher_name ? (
-                  <div className="pg-matchupGrid">
-                    <div>
-                      <div className="pg-label">Pitcher</div>
-                      <div className="pg-matchupName">{matchupData.pitcher_name}</div>
-                      <div className="pg-small">ERA: {matchupData.pitcher_era ?? '—'} &bull; K: {matchupData.pitcher_k ?? '—'} &bull; WHIP: {matchupData.pitcher_whip ?? '—'}</div>
-                    </div>
-                    <div>
-                      <div className="pg-label">Batter</div>
-                      <div className="pg-matchupName">{matchupData.batter_name}</div>
-                      <div className="pg-small">HR: {matchupData.batter_season_hr ?? matchupData.batter_hr ?? '—'} &bull; Avg EV: {matchupData.batter_avg_hit_speed ?? '—'} &bull; Barrel: {matchupData.batter_barrel ?? '—'}%</div>
-                    </div>
-                  </div>
-                ) : null}
-                {matchupData?.sample_ab ? (
-                  <div style={{ marginTop: 10 }}>
-                    <div className="pg-label">Batter vs Pitcher</div>
-                    <div className="pg-bvpRow">
-                      <span className="pg-bvpStat">AB: {matchupData.sample_ab}</span>
-                      <span className="pg-bvpStat">H: {matchupData.h ?? 0}</span>
-                      <span className="pg-bvpStat">HR: {matchupData.hr ?? 0}</span>
-                      <span className="pg-bvpStat">K: {matchupData.k ?? 0}</span>
-                      <span className="pg-bvpStat">AVG: {matchupData.avg ?? '—'}</span>
-                      <span className="pg-bvpStat">OPS: {matchupData.ops ?? '—'}</span>
-                    </div>
-                  </div>
-                ) : null}
-                <div style={{ marginTop: 10 }}>
-                  <div className="pg-label">
-                    Pitcher vs Batter (advantage by stat) ({matchupData?.season ?? playerInputs?.season ?? selectedYear})
-                  </div>
-                  <div className="pg-matchupGrid">
-                    <div>
-                      <div className="pg-label" style={{ marginTop: 0 }}>Pitcher</div>
-                      <div className="pg-statStack">
-                        <div className="pg-matchStat">
-                          ERA: {matchupData?.pitcher_era ?? '—'}
-                          <span className="pg-edgeHint">Advantage: Pitcher (lower)</span>
-                        </div>
-                        <div className="pg-matchStat">
-                          K: {matchupData?.pitcher_k ?? '—'}
-                          <span className="pg-edgeHint">Advantage: Pitcher (higher)</span>
-                        </div>
-                        <div className="pg-matchStat">
-                          WHIP: {matchupData?.pitcher_whip ?? '—'}
-                          <span className="pg-edgeHint">Advantage: Pitcher (lower)</span>
-                        </div>
-                        <div className="pg-matchStat">
-                          HR allowed: {matchupData?.pitcher_hr_allowed ?? '—'}
-                          <span className="pg-edgeHint">Advantage: Pitcher (lower)</span>
-                        </div>
-                      </div>
-                    </div>
-                    <div>
-                      <div className="pg-label" style={{ marginTop: 0 }}>Batter</div>
-                      <div className="pg-statStack">
-                        <div className="pg-matchStat">
-                          EV95: {matchupData?.batter_ev95 ?? playerInputs?.ev95percent ?? '—'}
-                          <span className="pg-edgeHint">Advantage: Batter (higher)</span>
-                        </div>
-                        <div className="pg-matchStat">
-                          Barrel %: {matchupData?.batter_barrel ?? playerInputs?.brl_percent ?? '—'}
-                          <span className="pg-edgeHint">Advantage: Batter (higher)</span>
-                        </div>
-                        <div className="pg-matchStat">
-                          Avg EV: {matchupData?.batter_avg_hit_speed ?? playerInputs?.avg_hit_speed ?? '—'}
-                          <span className="pg-edgeHint">Advantage: Batter (higher)</span>
-                        </div>
-                        <div className="pg-matchStat">
-                          FB/LD: {matchupData?.batter_fbld ?? playerInputs?.fbld ?? '—'}
-                          <span className="pg-edgeHint">Advantage: Batter (higher)</span>
-                        </div>
-                        <div className="pg-matchStat">
-                          HR Total: {matchupData?.batter_hr ?? playerInputs?.hr_total ?? '—'}
-                          <span className="pg-edgeHint">Advantage: Batter (higher)</span>
-                        </div>
-                        <div className="pg-matchStat">
-                          Attempts: {matchupData?.batter_attempts ?? playerInputs?.attempts ?? '—'}
-                          <span className="pg-edgeHint">Advantage: Batter (more PAs)</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
                 {!matchupData && !playerInputs ? (
                   <p className="pg-sub">No data found for this player/season. Try selecting a different year.</p>
                 ) : null}
               </>
             )}
+            </div>
           </div>
         </div>
       ) : null}

@@ -23,6 +23,18 @@ function normalize(name: string): string {
     .trim()
 }
 
+function addNameVariant(nameToStatId: Map<string, string>, rawName: string | null | undefined, statId: string) {
+  const name = String(rawName ?? '').trim()
+  if (!name) return
+  nameToStatId.set(normalize(name), statId)
+  if (name.includes(',')) {
+    const parts = name.split(',').map((s: string) => s.trim()).filter(Boolean)
+    if (parts.length >= 2) {
+      nameToStatId.set(normalize(`${parts[1]} ${parts[0]}`), statId)
+    }
+  }
+}
+
 function todayET(): string {
   const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }))
   const y = d.getFullYear()
@@ -81,41 +93,48 @@ export async function syncActivePlayers(): Promise<{ synced: number; matched: nu
     }
   }
 
-  // Source 2: stats_exit_velocity (names like "Judge, Aaron" in last_name_first_name)
+  // Source 2: stats_exit_velocity, both batting and pitching.
   const { data: evPlayers } = await sb
     .from('stats_exit_velocity')
-    .select('player_id, last_name_first_name')
-    .eq('role', 'batting')
+    .select('player_id, last_name_first_name, role')
     .order('season', { ascending: false })
-    .limit(3000)
-  for (const r of (evPlayers ?? []) as { player_id: string; last_name_first_name: string | null }[]) {
+    .limit(6000)
+  for (const r of (evPlayers ?? []) as { player_id: string; last_name_first_name: string | null; role?: string | null }[]) {
     statIdSet.add(r.player_id)
-    if (r.last_name_first_name) {
-      // "Judge, Aaron" → normalized "judge aaron" AND "aaron judge"
-      nameToStatId.set(normalize(r.last_name_first_name), r.player_id)
-      const parts = r.last_name_first_name.split(',').map((s: string) => s.trim())
-      if (parts.length >= 2) {
-        nameToStatId.set(normalize(`${parts[1]} ${parts[0]}`), r.player_id)
-      }
-    }
+    addNameVariant(nameToStatId, r.last_name_first_name, r.player_id)
   }
 
-  // Source 3: stats_homeruns (player_display like "Judge, Aaron")
+  // Source 3: stats_homeruns, both batting and pitching.
   const { data: hrPlayers } = await sb
     .from('stats_homeruns')
-    .select('player_id, player_display')
-    .eq('role', 'batting')
+    .select('player_id, player_display, role')
     .order('year', { ascending: false })
-    .limit(3000)
-  for (const r of (hrPlayers ?? []) as { player_id: string; player_display: string | null }[]) {
+    .limit(6000)
+  for (const r of (hrPlayers ?? []) as { player_id: string; player_display: string | null; role?: string | null }[]) {
     statIdSet.add(r.player_id)
-    if (r.player_display) {
-      nameToStatId.set(normalize(r.player_display), r.player_id)
-      const parts = r.player_display.split(',').map((s: string) => s.trim())
-      if (parts.length >= 2) {
-        nameToStatId.set(normalize(`${parts[1]} ${parts[0]}`), r.player_id)
-      }
-    }
+    addNameVariant(nameToStatId, r.player_display, r.player_id)
+  }
+
+  // Source 4: stats_standard gives us both hitters and pitchers, with exact display names.
+  const { data: standardPlayers } = await sb
+    .from('stats_standard')
+    .select('player_id, player_name, name_ascii')
+    .limit(10000)
+  for (const r of (standardPlayers ?? []) as { player_id: string; player_name: string | null; name_ascii: string | null }[]) {
+    statIdSet.add(r.player_id)
+    addNameVariant(nameToStatId, r.player_name, r.player_id)
+    addNameVariant(nameToStatId, r.name_ascii, r.player_id)
+  }
+
+  // Source 5: stats_pitch_arsenal is the specific CSV-backed source for pitch-type data.
+  const { data: arsenalPlayers } = await sb
+    .from('stats_pitch_arsenal')
+    .select('player_id, last_name_first_name')
+    .order('season', { ascending: false })
+    .limit(10000)
+  for (const r of (arsenalPlayers ?? []) as { player_id: string; last_name_first_name: string | null }[]) {
+    statIdSet.add(r.player_id)
+    addNameVariant(nameToStatId, r.last_name_first_name, r.player_id)
   }
 
   console.log(`[BDL] cross-ref pool: ${statIdSet.size} stat IDs, ${nameToStatId.size} name variants`)
