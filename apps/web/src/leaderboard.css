@@ -114,7 +114,7 @@
 }
 
 .lb-calendarDay {
-  min-height: 124px;
+  min-height: 74px;
   padding: 10px 8px;
   border-radius: 12px;
   border: 1px solid color-mix(in srgb, var(--color-secondary) 14%, transparent);
@@ -147,12 +147,6 @@
   font-size: 0.78rem;
   font-weight: 800;
   color: color-mix(in srgb, var(--color-primary) 86%, white);
-}
-
-.lb-calendarMeta {
-  font-size: 0.68rem;
-  font-weight: 700;
-  color: var(--color-muted);
 }
 
 .lb-tabs {
@@ -391,6 +385,9 @@
 .lb-col-dist {
   width: 3.5rem;
 }
+.lb-col-pct {
+  width: 4.5rem;
+}
 
 .lb-table th,
 .lb-table td {
@@ -431,6 +428,11 @@
 .lb-cell-mono {
   font-variant-numeric: tabular-nums;
   font-feature-settings: 'tnum' 1;
+}
+
+.lb-cell-pct {
+  text-align: right;
+  font-weight: 700;
 }
 
 .lb-cell-pitch {

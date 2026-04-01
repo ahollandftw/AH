@@ -3,15 +3,16 @@ import { useSearchParams } from 'react-router-dom'
 import {
   formatProbability,
   getAppDisplayDateIso,
+  getGamesForDate,
   getScheduleDates,
   groupProjectionsByTier,
+  listDailyHrProjections,
   type DailyProjection,
   type ScheduleGame,
 } from '@kinetic/shared'
 import { useWebAuth } from '../auth/WebAuthProvider.tsx'
 import { normalizeTeamCode } from '../theme/teamPalette'
 import { bdlRowMatchesCalendarDay } from '../utils/bdlCalendarDay'
-import { getCachedDailyDataBundle, preloadDailyDataBundle } from '../utils/dailyDataBundle'
 
 function tierColor(k: string): string {
   switch (k) {
@@ -233,35 +234,53 @@ export default function ProjectionsPage() {
 
   useEffect(() => {
     if (!supabase) return
-    const cached = getCachedDailyDataBundle(displayDate)
-    if (cached) {
-      setRows(cached.projections)
-      setWeightedRows(cached.weightedRows)
-      setGames(cached.games)
-      setLiveGames(cached.liveGames)
-      setProbablePitchers(cached.probablePitchers)
-      setLineupByGame(cached.lineupByGame as Record<string, GameLineup | null>)
-      setLoading(false)
-      setWeightedLoading(false)
-    } else {
-      setLoading(true)
-      setWeightedLoading(true)
-    }
+    setLoading(true)
+    const prevDate = new Date(`${displayDate}T12:00:00Z`)
+    prevDate.setUTCDate(prevDate.getUTCDate() - 1)
+    const nextDate = new Date(`${displayDate}T12:00:00Z`)
+    nextDate.setUTCDate(nextDate.getUTCDate() + 1)
+    const prevIso = prevDate.toISOString().slice(0, 10)
+    const nextIso = nextDate.toISOString().slice(0, 10)
+    void Promise.all([
+      listDailyHrProjections(supabase, displayDate),
+      getGamesForDate(supabase, displayDate),
+      supabase
+        .from('bdl_games')
+        .select('bdl_game_id,date,start_time_utc,home_team_abbrev,away_team_abbrev,status,scoring_summary')
+        .gte('date', prevIso)
+        .lte('date', nextIso),
+    ])
+      .then(([proj, sched, live]) => {
+        setRows(proj)
+        setGames(sched)
+        const raw = (live.data ?? []) as any[]
+        const dayIso = displayDate
+        setLiveGames(raw.filter((lg) => bdlRowMatchesCalendarDay(lg, dayIso)))
+      })
+      .finally(() => setLoading(false))
+  }, [supabase, displayDate])
+
+  useEffect(() => {
+    if (projectionModelTab !== 'weighted') return
     const base = import.meta.env.VITE_API_BASE_URL ?? ''
-    void preloadDailyDataBundle(supabase, displayDate, base)
-      .then((bundle) => {
-        setRows(bundle.projections)
-        setWeightedRows(bundle.weightedRows)
-        setGames(bundle.games)
-        setLiveGames(bundle.liveGames)
-        setProbablePitchers(bundle.probablePitchers)
-        setLineupByGame(bundle.lineupByGame as Record<string, GameLineup | null>)
+    if (!base) return
+    let cancelled = false
+    setWeightedLoading(true)
+    void fetch(`${base}/bdl/projections/weighted?date=${encodeURIComponent(displayDate)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json: { rows?: DailyProjection[] } | null) => {
+        if (!cancelled) setWeightedRows(json?.rows ?? [])
+      })
+      .catch(() => {
+        if (!cancelled) setWeightedRows([])
       })
       .finally(() => {
-        setLoading(false)
-        setWeightedLoading(false)
+        if (!cancelled) setWeightedLoading(false)
       })
-  }, [supabase, displayDate])
+    return () => {
+      cancelled = true
+    }
+  }, [displayDate, projectionModelTab])
 
   useEffect(() => {
     if (!supabase) return
@@ -286,6 +305,33 @@ export default function ProjectionsPage() {
     return () => clearInterval(id)
   }, [displayDate, supabase])
 
+  useEffect(() => {
+    const base = import.meta.env.VITE_API_BASE_URL ?? ''
+    if (!base) return
+    void fetch(`${base}/bdl/probable-pitchers?date=${displayDate}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json: { data?: Record<string, { home: string | null; away: string | null }> } | null) => {
+        setProbablePitchers(json?.data ?? {})
+      })
+      .catch(() => {})
+  }, [displayDate])
+
+  useEffect(() => {
+    const base = import.meta.env.VITE_API_BASE_URL ?? ''
+    if (!base) return
+    void fetch(`${base}/bdl/lineups/slate?date=${encodeURIComponent(displayDate)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json: { data?: Record<string, GameLineup | null> } | null) => {
+        const next: Record<string, GameLineup | null> = {}
+        for (const [gameId, lineup] of Object.entries(json?.data ?? {})) {
+          next[`game:${gameId}`] = lineup
+        }
+        setLineupByGame(next)
+      })
+      .catch(() => {
+        setLineupByGame({})
+      })
+  }, [displayDate])
 
   const activeRows = projectionModelTab === 'weighted' ? weightedRows : rows
 
@@ -420,9 +466,10 @@ export default function ProjectionsPage() {
   }
 
   function displayOpponentPitcher(r: DailyProjection): { name: string | null; hand: string | null } {
+    if (r.opponentPitcher) return { name: r.opponentPitcher, hand: r.opponentPitcherHand ?? null }
     const team = (normalizeTeamCode(r.team ?? '') ?? '').toUpperCase()
     const opp = (parseOpponentTeam(r) ?? '').toUpperCase()
-    if (!team || !opp) return { name: r.opponentPitcher ?? null, hand: r.opponentPitcherHand ?? null }
+    if (!team || !opp) return { name: null, hand: null }
     const scheduleGame =
       games.find((g) => {
         const home = (normalizeTeamCode(g.homeTeam) ?? g.homeTeam).toUpperCase()
@@ -438,11 +485,11 @@ export default function ProjectionsPage() {
     const home = (normalizeTeamCode(scheduleGame?.homeTeam ?? liveGame?.home_team_abbrev ?? '') ?? '').toUpperCase()
     const away = (normalizeTeamCode(scheduleGame?.awayTeam ?? liveGame?.away_team_abbrev ?? '') ?? '').toUpperCase()
     const gameId = liveGame?.bdl_game_id ?? scheduleGame?.gameId ?? null
-    if (!home || !away) return { name: r.opponentPitcher ?? null, hand: r.opponentPitcherHand ?? null }
+    if (!home || !away) return { name: null, hand: null }
     const pitchers = matchupPitchersForTeams(gameId)
     return {
-      name: (team === home ? pitchers.away : pitchers.home) ?? r.opponentPitcher ?? null,
-      hand: r.opponentPitcherHand ?? null,
+      name: team === home ? pitchers.away : pitchers.home,
+      hand: null,
     }
   }
 
@@ -813,6 +860,9 @@ export default function ProjectionsPage() {
                       {(displayOpponentTeam(r) ?? '—').toUpperCase()} &bull; {displayPitcher.name ?? '—'}
                       {displayPitcher.hand ? ` (${displayPitcher.hand})` : ''}
                     </span>
+                    <span className="pg-small">
+                      {(r.position ?? '—').toUpperCase()}
+                    </span>
                   </div>
                   <div className="pg-right">
                     <span className="pg-prob">{formatProbability(r.hrProbability)}</span>
@@ -865,7 +915,6 @@ export default function ProjectionsPage() {
               ) : (
                 <>
                 {(() => {
-                  const modalPitcher = matchupData?.pitcher_name ?? displayOpponentPitcher(matchupFor).name
                   const batterGreen = {
                     iso: matchupData?.batter_iso != null && Number(matchupData.batter_iso) >= 0.25,
                     barrel: matchupData?.batter_barrel != null && Number(matchupData.batter_barrel) >= 10,
@@ -1070,11 +1119,11 @@ export default function ProjectionsPage() {
                             </div>
                           ) : null}
 
-                          {modalPitcher ? (
+                          {matchupData?.pitcher_name ? (
                             <div className="pg-matchupGrid">
                               <div>
                                 <div className="pg-label">Pitcher</div>
-                                <div className="pg-matchupName">{modalPitcher}</div>
+                                <div className="pg-matchupName">{matchupData.pitcher_name}</div>
                                 <div className="pg-small">ERA: {matchupData.pitcher_era ?? '—'} &bull; K: {matchupData.pitcher_k ?? '—'} &bull; WHIP: {matchupData.pitcher_whip ?? '—'}</div>
                               </div>
                               <div>

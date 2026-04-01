@@ -4,14 +4,15 @@ import {
   formatProbability,
   getBallparkForHomeTeam,
   getAppDisplayDateIso,
+  getGamesForDate,
   getScheduleDates,
+  listDailyHrProjections,
   type DailyProjection,
   type ScheduleGame,
 } from '@kinetic/shared'
 import { useWebAuth } from '../auth/WebAuthProvider.tsx'
 import { normalizeTeamCode, paletteForTeam, teamAbbrevContrastStyle } from '../theme/teamPalette'
 import { bdlRowMatchesCalendarDay } from '../utils/bdlCalendarDay'
-import { getCachedDailyDataBundle, preloadDailyDataBundle } from '../utils/dailyDataBundle'
 import hrIcon96 from '../../../../data/icons8-home-run-96.png'
 import hrIcon64 from '../../../../data/icons8-home-run-64.png'
 
@@ -351,7 +352,6 @@ export default function DugoutPage() {
   const [matchupFor, setMatchupFor] = useState<DailyProjection | null>(null)
   const [matchupData, setMatchupData] = useState<any>(null)
   const [matchupTab, setMatchupTab] = useState<'default' | 'pitch'>('default')
-  const [selectedPitchIndex, setSelectedPitchIndex] = useState(0)
   const [liveGames, setLiveGames] = useState<any[]>([])
   const [selectedYear, setSelectedYear] = useState<number>(2026)
   const [playerInputs, setPlayerInputs] = useState<any>(null)
@@ -363,10 +363,6 @@ export default function DugoutPage() {
   // { [statPlayerId]: americanOdds number }
   const [playerOdds, setPlayerOdds] = useState<Record<string, PlayerBookOdds | null>>({})
   const [playerOddsByName, setPlayerOddsByName] = useState<Record<string, PlayerBookOdds | null>>({})
-
-  useEffect(() => {
-    setSelectedPitchIndex(0)
-  }, [matchupFor?.playerId, matchupData?.pitcher_name, matchupTab])
 
   useEffect(() => {
     if (!supabase) return
@@ -384,28 +380,39 @@ export default function DugoutPage() {
 
   useEffect(() => {
     if (!supabase) return
-    const cached = getCachedDailyDataBundle(displayDate)
-    if (cached) {
-      setRows(cached.projections)
-      setGames(cached.games)
-      setLiveGames(cached.liveGames)
-      setProbablePitchers(cached.probablePitchers)
-      setLineupByGame(cached.lineupByGame as Record<string, GameLineup | null>)
-      setLoading(false)
-    } else {
-      setLoading(true)
-    }
-    const base = import.meta.env.VITE_API_BASE_URL ?? ''
-    void preloadDailyDataBundle(supabase, displayDate, base)
-      .then((bundle) => {
-        setRows(bundle.projections)
-        setGames(bundle.games)
-        setLiveGames(bundle.liveGames)
-        setProbablePitchers(bundle.probablePitchers)
-        setLineupByGame(bundle.lineupByGame as Record<string, GameLineup | null>)
+    setLoading(true)
+    const prevDate = shiftIsoDate(displayDate, -1)
+    const nextDate = shiftIsoDate(displayDate, 1)
+    void Promise.all([
+      listDailyHrProjections(supabase, displayDate),
+      getGamesForDate(supabase, displayDate),
+      supabase
+        .from('bdl_games')
+        .select('bdl_game_id,date,start_time_utc,home_team_abbrev,away_team_abbrev,status,home_score,away_score,home_hits,away_hits,home_errors,away_errors,home_inning_scores,away_inning_scores,current_period,scoring_summary')
+        .gte('date', prevDate)
+        .lte('date', nextDate),
+    ])
+      .then(([proj, sched, live]) => {
+        setRows(proj)
+        setGames(sched)
+        const raw = (live.data ?? []) as any[]
+        const dayIso = displayDate
+        setLiveGames(raw.filter((lg) => bdlRowMatchesCalendarDay(lg, dayIso)))
       })
       .finally(() => setLoading(false))
   }, [supabase, displayDate])
+
+  // Fetch probable pitchers from BDL for this date
+  useEffect(() => {
+    const base = import.meta.env.VITE_API_BASE_URL ?? ''
+    if (!base) return
+    void fetch(`${base}/bdl/probable-pitchers?date=${displayDate}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((json: { data?: Record<string, { home: string | null; away: string | null }> } | null) => {
+        if (json?.data) setProbablePitchers(json.data)
+      })
+      .catch(() => {})
+  }, [displayDate])
 
   useEffect(() => {
     if (!supabase) return
@@ -687,9 +694,10 @@ export default function DugoutPage() {
   }
 
   function displayOpponentPitcher(r: DailyProjection): string | null {
+    if (r.opponentPitcher) return r.opponentPitcher
     const team = (normalizeTeamCode(r.team ?? '') ?? '').toUpperCase()
     const opp = (parseOpponentTeam(r) ?? '').toUpperCase()
-    if (!team || !opp) return r.opponentPitcher ?? null
+    if (!team || !opp) return null
     const scheduleGame =
       games.find((g) => {
         const home = (normalizeTeamCode(g.homeTeam) ?? g.homeTeam).toUpperCase()
@@ -705,16 +713,15 @@ export default function DugoutPage() {
     const home = (normalizeTeamCode(scheduleGame?.homeTeam ?? liveGame?.home_team_abbrev ?? '') ?? '').toUpperCase()
     const away = (normalizeTeamCode(scheduleGame?.awayTeam ?? liveGame?.away_team_abbrev ?? '') ?? '').toUpperCase()
     const gameId = liveGame?.bdl_game_id ?? scheduleGame?.gameId ?? null
-    if (!home || !away) return r.opponentPitcher ?? null
+    if (!home || !away) return null
     const pitchers = matchupPitchersForTeams(gameId)
-    return (team === home ? pitchers.away : pitchers.home) ?? r.opponentPitcher ?? null
+    return team === home ? pitchers.away : pitchers.home
   }
 
   async function openMatchup(r: DailyProjection) {
     setMatchupFor(r)
     setMatchupData(null)
     setMatchupTab('default')
-    setSelectedPitchIndex(0)
     setPlayerInputs(null)
     const opponentTeam = parseOpponentTeam(r) ?? ''
     if (!opponentTeam) return
@@ -1532,20 +1539,12 @@ export default function DugoutPage() {
       {matchupFor ? (
         <div className="pg-modalBackdrop" onClick={() => { setMatchupFor(null); setMatchupTab('default') }}>
           <div className="pg-modal pg-modal--matchup" onClick={(e) => e.stopPropagation()}>
-            {(() => {
-              const modalPitcherName =
-                matchupData?.pitcher_name ??
-                displayOpponentPitcher(matchupFor) ??
-                matchupFor.opponentPitcher ??
-                matchupFor.opponent
-              return (
-                <>
             {/* Header */}
             <div className="pg-modalHead">
               <h3 className="pg-modalTitle">
                 {matchupFor.name}
                 <span className="pg-modalVs"> vs </span>
-                {modalPitcherName}
+                {matchupData?.pitcher_name ?? (matchupFor.opponentPitcher ?? matchupFor.opponent)}
               </h3>
               <button type="button" className="pg-clearBtn" onClick={() => { setMatchupFor(null); setMatchupTab('default') }}>✕ Close</button>
             </div>
@@ -1561,11 +1560,11 @@ export default function DugoutPage() {
                       className="pg-avatar pg-avatar--lg"
                       style={{ background: 'linear-gradient(140deg, #334155, #1e293b)', color: '#94a3b8' }}
                     >
-                      {initials(modalPitcherName)}
+                      {initials(matchupData?.pitcher_name ?? matchupFor.opponentPitcher)}
                     </div>
                     <div className="pg-matchupPlayerInfo">
                       <div className="pg-matchupRole">Pitcher</div>
-                      <div className="pg-matchupPlayerName">{modalPitcherName ?? '—'}</div>
+                      <div className="pg-matchupPlayerName">{matchupData?.pitcher_name ?? matchupFor.opponentPitcher ?? '—'}</div>
                     </div>
                   </div>
                   <div className="pg-matchupVsDivider">VS</div>
@@ -1690,54 +1689,6 @@ export default function DugoutPage() {
                       )
                     }
                     const overallPitchGrade = computeOverallPitchGrade(pitchRows)
-                    const safePitchIndex = Math.min(Math.max(selectedPitchIndex, 0), Math.max(pitchRows.length - 1, 0))
-                    const activePitch = pitchRows[safePitchIndex]
-                    const activePitchScore = computePitchRowScore(activePitch)
-                    const activePitchGrade = gradeFromPitchScore(activePitchScore)
-                    const usage = activePitch?.usage != null ? Number(activePitch.usage) : null
-                    const usageBig = usage != null && usage >= 20
-                    const comparisonRows = [
-                      {
-                        label: 'BA',
-                        pitcher: formatPitchMetric(activePitch?.pitcher_ba_allowed),
-                        batter: formatPitchMetric(activePitch?.batter_ba),
-                      },
-                      {
-                        label: 'SLG',
-                        pitcher: formatPitchMetric(activePitch?.pitcher_slg_allowed),
-                        batter: formatPitchMetric(activePitch?.batter_slg),
-                      },
-                      {
-                        label: 'wOBA',
-                        pitcher: formatPitchMetric(activePitch?.pitcher_woba_allowed),
-                        batter: formatPitchMetric(activePitch?.batter_woba),
-                      },
-                      {
-                        label: 'xSLG',
-                        pitcher: formatPitchMetric(activePitch?.pitcher_est_slg_allowed),
-                        batter: formatPitchMetric(activePitch?.batter_est_slg),
-                      },
-                      {
-                        label: 'xwOBA',
-                        pitcher: formatPitchMetric(activePitch?.pitcher_est_woba_allowed),
-                        batter: formatPitchMetric(activePitch?.batter_est_woba),
-                      },
-                      {
-                        label: 'Hard-hit %',
-                        pitcher: formatPitchPercent(activePitch?.pitcher_hard_hit_percent),
-                        batter: formatPitchPercent(activePitch?.batter_hard_hit_percent),
-                      },
-                      {
-                        label: 'K%',
-                        pitcher: formatPitchPercent(activePitch?.pitcher_k_percent),
-                        batter: formatPitchPercent(activePitch?.batter_k_percent),
-                      },
-                      {
-                        label: 'Whiff%',
-                        pitcher: formatPitchPercent(activePitch?.pitcher_whiff_percent),
-                        batter: formatPitchPercent(activePitch?.batter_whiff_percent),
-                      },
-                    ]
                     return (
                       <div className="pg-arsenalGrid">
                         <div className="pg-pitchSummary">
@@ -1757,76 +1708,93 @@ export default function DugoutPage() {
                             </span>
                           </div>
                         </div>
-                        <div className="pg-pitchNav">
-                          <button
-                            type="button"
-                            className="pg-pitchNavBtn"
-                            onClick={() => setSelectedPitchIndex((idx) => (idx - 1 + pitchRows.length) % pitchRows.length)}
-                          >
-                            ‹
-                          </button>
-                          <div className="pg-pitchNavCenter">
-                            <div className="pg-pitchNavTitle">
-                              {activePitch?.pitch_name ?? activePitch?.pitch_type ?? 'Pitch'} ({safePitchIndex + 1}/{pitchRows.length})
-                            </div>
-                            <div className="pg-pitchNavChips">
-                              {pitchRows.map((row: any, idx: number) => (
-                                <button
-                                  key={`${row?.pitch_type ?? row?.pitch_name ?? 'pitch'}-${idx}`}
-                                  type="button"
-                                  className={`pg-pitchChip ${idx === safePitchIndex ? 'is-active' : ''}`}
-                                  onClick={() => setSelectedPitchIndex(idx)}
-                                >
-                                  {row?.pitch_type ?? row?.pitch_name ?? `P${idx + 1}`}
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                          <button
-                            type="button"
-                            className="pg-pitchNavBtn"
-                            onClick={() => setSelectedPitchIndex((idx) => (idx + 1) % pitchRows.length)}
-                          >
-                            ›
-                          </button>
-                        </div>
-                        <div className="pg-arsenalCard">
-                          <div className="pg-arsenalTop">
-                            <div>
-                              <div className="pg-arsenalPitch">{activePitch?.pitch_name ?? activePitch?.pitch_type ?? 'Pitch'}</div>
-                              <div className="pg-small">{activePitch?.pitch_type ?? '—'}</div>
-                            </div>
-                            <div className="pg-arsenalBadges">
-                              <span className={`pg-pill ${usageBig ? 'is-green' : ''}`}>
-                                Usage {usage != null ? `${usage.toFixed(1)}%` : '—'}
-                              </span>
-                              <span className={`pg-pitchGradeBadge ${gradeClassName(activePitchGrade)}`}>
-                                {activePitchGrade}
-                              </span>
-                            </div>
-                          </div>
-                          <div className="pg-arsenalIsoRow">
-                            <span className="pg-arsenalIsoLabel">ISO</span>
-                            <span className="pg-arsenalIsoValue">{formatPitchMetric(activePitch?.batter_iso)}</span>
-                            <span className="pg-small">{activePitchScore != null ? `${activePitchScore > 0 ? '+' : ''}${activePitchScore.toFixed(2)} edge` : 'No edge score'}</span>
-                          </div>
-                          <div className="pg-arsenalCompare">
-                            <div className="pg-arsenalCompareHead">
-                              <div className="pg-arsenalCompareHeadCell">Pitcher</div>
-                              <div className="pg-arsenalCompareHeadCell pg-arsenalCompareHeadCell--metric">Metric</div>
-                              <div className="pg-arsenalCompareHeadCell">Batter vs This Pitch</div>
-                            </div>
-                            <div className="pg-arsenalCompareRows">
-                              {comparisonRows.map((row) => (
-                                <div key={row.label} className="pg-arsenalCompareRow">
-                                  <div className="pg-arsenalCompareValue">{row.pitcher}</div>
-                                  <div className="pg-arsenalCompareMetric">{row.label}</div>
-                                  <div className="pg-arsenalCompareValue pg-arsenalCompareValue--batter">{row.batter}</div>
+                        {pitchRows.map((r: any, idx: number) => {
+                          const usage = r?.usage != null ? Number(r.usage) : null
+                          const usageBig = usage != null && usage >= 20
+                          const rowScore = computePitchRowScore(r)
+                          const rowGrade = gradeFromPitchScore(rowScore)
+                          const comparisonRows = [
+                            {
+                              label: 'BA',
+                              pitcher: formatPitchMetric(r?.pitcher_ba_allowed),
+                              batter: formatPitchMetric(r?.batter_ba),
+                            },
+                            {
+                              label: 'SLG',
+                              pitcher: formatPitchMetric(r?.pitcher_slg_allowed),
+                              batter: formatPitchMetric(r?.batter_slg),
+                            },
+                            {
+                              label: 'wOBA',
+                              pitcher: formatPitchMetric(r?.pitcher_woba_allowed),
+                              batter: formatPitchMetric(r?.batter_woba),
+                            },
+                            {
+                              label: 'xSLG',
+                              pitcher: formatPitchMetric(r?.pitcher_est_slg_allowed),
+                              batter: formatPitchMetric(r?.batter_est_slg),
+                            },
+                            {
+                              label: 'xwOBA',
+                              pitcher: formatPitchMetric(r?.pitcher_est_woba_allowed),
+                              batter: formatPitchMetric(r?.batter_est_woba),
+                            },
+                            {
+                              label: 'Hard-hit %',
+                              pitcher: formatPitchPercent(r?.pitcher_hard_hit_percent),
+                              batter: formatPitchPercent(r?.batter_hard_hit_percent),
+                            },
+                            {
+                              label: 'K%',
+                              pitcher: formatPitchPercent(r?.pitcher_k_percent),
+                              batter: formatPitchPercent(r?.batter_k_percent),
+                            },
+                            {
+                              label: 'Whiff%',
+                              pitcher: formatPitchPercent(r?.pitcher_whiff_percent),
+                              batter: formatPitchPercent(r?.batter_whiff_percent),
+                            },
+                          ]
+                          return (
+                            <div key={`${r?.pitch_type ?? r?.pitch_name ?? 'pitch'}-${idx}`} className="pg-arsenalCard">
+                              <div className="pg-arsenalTop">
+                                <div>
+                                  <div className="pg-arsenalPitch">{r?.pitch_name ?? r?.pitch_type ?? 'Pitch'}</div>
+                                  <div className="pg-small">{r?.pitch_type ?? '—'}</div>
                                 </div>
-                              ))}
+                                <div className="pg-arsenalBadges">
+                                  <span className={`pg-pill ${usageBig ? 'is-green' : ''}`}>
+                                    Usage {usage != null ? `${usage.toFixed(1)}%` : '—'}
+                                  </span>
+                                  <span className={`pg-pitchGradeBadge ${gradeClassName(rowGrade)}`}>
+                                    {rowGrade}
+                                  </span>
+                                </div>
+                              </div>
+                              <div className="pg-arsenalIsoRow">
+                                <span className="pg-arsenalIsoLabel">ISO</span>
+                                <span className="pg-arsenalIsoValue">{formatPitchMetric(r?.batter_iso)}</span>
+                                <span className="pg-small">{rowScore != null ? `${rowScore > 0 ? '+' : ''}${rowScore.toFixed(2)} edge` : 'No edge score'}</span>
+                              </div>
+                              <div className="pg-arsenalCompare">
+                                <div className="pg-arsenalCompareHead">
+                                  <div className="pg-arsenalCompareHeadCell">Pitcher</div>
+                                  <div className="pg-arsenalCompareHeadCell pg-arsenalCompareHeadCell--metric">Metric</div>
+                                  <div className="pg-arsenalCompareHeadCell">Batter vs This Pitch</div>
+                                </div>
+                                <div className="pg-arsenalCompareRows">
+                                  {comparisonRows.map((row) => (
+                                    <div key={row.label} className="pg-arsenalCompareRow">
+                                      <div className="pg-arsenalCompareValue">{row.pitcher}</div>
+                                      <div className="pg-arsenalCompareMetric">{row.label}</div>
+                                      <div className="pg-arsenalCompareValue pg-arsenalCompareValue--batter">{row.batter}</div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
                             </div>
-                          </div>
-                        </div>
+                          )
+                        })}
                       </div>
                     )
                   })()
@@ -1837,9 +1805,6 @@ export default function DugoutPage() {
                 )}
               </div>
             )}
-                </>
-              )
-            })()}
           </div>
         </div>
       ) : null}

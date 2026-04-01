@@ -1,4 +1,5 @@
 import type { Express, Request, Response } from 'express'
+import { mergedHrProbabilityMapForDate } from '../matchupProjectionMerge.js'
 import { getServiceClient } from '../supabase.js'
 import type { LeaderboardEntry, LeaderboardResponse } from '../types.js'
 
@@ -97,7 +98,6 @@ export function registerLeaderboardRoutes(app: Express) {
       const qTeam = String(req.query.team ?? '').trim().toLowerCase()
       const qPitcher = String(req.query.pitcher ?? '').trim().toLowerCase()
       const qBatter = String(req.query.batter ?? '').trim().toLowerCase()
-      const qPitchType = String(req.query.pitch_type ?? '').trim().toLowerCase()
 
       const supabase = getServiceClient()
 
@@ -194,6 +194,7 @@ export function registerLeaderboardRoutes(app: Express) {
         pitcher_home_away: string | null
         pitch_type: string | null
         distance: number | null
+        today_probability: number | null
         stat_player_id: string | null
       }
 
@@ -233,8 +234,32 @@ export function registerLeaderboardRoutes(app: Express) {
           pitcher_home_away: (ev.pitcher_home_away as string | null) ?? null,
           pitch_type: (ev.pitch_type as string | null) ?? null,
           distance: ev.hit_distance != null ? Number(ev.hit_distance) : null,
+          today_probability: null,
           stat_player_id: sid,
         })
+      }
+
+      const datesNeeded = Array.from(
+        new Set(
+          rowsUnsorted
+            .map((r) => r.game_date)
+            .filter((d): d is string => Boolean(d)),
+        ),
+      )
+      const probByDate = new Map<string, Map<string, number>>()
+      for (const d of datesNeeded) {
+        const needIds = rowsUnsorted
+          .filter((r) => r.game_date === d && r.stat_player_id)
+          .map((r) => r.stat_player_id!) as string[]
+        const m = await mergedHrProbabilityMapForDate(supabase, d, needIds)
+        probByDate.set(d, m)
+      }
+
+      for (const r of rowsUnsorted) {
+        if (!r.stat_player_id || !r.game_date) continue
+        const m = probByDate.get(r.game_date)
+        const p = m?.get(r.stat_player_id)
+        if (p != null) r.today_probability = p
       }
 
       let rows = rowsUnsorted.filter((r) => {
@@ -242,7 +267,6 @@ export function registerLeaderboardRoutes(app: Express) {
         if (qTeam && !(r.batter_team ?? '').toLowerCase().includes(qTeam)) return false
         if (qPitcher && !(r.pitcher_name ?? '').toLowerCase().includes(qPitcher)) return false
         if (qBatter && !(r.batter_name ?? '').toLowerCase().includes(qBatter)) return false
-        if (qPitchType && !(r.pitch_type ?? '').toLowerCase().includes(qPitchType)) return false
         return true
       })
 
@@ -284,12 +308,6 @@ export function registerLeaderboardRoutes(app: Express) {
         acc[row.game_date] = (acc[row.game_date] ?? 0) + 1
         return acc
       }, {})
-      const marchGameCounts = (seasonGames ?? []).reduce<Record<string, number>>((acc, game) => {
-        const dateIso = String((game as { date?: string | null }).date ?? '')
-        if (!dateIso.startsWith(`${marchMonth}-`)) return acc
-        acc[dateIso] = (acc[dateIso] ?? 0) + 1
-        return acc
-      }, {})
 
       res.json({
         last_updated: new Date().toISOString(),
@@ -297,7 +315,6 @@ export function registerLeaderboardRoutes(app: Express) {
         count: rows.length,
         calendar_month: marchMonth,
         calendar_counts: marchCounts,
-        calendar_game_counts: marchGameCounts,
         persisted:
           'Each HR is stored in Supabase `bdl_hr_events` (enriched from `bdl_games`) for future reference.',
         events: rows.slice(0, limit),

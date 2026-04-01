@@ -1,6 +1,5 @@
 import { BrowserRouter, Link, Navigate, Outlet, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { useEffect, useRef, useState } from 'react'
-import { getAppDisplayDateIso } from '@kinetic/shared'
 import { WebAuthProvider } from './auth/WebAuthProvider.tsx'
 import { useWebAuth } from './auth/WebAuthProvider.tsx'
 import LeaderboardPage from './pages/LeaderboardPage.tsx'
@@ -13,38 +12,27 @@ import HelpPage from './pages/HelpPage.tsx'
 import WallOfBangPage from './pages/WallOfBangPage.tsx'
 import appLogo from '../../../data/logo.svg'
 import hrIcon64 from '../../../data/icons8-home-run-64.png'
-import { preloadDailyDataBundle } from './utils/dailyDataBundle'
 import './leaderboard.css'
 
 function Layout() {
   const { pathname } = useLocation()
   const navigate = useNavigate()
   const { session, supabase, waiverAccepted } = useWebAuth()
-  const [bootReady, setBootReady] = useState(false)
-  const [bootProgress, setBootProgress] = useState(0)
-  const [bootMessageIdx, setBootMessageIdx] = useState(0)
   const [profileName, setProfileName] = useState<string | null>(null)
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
-  const bootMessages = [
-    'SANTA MARIA loading the bombs...',
-    'FIRST PITCH CRUSHING in progress...',
-    'BYE BYE BASEBALL on deck...',
-    'Warming up the long balls...',
-  ]
-  const bootSequence = useRef<string[]>([])
   const fullLinks = [
     ['/dugout', 'Scoreboard', '⚾'],
     ['/projections', 'Projections', '📈'],
-    ['/stats', 'Homers', <img src={hrIcon64} alt="" style={{ width: 18, height: 18, objectFit: 'contain' }} />],
+    ['/stats', 'Homer Tracking', <img src={hrIcon64} alt="" style={{ width: 18, height: 18, objectFit: 'contain' }} />],
     ['/community', 'Leaderboard', '🏆'],
     ['/wall', 'Wall of Bang', '💥'],
   ] as const
   const menuLinks = [
     ['/dugout', 'Scoreboard'],
     ['/projections', 'Projections'],
-    ['/stats', 'Homers'],
+    ['/stats', 'Homer Tracking'],
     ['/community', 'Leaderboard'],
     ['/wall', 'Wall of Bang'],
     ['/friends', 'Friends'],
@@ -60,7 +48,7 @@ function Layout() {
     const pageName =
       pathname === '/dugout' ? 'Scoreboard'
       : pathname === '/projections' ? 'Projections'
-      : pathname === '/stats' ? 'Homers'
+      : pathname === '/stats' ? 'Homer Tracking'
       : pathname === '/community' ? 'Leaderboard'
       : pathname === '/wall' ? 'Wall of Bang'
       : pathname === '/friends' ? 'Friends'
@@ -69,41 +57,6 @@ function Layout() {
       : 'Scoreboard'
     document.title = `AnalyticHustle | ${pageName}`
   }, [pathname])
-  useEffect(() => {
-    const today = getAppDisplayDateIso()
-    const base = import.meta.env.VITE_API_BASE_URL ?? ''
-    const maxBootMs = 10000
-    const startedAt = Date.now()
-    const shuffled = [...bootMessages].sort(() => Math.random() - 0.5).slice(0, 2)
-    bootSequence.current = shuffled.length === 2 ? shuffled : bootMessages.slice(0, 2)
-    setBootMessageIdx(0)
-    setBootProgress(0)
-    const progressTimer = window.setInterval(() => {
-      const elapsed = Date.now() - startedAt
-      setBootProgress(Math.min(100, (elapsed / maxBootMs) * 100))
-      if (elapsed >= 5000) setBootMessageIdx(1)
-    }, 100)
-    const finishBoot = () => {
-      window.clearInterval(progressTimer)
-      setBootProgress(100)
-      setBootReady(true)
-    }
-    const timeoutId = window.setTimeout(() => {
-      finishBoot()
-    }, maxBootMs)
-    const warmup = Promise.allSettled([
-      supabase ? preloadDailyDataBundle(supabase, today, base) : Promise.resolve(null),
-    ])
-    void warmup.finally(() => {
-      window.clearTimeout(timeoutId)
-      finishBoot()
-    })
-    return () => {
-      window.clearInterval(progressTimer)
-      window.clearTimeout(timeoutId)
-    }
-  }, [supabase])
-
   useEffect(() => {
     if (!supabase || !session?.user.id) {
       setProfileName(null)
@@ -179,17 +132,6 @@ function Layout() {
 
   return (
     <div className="appRoot">
-      {!bootReady ? (
-        <div className="appBoot">
-          <div className="appBoot-logoFrame" style={{ ['--logo-url' as string]: `url("${appLogo}")` }}>
-            <div className="appBoot-logoMask" aria-hidden="true" />
-          </div>
-          <div className="appBoot-copy">{bootSequence.current[bootMessageIdx] ?? bootMessages[bootMessageIdx] ?? bootMessages[0]}</div>
-          <div className="appBoot-bar">
-            <div className="appBoot-barFill" style={{ width: `${bootProgress}%` }} />
-          </div>
-        </div>
-      ) : null}
       <header className="topBanner" role="banner" aria-label="AnalyticHustle header">
         <div className="topBanner-side" ref={menuRef}>
           {!(session && !waiverAccepted) ? (
