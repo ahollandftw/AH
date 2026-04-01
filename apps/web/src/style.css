@@ -1466,17 +1466,150 @@ body,
   color: var(--color-text);
 }
 
-.pg-arsenalStats {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
+.pg-arsenalBadges {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
-.pg-arsenalSide {
+.pg-pitchSummary {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 20%, transparent);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--color-primary) 10%, var(--color-surface));
+}
+
+.pg-pitchGradeBlock {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.pg-pitchGradeBadge {
+  min-width: 38px;
+  border-radius: 999px;
+  padding: 7px 12px;
+  text-align: center;
+  font-size: 0.82rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  border: 1px solid color-mix(in srgb, var(--color-secondary) 18%, transparent);
+  background: color-mix(in srgb, var(--color-surface) 75%, transparent);
+  color: var(--color-text);
+}
+
+.pg-pitchGradeBadge--a {
+  background: rgba(45, 210, 124, 0.18);
+  border-color: rgba(45, 210, 124, 0.45);
+  color: #cbffe4;
+}
+
+.pg-pitchGradeBadge--b {
+  background: rgba(112, 196, 255, 0.16);
+  border-color: rgba(112, 196, 255, 0.45);
+  color: #d7efff;
+}
+
+.pg-pitchGradeBadge--c {
+  background: rgba(255, 196, 87, 0.14);
+  border-color: rgba(255, 196, 87, 0.4);
+  color: #ffe8b8;
+}
+
+.pg-pitchGradeBadge--d {
+  background: rgba(255, 148, 79, 0.14);
+  border-color: rgba(255, 148, 79, 0.4);
+  color: #ffd7bb;
+}
+
+.pg-pitchGradeBadge--f {
+  background: rgba(255, 92, 92, 0.15);
+  border-color: rgba(255, 92, 92, 0.4);
+  color: #ffd2d2;
+}
+
+.pg-pitchGradeBadge--unknown {
+  opacity: 0.75;
+}
+
+.pg-pitchGradeText {
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--color-muted);
+}
+
+.pg-arsenalIsoRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.pg-arsenalIsoLabel {
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+
+.pg-arsenalIsoValue {
+  font-size: 0.95rem;
+  font-weight: 900;
+  color: var(--color-text);
+}
+
+.pg-arsenalTableWrap {
+  overflow-x: auto;
+}
+
+.pg-arsenalTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+}
+
+.pg-arsenalTable th,
+.pg-arsenalTable td {
+  padding: 8px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-secondary) 14%, transparent);
+}
+
+.pg-arsenalTable th {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-muted);
+  text-align: left;
+}
+
+.pg-arsenalTable td {
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.pg-arsenalTable td:nth-child(2),
+.pg-arsenalTable td:nth-child(3),
+.pg-arsenalTable th:nth-child(2),
+.pg-arsenalTable th:nth-child(3) {
+  text-align: right;
+}
+
+.pg-arsenalTable td:first-child {
+  color: var(--color-muted);
+  min-width: 88px;
+}
+
+.pg-arsenalTable tr:last-child td {
+  border-bottom: none;
 }
 
 .pg-arsenalMetric {
@@ -2142,7 +2275,11 @@ body,
   .pg-matchupVsDivider {
     text-align: center;
   }
-  .pg-arsenalStats {
-    grid-template-columns: 1fr;
+  .pg-pitchSummary {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .pg-pitchGradeBlock {
+    justify-content: flex-start;
   }
 }

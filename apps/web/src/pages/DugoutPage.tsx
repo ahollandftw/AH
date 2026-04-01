@@ -227,6 +227,91 @@ function formatEtTime(utc: string | null | undefined): string {
   })
 }
 
+function toFiniteNumber(value: unknown): number | null {
+  if (value == null || value === '') return null
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
+function formatPitchMetric(value: unknown, digits = 3): string {
+  const n = toFiniteNumber(value)
+  return n == null ? '—' : n.toFixed(digits)
+}
+
+function formatPitchPercent(value: unknown, digits = 1): string {
+  const n = toFiniteNumber(value)
+  return n == null ? '—' : `${n.toFixed(digits)}%`
+}
+
+function gradeFromPitchScore(score: number | null): 'A' | 'B' | 'C' | 'D' | 'F' | '—' {
+  if (score == null || !Number.isFinite(score)) return '—'
+  if (score >= 0.9) return 'A'
+  if (score >= 0.35) return 'B'
+  if (score >= -0.1) return 'C'
+  if (score >= -0.55) return 'D'
+  return 'F'
+}
+
+function gradeClassName(grade: string): string {
+  const normalized = /^[a-f]$/i.test(grade) ? grade.toLowerCase() : 'unknown'
+  return `pg-pitchGradeBadge--${normalized}`
+}
+
+function zScorePitch(value: number | null, mean: number, std: number, invert = false): number | null {
+  if (value == null || !Number.isFinite(value)) return null
+  const z = (value - mean) / std
+  const adjusted = invert ? -z : z
+  return Math.max(-2, Math.min(2, adjusted))
+}
+
+function computePitchRowScore(row: any): number | null {
+  const parts: number[] = []
+  const push = (value: number | null) => {
+    if (value != null && Number.isFinite(value)) parts.push(value)
+  }
+
+  push(zScorePitch(toFiniteNumber(row?.pitcher_ba_allowed), 0.245, 0.035))
+  push(zScorePitch(toFiniteNumber(row?.batter_ba), 0.245, 0.035))
+  push(zScorePitch(toFiniteNumber(row?.pitcher_slg_allowed), 0.390, 0.080))
+  push(zScorePitch(toFiniteNumber(row?.batter_slg), 0.390, 0.080))
+  push(zScorePitch(toFiniteNumber(row?.pitcher_woba_allowed), 0.320, 0.040))
+  push(zScorePitch(toFiniteNumber(row?.batter_woba), 0.320, 0.040))
+  push(zScorePitch(toFiniteNumber(row?.pitcher_est_slg_allowed), 0.390, 0.080))
+  push(zScorePitch(toFiniteNumber(row?.batter_est_slg), 0.390, 0.080))
+  push(zScorePitch(toFiniteNumber(row?.pitcher_est_woba_allowed), 0.320, 0.040))
+  push(zScorePitch(toFiniteNumber(row?.batter_est_woba), 0.320, 0.040))
+  push(zScorePitch(toFiniteNumber(row?.pitcher_hard_hit_percent), 39, 10))
+  push(zScorePitch(toFiniteNumber(row?.batter_hard_hit_percent), 39, 10))
+  push(zScorePitch(toFiniteNumber(row?.pitcher_k_percent), 23, 7, true))
+  push(zScorePitch(toFiniteNumber(row?.batter_k_percent), 23, 7, true))
+  push(zScorePitch(toFiniteNumber(row?.pitcher_whiff_percent), 28, 9, true))
+  push(zScorePitch(toFiniteNumber(row?.batter_whiff_percent), 28, 9, true))
+
+  if (!parts.length) return null
+  return parts.reduce((sum, value) => sum + value, 0) / parts.length
+}
+
+function computeOverallPitchGrade(rows: any[]): { grade: string; score: number | null; ratedPitches: number } {
+  let weightedSum = 0
+  let weightTotal = 0
+  let ratedPitches = 0
+  for (const row of rows) {
+    const score = computePitchRowScore(row)
+    if (score == null) continue
+    const usage = Math.max(0, toFiniteNumber(row?.usage) ?? 0)
+    const weight = usage > 0 ? usage : 1
+    weightedSum += score * weight
+    weightTotal += weight
+    ratedPitches += 1
+  }
+  const finalScore = weightTotal > 0 ? weightedSum / weightTotal : null
+  return {
+    grade: gradeFromPitchScore(finalScore),
+    score: finalScore,
+    ratedPitches,
+  }
+}
+
 function extractHomerHitters(scoringSummary: any): Set<string> {
   const out = new Set<string>()
   const plays = Array.isArray(scoringSummary) ? scoringSummary : []
@@ -1603,17 +1688,73 @@ export default function DugoutPage() {
                         </div>
                       )
                     }
+                    const overallPitchGrade = computeOverallPitchGrade(pitchRows)
                     return (
                       <div className="pg-arsenalGrid">
+                        <div className="pg-pitchSummary">
+                          <div>
+                            <div className="pg-bvpLabel" style={{ marginBottom: 6 }}>Pitch Matchup Grade</div>
+                            <div className="pg-small">
+                              Weighted by pitcher usage across {overallPitchGrade.ratedPitches} rated pitch
+                              {overallPitchGrade.ratedPitches === 1 ? '' : 'es'}
+                            </div>
+                          </div>
+                          <div className="pg-pitchGradeBlock">
+                            <span className={`pg-pitchGradeBadge ${gradeClassName(overallPitchGrade.grade)}`}>
+                              {overallPitchGrade.grade}
+                            </span>
+                            <span className="pg-pitchGradeText">
+                              {overallPitchGrade.score != null ? `${overallPitchGrade.score > 0 ? '+' : ''}${overallPitchGrade.score.toFixed(2)} edge` : 'No grade'}
+                            </span>
+                          </div>
+                        </div>
                         {pitchRows.map((r: any, idx: number) => {
                           const usage = r?.usage != null ? Number(r.usage) : null
-                          const batterIso = r?.batter_iso != null ? Number(r.batter_iso) : null
                           const usageBig = usage != null && usage >= 20
-                          const batterHot = batterIso != null && batterIso >= 0.25
-                          const num = (value: unknown, digits = 3) =>
-                            value != null && Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : '—'
-                          const pct = (value: unknown, digits = 1) =>
-                            value != null && Number.isFinite(Number(value)) ? `${Number(value).toFixed(digits)}%` : '—'
+                          const rowScore = computePitchRowScore(r)
+                          const rowGrade = gradeFromPitchScore(rowScore)
+                          const comparisonRows = [
+                            {
+                              label: 'BA',
+                              pitcher: formatPitchMetric(r?.pitcher_ba_allowed),
+                              batter: formatPitchMetric(r?.batter_ba),
+                            },
+                            {
+                              label: 'SLG',
+                              pitcher: formatPitchMetric(r?.pitcher_slg_allowed),
+                              batter: formatPitchMetric(r?.batter_slg),
+                            },
+                            {
+                              label: 'wOBA',
+                              pitcher: formatPitchMetric(r?.pitcher_woba_allowed),
+                              batter: formatPitchMetric(r?.batter_woba),
+                            },
+                            {
+                              label: 'xSLG',
+                              pitcher: formatPitchMetric(r?.pitcher_est_slg_allowed),
+                              batter: formatPitchMetric(r?.batter_est_slg),
+                            },
+                            {
+                              label: 'xwOBA',
+                              pitcher: formatPitchMetric(r?.pitcher_est_woba_allowed),
+                              batter: formatPitchMetric(r?.batter_est_woba),
+                            },
+                            {
+                              label: 'Hard-hit %',
+                              pitcher: formatPitchPercent(r?.pitcher_hard_hit_percent),
+                              batter: formatPitchPercent(r?.batter_hard_hit_percent),
+                            },
+                            {
+                              label: 'K%',
+                              pitcher: formatPitchPercent(r?.pitcher_k_percent),
+                              batter: formatPitchPercent(r?.batter_k_percent),
+                            },
+                            {
+                              label: 'Whiff%',
+                              pitcher: formatPitchPercent(r?.pitcher_whiff_percent),
+                              batter: formatPitchPercent(r?.batter_whiff_percent),
+                            },
+                          ]
                           return (
                             <div key={`${r?.pitch_type ?? r?.pitch_name ?? 'pitch'}-${idx}`} className="pg-arsenalCard">
                               <div className="pg-arsenalTop">
@@ -1621,31 +1762,39 @@ export default function DugoutPage() {
                                   <div className="pg-arsenalPitch">{r?.pitch_name ?? r?.pitch_type ?? 'Pitch'}</div>
                                   <div className="pg-small">{r?.pitch_type ?? '—'}</div>
                                 </div>
-                                <span className={`pg-pill ${usageBig ? 'is-green' : ''}`}>
-                                  Usage {usage != null ? `${usage.toFixed(1)}%` : '—'}
-                                </span>
+                                <div className="pg-arsenalBadges">
+                                  <span className={`pg-pill ${usageBig ? 'is-green' : ''}`}>
+                                    Usage {usage != null ? `${usage.toFixed(1)}%` : '—'}
+                                  </span>
+                                  <span className={`pg-pitchGradeBadge ${gradeClassName(rowGrade)}`}>
+                                    {rowGrade}
+                                  </span>
+                                </div>
                               </div>
-                              <div className="pg-arsenalStats">
-                                <div className="pg-arsenalSide">
-                                  <div className="pg-label">Pitcher</div>
-                                  <div className="pg-arsenalMetric">BA allowed: {num(r?.pitcher_ba_allowed)}</div>
-                                  <div className="pg-arsenalMetric">SLG allowed: {num(r?.pitcher_slg_allowed)}</div>
-                                  <div className="pg-arsenalMetric">wOBA allowed: {num(r?.pitcher_woba_allowed)}</div>
-                                  <div className="pg-arsenalMetric">xSLG allowed: {num(r?.pitcher_est_slg_allowed)}</div>
-                                  <div className="pg-arsenalMetric">xwOBA allowed: {num(r?.pitcher_est_woba_allowed)}</div>
-                                  <div className="pg-arsenalMetric">Hard-hit allowed: {pct(r?.pitcher_hard_hit_percent)}</div>
-                                </div>
-                                <div className="pg-arsenalSide">
-                                  <div className="pg-label">Batter Vs This Pitch</div>
-                                  <div className={`pg-arsenalMetric ${batterHot ? 'is-green' : ''}`}>ISO: {num(r?.batter_iso)}</div>
-                                  <div className="pg-arsenalMetric">BA: {num(r?.batter_ba)}</div>
-                                  <div className="pg-arsenalMetric">SLG: {num(r?.batter_slg)}</div>
-                                  <div className="pg-arsenalMetric">wOBA: {num(r?.batter_woba)}</div>
-                                  <div className="pg-arsenalMetric">xSLG: {num(r?.batter_est_slg)}</div>
-                                  <div className="pg-arsenalMetric">xwOBA: {num(r?.batter_est_woba)}</div>
-                                  <div className="pg-arsenalMetric">K%: {pct(r?.batter_k_percent)}</div>
-                                  <div className="pg-arsenalMetric">Hard-hit %: {pct(r?.batter_hard_hit_percent)}</div>
-                                </div>
+                              <div className="pg-arsenalIsoRow">
+                                <span className="pg-arsenalIsoLabel">ISO</span>
+                                <span className="pg-arsenalIsoValue">{formatPitchMetric(r?.batter_iso)}</span>
+                                <span className="pg-small">{rowScore != null ? `${rowScore > 0 ? '+' : ''}${rowScore.toFixed(2)} edge` : 'No edge score'}</span>
+                              </div>
+                              <div className="pg-arsenalTableWrap">
+                                <table className="pg-arsenalTable">
+                                  <thead>
+                                    <tr>
+                                      <th>Metric</th>
+                                      <th>Pitcher</th>
+                                      <th>Batter</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {comparisonRows.map((row) => (
+                                      <tr key={row.label}>
+                                        <td>{row.label}</td>
+                                        <td>{row.pitcher}</td>
+                                        <td>{row.batter}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
                               </div>
                             </div>
                           )

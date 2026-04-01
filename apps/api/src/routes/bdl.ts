@@ -505,7 +505,7 @@ export function registerBdlRoutes(app: Express) {
             pitcherStatId
               ? sb
                   .from('stats_pitch_arsenal')
-                  .select('pitch_type,pitch_name,pitch_usage,slg,ba,woba,est_slg,est_woba,hard_hit_percent,season')
+                  .select('pitch_type,pitch_name,pitch_usage,slg,ba,woba,est_slg,est_woba,k_percent,whiff_percent,hard_hit_percent,season')
                   .eq('role', 'pitching')
                   .eq('player_id', pitcherStatId)
                   .lte('season', season)
@@ -515,7 +515,7 @@ export function registerBdlRoutes(app: Express) {
               : Promise.resolve({ data: [] as any[] }),
             sb
               .from('stats_pitch_arsenal')
-              .select('pitch_type,pitch_name,slg,ba,woba,est_slg,est_woba,k_percent,hard_hit_percent,season')
+              .select('pitch_type,pitch_name,slg,ba,woba,est_slg,est_woba,k_percent,whiff_percent,hard_hit_percent,season')
               .eq('role', 'batting')
               .eq('player_id', statPlayerId)
               .lte('season', season)
@@ -560,12 +560,15 @@ export function registerBdlRoutes(app: Express) {
               batter_est_slg: b?.est_slg != null ? Number(b.est_slg) : null,
               batter_est_woba: b?.est_woba != null ? Number(b.est_woba) : null,
               batter_k_percent: b?.k_percent != null ? Number(b.k_percent) : null,
+              batter_whiff_percent: b?.whiff_percent != null ? Number(b.whiff_percent) : null,
               batter_hard_hit_percent: b?.hard_hit_percent != null ? Number(b.hard_hit_percent) : null,
               pitcher_slg_allowed: pitcherSlgAllowed,
               pitcher_ba_allowed: p?.ba != null ? Number(p.ba) : null,
               pitcher_woba_allowed: p?.woba != null ? Number(p.woba) : null,
               pitcher_est_slg_allowed: p?.est_slg != null ? Number(p.est_slg) : null,
               pitcher_est_woba_allowed: p?.est_woba != null ? Number(p.est_woba) : null,
+              pitcher_k_percent: p?.k_percent != null ? Number(p.k_percent) : null,
+              pitcher_whiff_percent: p?.whiff_percent != null ? Number(p.whiff_percent) : null,
               pitcher_hard_hit_percent: p?.hard_hit_percent != null ? Number(p.hard_hit_percent) : null,
             }
           })
