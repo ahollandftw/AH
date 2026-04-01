@@ -3,16 +3,15 @@ import { useSearchParams } from 'react-router-dom'
 import {
   formatProbability,
   getAppDisplayDateIso,
-  getGamesForDate,
   getScheduleDates,
   groupProjectionsByTier,
-  listDailyHrProjections,
   type DailyProjection,
   type ScheduleGame,
 } from '@kinetic/shared'
 import { useWebAuth } from '../auth/WebAuthProvider.tsx'
 import { normalizeTeamCode } from '../theme/teamPalette'
 import { bdlRowMatchesCalendarDay } from '../utils/bdlCalendarDay'
+import { getCachedDailyDataBundle, preloadDailyDataBundle } from '../utils/dailyDataBundle'
 
 function tierColor(k: string): string {
   switch (k) {
@@ -234,55 +233,35 @@ export default function ProjectionsPage() {
 
   useEffect(() => {
     if (!supabase) return
-    setLoading(true)
-    const prevDate = new Date(`${displayDate}T12:00:00Z`)
-    prevDate.setUTCDate(prevDate.getUTCDate() - 1)
-    const nextDate = new Date(`${displayDate}T12:00:00Z`)
-    nextDate.setUTCDate(nextDate.getUTCDate() + 1)
-    const prevIso = prevDate.toISOString().slice(0, 10)
-    const nextIso = nextDate.toISOString().slice(0, 10)
-    void Promise.all([
-      listDailyHrProjections(supabase, displayDate),
-      getGamesForDate(supabase, displayDate),
-      supabase
-        .from('bdl_games')
-        .select('bdl_game_id,date,start_time_utc,home_team_abbrev,away_team_abbrev,status,scoring_summary')
-        .gte('date', prevIso)
-        .lte('date', nextIso),
-    ])
-      .then(([proj, sched, live]) => {
-        setRows(proj)
-        setGames(sched)
-        const raw = (live.data ?? []) as any[]
-        const dayIso = displayDate
-        setLiveGames(raw.filter((lg) => bdlRowMatchesCalendarDay(lg, dayIso)))
-      })
-      .finally(() => setLoading(false))
-  }, [supabase, displayDate])
-
-  useEffect(() => {
-    const base = import.meta.env.VITE_API_BASE_URL ?? ''
-    if (!base) {
-      setWeightedRows([])
-      return
+    const cached = getCachedDailyDataBundle(displayDate)
+    if (cached) {
+      setRows(cached.projections)
+      setWeightedRows(cached.weightedRows)
+      setGames(cached.games)
+      setLiveGames(cached.liveGames)
+      setProbablePitchers(cached.probablePitchers)
+      setLineupByGame(cached.lineupByGame as Record<string, GameLineup | null>)
+      setLoading(false)
+      setWeightedLoading(false)
+    } else {
+      setLoading(true)
+      setWeightedLoading(true)
     }
-    const ac = new AbortController()
-    setWeightedLoading(true)
-    void fetch(`${base}/bdl/projections/weighted?date=${encodeURIComponent(displayDate)}`, {
-      signal: ac.signal,
-    })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((json: { rows?: DailyProjection[] } | null) => {
-        if (!ac.signal.aborted) setWeightedRows(json?.rows ?? [])
-      })
-      .catch(() => {
-        if (!ac.signal.aborted) setWeightedRows([])
+    const base = import.meta.env.VITE_API_BASE_URL ?? ''
+    void preloadDailyDataBundle(supabase, displayDate, base)
+      .then((bundle) => {
+        setRows(bundle.projections)
+        setWeightedRows(bundle.weightedRows)
+        setGames(bundle.games)
+        setLiveGames(bundle.liveGames)
+        setProbablePitchers(bundle.probablePitchers)
+        setLineupByGame(bundle.lineupByGame as Record<string, GameLineup | null>)
       })
       .finally(() => {
-        if (!ac.signal.aborted) setWeightedLoading(false)
+        setLoading(false)
+        setWeightedLoading(false)
       })
-    return () => ac.abort()
-  }, [displayDate])
+  }, [supabase, displayDate])
 
   useEffect(() => {
     if (!supabase) return
@@ -307,33 +286,6 @@ export default function ProjectionsPage() {
     return () => clearInterval(id)
   }, [displayDate, supabase])
 
-  useEffect(() => {
-    const base = import.meta.env.VITE_API_BASE_URL ?? ''
-    if (!base) return
-    void fetch(`${base}/bdl/probable-pitchers?date=${displayDate}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((json: { data?: Record<string, { home: string | null; away: string | null }> } | null) => {
-        setProbablePitchers(json?.data ?? {})
-      })
-      .catch(() => {})
-  }, [displayDate])
-
-  useEffect(() => {
-    const base = import.meta.env.VITE_API_BASE_URL ?? ''
-    if (!base) return
-    void fetch(`${base}/bdl/lineups/slate?date=${encodeURIComponent(displayDate)}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((json: { data?: Record<string, GameLineup | null> } | null) => {
-        const next: Record<string, GameLineup | null> = {}
-        for (const [gameId, lineup] of Object.entries(json?.data ?? {})) {
-          next[`game:${gameId}`] = lineup
-        }
-        setLineupByGame(next)
-      })
-      .catch(() => {
-        setLineupByGame({})
-      })
-  }, [displayDate])
 
   const activeRows = projectionModelTab === 'weighted' ? weightedRows : rows
 

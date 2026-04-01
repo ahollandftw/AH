@@ -13,6 +13,7 @@ import HelpPage from './pages/HelpPage.tsx'
 import WallOfBangPage from './pages/WallOfBangPage.tsx'
 import appLogo from '../../../data/logo.svg'
 import hrIcon64 from '../../../data/icons8-home-run-64.png'
+import { preloadDailyDataBundle } from './utils/dailyDataBundle'
 import './leaderboard.css'
 
 function Layout() {
@@ -91,10 +92,7 @@ function Layout() {
       finishBoot()
     }, maxBootMs)
     const warmup = Promise.allSettled([
-      base ? fetch(`${base}/bdl/probable-pitchers?date=${today}`) : Promise.resolve(null),
-      base ? fetch(`${base}/bdl/lineups/slate?date=${encodeURIComponent(today)}`) : Promise.resolve(null),
-      base ? fetch(`${base}/bdl/projections/weighted?date=${encodeURIComponent(today)}`) : Promise.resolve(null),
-      supabase ? supabase.from('bdl_games').select('bdl_game_id').eq('date', today).limit(1) : Promise.resolve(null),
+      supabase ? preloadDailyDataBundle(supabase, today, base) : Promise.resolve(null),
     ])
     void warmup.finally(() => {
       window.clearTimeout(timeoutId)

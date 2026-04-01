@@ -4,15 +4,14 @@ import {
   formatProbability,
   getBallparkForHomeTeam,
   getAppDisplayDateIso,
-  getGamesForDate,
   getScheduleDates,
-  listDailyHrProjections,
   type DailyProjection,
   type ScheduleGame,
 } from '@kinetic/shared'
 import { useWebAuth } from '../auth/WebAuthProvider.tsx'
 import { normalizeTeamCode, paletteForTeam, teamAbbrevContrastStyle } from '../theme/teamPalette'
 import { bdlRowMatchesCalendarDay } from '../utils/bdlCalendarDay'
+import { getCachedDailyDataBundle, preloadDailyDataBundle } from '../utils/dailyDataBundle'
 import hrIcon96 from '../../../../data/icons8-home-run-96.png'
 import hrIcon64 from '../../../../data/icons8-home-run-64.png'
 
@@ -385,39 +384,28 @@ export default function DugoutPage() {
 
   useEffect(() => {
     if (!supabase) return
-    setLoading(true)
-    const prevDate = shiftIsoDate(displayDate, -1)
-    const nextDate = shiftIsoDate(displayDate, 1)
-    void Promise.all([
-      listDailyHrProjections(supabase, displayDate),
-      getGamesForDate(supabase, displayDate),
-      supabase
-        .from('bdl_games')
-        .select('bdl_game_id,date,start_time_utc,home_team_abbrev,away_team_abbrev,status,home_score,away_score,home_hits,away_hits,home_errors,away_errors,home_inning_scores,away_inning_scores,current_period,scoring_summary')
-        .gte('date', prevDate)
-        .lte('date', nextDate),
-    ])
-      .then(([proj, sched, live]) => {
-        setRows(proj)
-        setGames(sched)
-        const raw = (live.data ?? []) as any[]
-        const dayIso = displayDate
-        setLiveGames(raw.filter((lg) => bdlRowMatchesCalendarDay(lg, dayIso)))
+    const cached = getCachedDailyDataBundle(displayDate)
+    if (cached) {
+      setRows(cached.projections)
+      setGames(cached.games)
+      setLiveGames(cached.liveGames)
+      setProbablePitchers(cached.probablePitchers)
+      setLineupByGame(cached.lineupByGame as Record<string, GameLineup | null>)
+      setLoading(false)
+    } else {
+      setLoading(true)
+    }
+    const base = import.meta.env.VITE_API_BASE_URL ?? ''
+    void preloadDailyDataBundle(supabase, displayDate, base)
+      .then((bundle) => {
+        setRows(bundle.projections)
+        setGames(bundle.games)
+        setLiveGames(bundle.liveGames)
+        setProbablePitchers(bundle.probablePitchers)
+        setLineupByGame(bundle.lineupByGame as Record<string, GameLineup | null>)
       })
       .finally(() => setLoading(false))
   }, [supabase, displayDate])
-
-  // Fetch probable pitchers from BDL for this date
-  useEffect(() => {
-    const base = import.meta.env.VITE_API_BASE_URL ?? ''
-    if (!base) return
-    void fetch(`${base}/bdl/probable-pitchers?date=${displayDate}`)
-      .then((r) => r.ok ? r.json() : null)
-      .then((json: { data?: Record<string, { home: string | null; away: string | null }> } | null) => {
-        if (json?.data) setProbablePitchers(json.data)
-      })
-      .catch(() => {})
-  }, [displayDate])
 
   useEffect(() => {
     if (!supabase) return
