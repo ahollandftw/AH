@@ -1776,25 +1776,21 @@ export default function DugoutPage() {
                                 <span className="pg-arsenalIsoValue">{formatPitchMetric(r?.batter_iso)}</span>
                                 <span className="pg-small">{rowScore != null ? `${rowScore > 0 ? '+' : ''}${rowScore.toFixed(2)} edge` : 'No edge score'}</span>
                               </div>
-                              <div className="pg-arsenalTableWrap">
-                                <table className="pg-arsenalTable">
-                                  <thead>
-                                    <tr>
-                                      <th>Metric</th>
-                                      <th>Pitcher</th>
-                                      <th>Batter</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {comparisonRows.map((row) => (
-                                      <tr key={row.label}>
-                                        <td>{row.label}</td>
-                                        <td>{row.pitcher}</td>
-                                        <td>{row.batter}</td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
+                              <div className="pg-arsenalCompare">
+                                <div className="pg-arsenalCompareHead">
+                                  <div className="pg-arsenalCompareHeadCell">Pitcher</div>
+                                  <div className="pg-arsenalCompareHeadCell pg-arsenalCompareHeadCell--metric">Metric</div>
+                                  <div className="pg-arsenalCompareHeadCell">Batter vs This Pitch</div>
+                                </div>
+                                <div className="pg-arsenalCompareRows">
+                                  {comparisonRows.map((row) => (
+                                    <div key={row.label} className="pg-arsenalCompareRow">
+                                      <div className="pg-arsenalCompareValue">{row.pitcher}</div>
+                                      <div className="pg-arsenalCompareMetric">{row.label}</div>
+                                      <div className="pg-arsenalCompareValue pg-arsenalCompareValue--batter">{row.batter}</div>
+                                    </div>
+                                  ))}
+                                </div>
                               </div>
                             </div>
                           )
