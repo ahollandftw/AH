@@ -16,6 +16,18 @@ import { buildHrEventEnrichment } from '../bdl/hrEventEnrichment.js'
 import { getBestLineupForGame, getBestLineupsForDate, getResolvedGamesForDate } from '../bdl/lineups.js'
 
 export function registerBdlRoutes(app: Express) {
+  /** Short TTL: fewer BDL round-trips, faster page loads; data refreshes within minutes. */
+  const routeCacheTtlMs = 5 * 60 * 1000
+  const routeCache = new Map<string, { at: number; body: unknown }>()
+  const routeCacheGet = <T>(key: string): T | null => {
+    const e = routeCache.get(key)
+    if (!e || Date.now() - e.at > routeCacheTtlMs) return null
+    return e.body as T
+  }
+  const routeCacheSet = (key: string, body: unknown) => {
+    routeCache.set(key, { at: Date.now(), body })
+  }
+
   const normalizeName = (name: string): string =>
     name
       .normalize('NFD')
@@ -255,6 +267,18 @@ export function registerBdlRoutes(app: Express) {
       res.json({ ok: true, rows })
     } catch (e) {
       console.error('[bdl/projections/weighted] failed:', e)
+      res.status(500).json({ error: e instanceof Error ? e.message : String(e) })
+    }
+  })
+
+  app.get('/bdl/projections/contact-quality', async (req, res) => {
+    try {
+      const { runContactQualityProjections } = await import('../hrEngine.js')
+      const date = typeof req.query?.date === 'string' ? req.query.date : undefined
+      const rows = await runContactQualityProjections(date)
+      res.json({ ok: true, rows })
+    } catch (e) {
+      console.error('[bdl/projections/contact-quality] failed:', e)
       res.status(500).json({ error: e instanceof Error ? e.message : String(e) })
     }
   })
@@ -1011,6 +1035,13 @@ export function registerBdlRoutes(app: Express) {
       const date = String(req.query.date ?? '').trim()
       if (!date) { res.status(400).json({ error: 'date required' }); return }
 
+      const cacheKey = `probable-pitchers:${date}`
+      const cached = routeCacheGet<{ data: Record<number, { home: string | null; away: string | null }> }>(cacheKey)
+      if (cached) {
+        res.json(cached)
+        return
+      }
+
       type BdlProbablePitcherEntry = {
         game_id: number
         home_probable_pitcher?: { id: number; full_name: string } | null
@@ -1044,7 +1075,9 @@ export function registerBdlRoutes(app: Express) {
           away: e.away_probable_pitcher?.full_name ?? null,
         }
       }
-      res.json({ data: out })
+      const payload = { data: out }
+      routeCacheSet(cacheKey, payload)
+      res.json(payload)
     } catch (e) {
       console.error('[bdl/probable-pitchers] failed:', e)
       res.status(500).json({ error: e instanceof Error ? e.message : String(e) })
@@ -1105,9 +1138,17 @@ export function registerBdlRoutes(app: Express) {
         res.status(400).json({ error: 'date required' })
         return
       }
+      const cacheKey = `lineups-slate:${date}`
+      const cached = routeCacheGet<{ data: Awaited<ReturnType<typeof getBestLineupsForDate>> }>(cacheKey)
+      if (cached) {
+        res.json(cached)
+        return
+      }
       const sb = getServiceClient()
       const data = await getBestLineupsForDate(sb, date)
-      res.json({ data })
+      const payload = { data }
+      routeCacheSet(cacheKey, payload)
+      res.json(payload)
     } catch (e) {
       console.error('[bdl/lineups/slate] failed:', e)
       res.status(500).json({ error: e instanceof Error ? e.message : String(e) })

@@ -16,13 +16,19 @@ import { CALIBRATION, type CalibrationCoeffKey } from './models/hr/calibration.j
 import { expectedPaFromLineupSlot } from './models/hr/expectedPA.js'
 import {
   computeMatchupHrRate,
+  shrinkRate,
   zMatchup,
   zPark as computeZPark,
   zHandedness,
   zLineupSpot,
   zRecentForm,
+  zPower,
+  zFlyBall,
+  zContact,
+  zPull,
   type BatterFeatureInput,
 } from './models/hr/features.js'
+import { meanStd } from './models/hr/normalize.js'
 
 export type DailyProjection = {
   playerId: string
@@ -58,6 +64,50 @@ function canonicalTeam(team: string | null | undefined): string | null {
   if (!team) return null
   const key = team.trim().toUpperCase()
   return TEAM_ALIASES[key] ?? key
+}
+
+function pctDecimal(v: unknown): number | null {
+  const n = num(v)
+  if (n == null || !Number.isFinite(n)) return null
+  if (Math.abs(n) <= 1) return n
+  return n / 100
+}
+
+function avgBattedMetric(
+  bb: { lhp?: Record<string, unknown>; rhp?: Record<string, unknown> } | undefined,
+  key: string,
+): number | null {
+  if (!bb) return null
+  const a = num(bb.lhp?.[key])
+  const b = num(bb.rhp?.[key])
+  if (a != null && b != null) return (a + b) / 2
+  return a ?? b ?? null
+}
+
+function weightedHardHitFromArsenal(rows: any[]): number | null {
+  let wTot = 0
+  let s = 0
+  for (const r of rows) {
+    const u = Math.max(0, num(r.pitch_usage) ?? 0)
+    const hh = num(r.hard_hit_percent)
+    if (hh == null) continue
+    const weight = u > 0 ? u : 1
+    s += hh * weight
+    wTot += weight
+  }
+  if (wTot <= 0) return null
+  return pctDecimal(s / wTot)
+}
+
+function strikeoutRateFromStandard(row: {
+  pa: number | null
+  stats?: Record<string, unknown> | null
+} | null | undefined): number | null {
+  if (!row) return null
+  const pa = num(row.pa)
+  const so = num(row.stats?.SO ?? row.stats?.so)
+  if (pa == null || pa <= 0 || so == null) return null
+  return so / pa
 }
 
 function shiftIsoDate(dateIso: string, days: number): string {
@@ -139,11 +189,22 @@ async function listDailyHrProjectionsFromTable(
 async function fetchAllBatterEV(supabase: SupabaseClient, season: number) {
   const { data } = await supabase
     .from('stats_exit_velocity')
-    .select('player_id, season, attempts')
+    .select('player_id, season, attempts, brl_percent')
     .eq('role', 'batting')
     .lte('season', season)
     .order('season', { ascending: false })
     .limit(30000)
+  return (data ?? []) as any[]
+}
+
+async function fetchBatterArsenalBatting(supabase: SupabaseClient, season: number) {
+  const { data } = await supabase
+    .from('stats_pitch_arsenal')
+    .select('player_id, season, pitch_usage, hard_hit_percent')
+    .eq('role', 'batting')
+    .lte('season', season)
+    .order('season', { ascending: false })
+    .limit(40000)
   return (data ?? []) as any[]
 }
 
@@ -162,7 +223,7 @@ async function fetchAllBatterHR(supabase: SupabaseClient, year: number) {
 async function fetchAllStandardBatting(supabase: SupabaseClient) {
   const { data, error } = await supabase
     .from('stats_standard')
-    .select('player_id,team_abbrev,pa,hr')
+    .select('player_id,team_abbrev,pa,hr,stats')
     .eq('role', 'batting')
     .limit(10000)
   if (error) return [] as any[]
@@ -244,7 +305,7 @@ async function calculateMatchupProjections(
   const year = await fetchMaxBattingHomerunYear(supabase)
   if (year == null) return []
 
-  const [evRows, hrRows, bbRows, parkRows, playersRes, bdlPlayersRes, bdlSeasonStatsRes, standardBattingRows, standardPitchingRows] =
+  const [evRows, hrRows, bbRows, parkRows, playersRes, bdlPlayersRes, bdlSeasonStatsRes, standardBattingRows, standardPitchingRows, batterArsenalRows] =
     await Promise.all([
       fetchAllBatterEV(supabase, year),
       fetchAllBatterHR(supabase, year),
@@ -260,6 +321,7 @@ async function calculateMatchupProjections(
         .limit(30000),
       fetchAllStandardBatting(supabase),
       fetchAllStandardPitching(supabase),
+      fetchBatterArsenalBatting(supabase, year),
     ])
 
   const players = (playersRes.data ?? []) as any[]
@@ -299,6 +361,14 @@ async function calculateMatchupProjections(
   }
   const venueLower = buildVenueParkMap(parkRows)
 
+  const batterArsenalMap = new Map<string, any[]>()
+  for (const row of batterArsenalRows as any[]) {
+    const pid = String(row.player_id ?? '')
+    if (!pid) continue
+    if (!batterArsenalMap.has(pid)) batterArsenalMap.set(pid, [])
+    batterArsenalMap.get(pid)!.push(row)
+  }
+
   const bbByPlayer = new Map<string, { lhp?: Record<string, unknown>; rhp?: Record<string, unknown> }>()
   for (const row of bbRows) {
     if (!bbByPlayer.has(row.player_id)) bbByPlayer.set(row.player_id, {})
@@ -307,11 +377,14 @@ async function calculateMatchupProjections(
     if (row.split === 'vs_rhp') b.rhp = row.metrics
   }
 
-  const standardBattingMap = new Map<string, { pa: number | null; hr: number | null }>()
+  const standardBattingMap = new Map<
+    string,
+    { pa: number | null; hr: number | null; stats?: Record<string, unknown> | null }
+  >()
   for (const row of standardBattingRows as any[]) {
     const pid = String(row.player_id ?? '')
     if (!pid || standardBattingMap.has(pid)) continue
-    standardBattingMap.set(pid, { pa: row.pa ?? null, hr: row.hr ?? null })
+    standardBattingMap.set(pid, { pa: row.pa ?? null, hr: row.hr ?? null, stats: row.stats ?? undefined })
   }
   const teamPitchingBuckets = new Map<string, { hr: number; tbf: number }>()
   for (const row of standardPitchingRows as any[]) {
@@ -324,9 +397,10 @@ async function calculateMatchupProjections(
     acc.hr += hr
     acc.tbf += tbf
   }
-  const teamPitcherHrPerPaAllowed = new Map<string, number>()
+  const leagueHr = CALIBRATION.leagueAvgHrPerPa
+  const teamPitcherShrunk = new Map<string, number>()
   for (const [team, acc] of teamPitchingBuckets) {
-    if (acc.tbf > 0) teamPitcherHrPerPaAllowed.set(team, acc.hr / acc.tbf)
+    if (acc.tbf > 0) teamPitcherShrunk.set(team, shrinkRate(acc.hr, acc.tbf, leagueHr))
   }
 
   const rosterPlayerIds = new Set<string>()
@@ -338,6 +412,57 @@ async function calculateMatchupProjections(
     const team = canonicalTeam(player?.team)
     if (team && teamsPlaying.has(team)) rosterPlayerIds.add(playerId)
   }
+
+  const matchupLogSamples: number[] = []
+  for (const playerId of rosterPlayerIds) {
+    const player = playerMap.get(playerId) as any
+    if (!player) continue
+    const pTeam = canonicalTeam(player.team)
+    if (!pTeam || !teamsPlaying.has(pTeam)) continue
+    const oppTeam = opponentMap.get(pTeam) ?? null
+    const bdlInfo = bdlByStatId.get(playerId) ?? null
+    const battingStats = bdlInfo?.bdl_id ? bdlStatsById.get(Number(bdlInfo.bdl_id)) ?? null : null
+    const standardBatting = standardBattingMap.get(playerId) ?? null
+    const ev = evMap.get(playerId) as any
+    const hrRow = hrMap.get(playerId) as any
+    const seasonPa =
+      (num(battingStats?.batting_ab) ?? 0) + (num(battingStats?.batting_bb) ?? 0)
+    const seasonHr = num(battingStats?.batting_hr) ?? 0
+    const standardPa = num(standardBatting?.pa) ?? 0
+    const standardHr = num(standardBatting?.hr) ?? 0
+    const histPa = num(ev?.attempts) ?? 0
+    const histHr = num(hrRow?.hr_total) ?? 0
+    const standardRate = standardPa > 0 ? standardHr / standardPa : null
+    const seasonRate = seasonPa > 0 ? seasonHr / seasonPa : null
+    const histRate = histPa > 0 ? histHr / histPa : null
+    const rawRate =
+      (standardRate != null && standardRate > 0 ? standardRate : null) ??
+      (seasonRate != null && seasonRate > 0 ? seasonRate : null) ??
+      (histRate != null && histRate > 0 ? histRate : null)
+    if (rawRate == null) continue
+    let rawHr = 0
+    let rawPa = 0
+    if (standardRate != null && standardRate > 0) {
+      rawHr = standardHr
+      rawPa = standardPa
+    } else if (seasonRate != null && seasonRate > 0) {
+      rawHr = seasonHr
+      rawPa = seasonPa
+    } else {
+      rawHr = histHr
+      rawPa = histPa
+    }
+    if (rawPa <= 0) continue
+    const batterShrunk = shrinkRate(rawHr, rawPa, leagueHr)
+    const pitcherShrunk = oppTeam ? teamPitcherShrunk.get(oppTeam) ?? leagueHr : leagueHr
+    matchupLogSamples.push(Math.log(computeMatchupHrRate(batterShrunk, pitcherShrunk, leagueHr)))
+  }
+
+  const msMatchup = meanStd(matchupLogSamples)
+  const matchupLogDist =
+    msMatchup != null && msMatchup.std > 1e-9
+      ? { mean: msMatchup.mean, std: Math.max(msMatchup.std, 0.12) }
+      : null
 
   const results: DailyProjection[] = []
   const debugRows: Array<{ matchupHrRate: number | null; zMatchup: number | null; x: number; pPa: number; lambda: number; probRaw: number }> = []
@@ -365,15 +490,38 @@ async function calculateMatchupProjections(
     const standardRate = standardPa > 0 ? standardHr / standardPa : null
     const seasonRate = seasonPa > 0 ? seasonHr / seasonPa : null
     const histRate = histPa > 0 ? histHr / histPa : null
-    const hrPerPa =
+    const rawRate =
       (standardRate != null && standardRate > 0 ? standardRate : null) ??
       (seasonRate != null && seasonRate > 0 ? seasonRate : null) ??
       (histRate != null && histRate > 0 ? histRate : null)
-    if (hrPerPa == null || !Number.isFinite(hrPerPa) || hrPerPa <= 0) continue
+    if (rawRate == null) continue
+    let rawHr = 0
+    let rawPa = 0
+    if (standardRate != null && standardRate > 0) {
+      rawHr = standardHr
+      rawPa = standardPa
+    } else if (seasonRate != null && seasonRate > 0) {
+      rawHr = seasonHr
+      rawPa = seasonPa
+    } else {
+      rawHr = histHr
+      rawPa = histPa
+    }
+    if (rawPa <= 0) continue
+    const batterShrunk = shrinkRate(rawHr, rawPa, leagueHr)
+    const hrPerPa = rawRate
+    const pitcherShrunk = oppTeam ? teamPitcherShrunk.get(oppTeam) ?? leagueHr : leagueHr
 
     const ha = homeAway.get(pTeam) ?? null
     const parkTeam = ha === 'H' ? pTeam : oppTeam
     const parkFactor = lookupParkFactorForHomeTeam(parkTeam, venueLower)
+
+    const bb = bbByPlayer.get(playerId)
+    const barrelDec = pctDecimal(ev?.brl_percent)
+    const hardHitDec = weightedHardHitFromArsenal(batterArsenalMap.get(playerId) ?? [])
+    const fbDec = pctDecimal(avgBattedMetric(bb, 'FB%'))
+    const pullDec = pctDecimal(avgBattedMetric(bb, 'Pull%'))
+    const kDec = strikeoutRateFromStandard(standardBatting)
 
     const batterInput: BatterFeatureInput = {
       hrPerPa,
@@ -381,12 +529,13 @@ async function calculateMatchupProjections(
       lineupPosition: null,
     }
     const present: CalibrationCoeffKey[] = []
-    const matchupHrRate = computeMatchupHrRate(
-      hrPerPa,
-      oppTeam ? (teamPitcherHrPerPaAllowed.get(oppTeam) ?? CALIBRATION.leagueAvgHrPerPa) : CALIBRATION.leagueAvgHrPerPa,
-    )
-    const fZMatchup = zMatchup(matchupHrRate)
+    const matchupHrRate = computeMatchupHrRate(batterShrunk, pitcherShrunk, leagueHr)
+    const fZMatchup = zMatchup(matchupHrRate, matchupLogDist)
     if (fZMatchup != null) present.push('matchup')
+    if (barrelDec != null || hardHitDec != null) present.push('power')
+    if (fbDec != null) present.push('fb')
+    if (kDec != null) present.push('contact')
+    if (pullDec != null) present.push('pull')
     const fZPark = computeZPark(parkFactor)
     if (fZPark != null) present.push('park')
     const fZHand = zHandedness(batterInput, null)
@@ -397,6 +546,10 @@ async function calculateMatchupProjections(
 
     const features: NormalizedFeatures = {
       zMatchup: fZMatchup,
+      zPower: zPower(barrelDec, hardHitDec),
+      zFlyBall: zFlyBall(fbDec),
+      zContact: zContact(kDec),
+      zPull: zPull(pullDec),
       zPark: fZPark,
       zHandedness: fZHand,
       zWeather: null,

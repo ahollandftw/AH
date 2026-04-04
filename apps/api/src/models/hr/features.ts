@@ -4,39 +4,63 @@ import { zScore } from './normalize.js'
 export type Hand = 'L' | 'R' | 'S'
 
 export interface BatterFeatureInput {
-  hrPerPa:       number | null
-  hand:          Hand
+  hrPerPa: number | null
+  hand: Hand
   lineupPosition: number | null
-  hrPerPaVsL?:   number | null
-  hrPerPaVsR?:   number | null
-  hrLast7?:      number | null
-  paLast7?:      number | null
-  hrLast14?:     number | null
-  paLast14?:     number | null
+  hrPerPaVsL?: number | null
+  hrPerPaVsR?: number | null
+  hrLast7?: number | null
+  paLast7?: number | null
+  hrLast14?: number | null
+  paLast14?: number | null
 }
 
 export interface WeatherInput {
-  tempF:            number
-  windSpeedMph:     number
+  tempF: number
+  windSpeedMph: number
   windDirectionDeg: number
-  humidityPct:      number
+  humidityPct: number
 }
 
+/** Empirical Bayes shrinkage toward league HR/PA. */
+export function shrinkRate(
+  hr: number,
+  pa: number,
+  leagueRate: number,
+  alpha = CALIBRATION.shrinkageAlpha,
+): number {
+  return (hr + alpha * leagueRate) / (pa + alpha)
+}
+
+/**
+ * Log-space blend of batter vs pitcher HR skill vs league baseline.
+ * Expects already-shrunk per-PA rates.
+ */
 export function computeMatchupHrRate(
-  batterHrPerPa: number | null,
-  pitcherHrPerPaAllowed: number | null,
-): number | null {
-  if (batterHrPerPa == null || !Number.isFinite(batterHrPerPa) || batterHrPerPa <= 0) return null
-  const pitcherRate =
-    pitcherHrPerPaAllowed != null && Number.isFinite(pitcherHrPerPaAllowed) && pitcherHrPerPaAllowed > 0
-      ? pitcherHrPerPaAllowed
-      : CALIBRATION.leagueAvgHrPerPa
-  return (batterHrPerPa * pitcherRate) / CALIBRATION.leagueAvgHrPerPa
+  batterShrunkRate: number,
+  pitcherShrunkRate: number,
+  leagueRate: number = CALIBRATION.leagueAvgHrPerPa,
+): number {
+  const b = Math.max(batterShrunkRate, 1e-6)
+  const p = Math.max(pitcherShrunkRate, 1e-6)
+  const L = leagueRate
+  const logMatchup = 0.6 * Math.log(b) + 0.4 * Math.log(p) - Math.log(L)
+  return Math.exp(logMatchup)
 }
 
-export function zMatchup(matchupHrRate: number | null): number | null {
+/**
+ * z-score of log(matchup HR rate). Pass `logDistribution` from the current slate
+ * (mean/std of log matchup across projected players) when available.
+ */
+export function zMatchup(
+  matchupHrRate: number | null,
+  logDistribution?: { mean: number; std: number } | null,
+): number | null {
   if (matchupHrRate == null || !Number.isFinite(matchupHrRate) || matchupHrRate <= 0) return null
-  return zScore(Math.log(matchupHrRate), LEAGUE.logMatchupHrRate.mean, LEAGUE.logMatchupHrRate.std)
+  const logM = Math.log(matchupHrRate)
+  const mean = logDistribution?.mean ?? LEAGUE.logMatchupHrRate.mean
+  const std = Math.max(logDistribution?.std ?? LEAGUE.logMatchupHrRate.std, 0.12)
+  return zScore(logM, mean, std)
 }
 
 function zRecentFormWindow(hr: number | null, pa: number | null, window: 7 | 14): number | null {
@@ -56,7 +80,7 @@ export function zRecentForm(
   const z7 = zRecentFormWindow(hrLast7, paLast7, 7)
   const z14 = zRecentFormWindow(hrLast14, paLast14, 14)
   if (z7 == null && z14 == null) return null
-  if (z7 != null && z14 != null) return (z7 * 0.65) + (z14 * 0.35)
+  if (z7 != null && z14 != null) return z7 * 0.65 + z14 * 0.35
   return z7 ?? z14
 }
 
@@ -75,15 +99,13 @@ export function zHandedness(batter: BatterFeatureInput, pitcherHand: Hand | null
   }
 
   const effectiveHand: Hand =
-    batter.hand === 'S'
-      ? (pitcherHand === 'L' ? 'R' : 'L')
-      : batter.hand
+    batter.hand === 'S' ? (pitcherHand === 'L' ? 'R' : 'L') : batter.hand
 
   const platoonAdj: Record<string, number> = {
-    'R_L':  0.80,
-    'L_R':  0.50,
-    'R_R': -0.35,
-    'L_L': -0.45,
+    R_L: 0.8,
+    L_R: 0.5,
+    R_R: -0.35,
+    L_L: -0.45,
   }
   return platoonAdj[`${effectiveHand}_${pitcherHand}`] ?? 0
 }
@@ -91,8 +113,8 @@ export function zHandedness(batter: BatterFeatureInput, pitcherHand: Hand | null
 export function zLineupSpot(lineupPosition: number | null): number {
   if (lineupPosition == null) return 0
   const spotAdj: Record<number, number> = {
-    1: 0.30, 2: 0.50, 3: 0.60, 4: 0.70, 5: 0.30,
-    6: 0.00, 7: -0.20, 8: -0.40, 9: -0.60,
+    1: 0.3, 2: 0.5, 3: 0.6, 4: 0.7, 5: 0.3,
+    6: 0, 7: -0.2, 8: -0.4, 9: -0.6,
   }
   return spotAdj[lineupPosition] ?? 0
 }
@@ -112,19 +134,47 @@ export function zWeather(weather: WeatherInput | null): number | null {
   const windDirectionFactor = -Math.cos((weather.windDirectionDeg * Math.PI) / 180)
   const windScore = (weather.windSpeedMph * windDirectionFactor) / 12
   const humidScore = (weather.humidityPct - 50) / 150
-  const composite = (tempScore * 0.45) + (windScore * 0.45) + (humidScore * 0.10)
+  const composite = tempScore * 0.45 + windScore * 0.45 + humidScore * 0.1
   return zScore(composite, LEAGUE.weather.mean, LEAGUE.weather.std)
+}
+
+/** Barrel + hard-hit, decimal rates (0–1). Hard-hit optional → barrel-only. */
+export function zPower(barrelDec: number | null, hardHitDec: number | null): number {
+  const zb =
+    barrelDec != null ? zScore(barrelDec, LEAGUE.barrelRate.mean, LEAGUE.barrelRate.std) : null
+  const zh =
+    hardHitDec != null ? zScore(hardHitDec, LEAGUE.hardHitRate.mean, LEAGUE.hardHitRate.std) : null
+  if (zh == null) return zb ?? 0
+  if (zb == null) return zh ?? 0
+  return zb * 0.7 + zh * 0.3
+}
+
+export function zFlyBall(flyBallDec: number | null): number {
+  if (flyBallDec == null) return 0
+  return zScore(flyBallDec, LEAGUE.flyBallRate.mean, LEAGUE.flyBallRate.std) ?? 0
+}
+
+/** Higher K% → worse contact for HR → negative z. */
+export function zContact(strikeoutDec: number | null): number {
+  if (strikeoutDec == null) return 0
+  const z = zScore(strikeoutDec, LEAGUE.strikeoutRate.mean, LEAGUE.strikeoutRate.std)
+  return z == null ? 0 : -z
+}
+
+export function zPull(pullDec: number | null): number {
+  if (pullDec == null) return 0
+  return zScore(pullDec, LEAGUE.pullRate.mean, LEAGUE.pullRate.std) ?? 0
 }
 
 /**
  * Redistribute coefficient mass from missing features onto present ones.
- * When a feature is unavailable its weight is spread proportionally — NOT dropped.
+ * (Kept for tooling; linear score uses missing = 0 instead.)
  */
 export function adjustedCoefficients(
   presentFeatures: CalibrationCoeffKey[],
 ): Partial<Record<CalibrationCoeffKey, number>> {
   const all = Object.keys(CALIBRATION.coefficients) as CalibrationCoeffKey[]
-  const totalMass   = all.reduce((s, k) => s + CALIBRATION.coefficients[k], 0)
+  const totalMass = all.reduce((s, k) => s + CALIBRATION.coefficients[k], 0)
   const missingMass = all
     .filter((k) => !presentFeatures.includes(k))
     .reduce((s, k) => s + CALIBRATION.coefficients[k], 0)

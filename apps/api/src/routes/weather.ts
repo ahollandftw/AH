@@ -3,7 +3,10 @@ import { config } from '../config.js'
 import { getServiceClient } from '../supabase.js'
 import { getBallparkForHomeTeam, normalizeMlbHomeTeam } from '../weather/mlbBallparks.js'
 import { type OneCallPayload } from '../weather/openWeather.js'
-import { listCachedWeatherForDate, syncWeatherForDate } from '../weather/cache.js'
+import {
+  fetchWeatherForHomeStadium,
+  fetchWeatherSlateEntriesForHomes,
+} from '../weather/cache.js'
 
 function todayET(): string {
   const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }))
@@ -40,48 +43,30 @@ export function registerWeatherRoutes(app: Express) {
         return
       }
       const sb = getServiceClient()
-      const syncResult = await syncWeatherForDate(sb, date)
-      const rows = await listCachedWeatherForDate(sb, date)
-      const match = rows.find((r) => r.home_team === (normalizeMlbHomeTeam(home) ?? home))
-      if (!match) {
+      const entry = await fetchWeatherForHomeStadium(sb, date, home)
+      if (entry.error || !entry.weather) {
         res.json({
           ok: false,
-          home_team: normalizeMlbHomeTeam(home),
-          stadium: park.stadium,
-          lat: park.lat,
-          lon: park.lon,
-          error: 'No cached weather found for date',
-          sync_errors: syncResult.errors,
+          home_team: entry.home_team ?? normalizeMlbHomeTeam(home),
+          stadium: entry.stadium ?? park.stadium,
+          lat: entry.lat ?? park.lat,
+          lon: entry.lon ?? park.lon,
+          error: entry.error ?? 'Weather unavailable',
         })
         return
       }
       res.json({
         ok: true,
         date,
-        home_team: normalizeMlbHomeTeam(home),
-        stadium: park.stadium,
-        lat: match.lat,
-        lon: match.lon,
-        weather: {
-          lat: Number(match.lat ?? park.lat),
-          lon: Number(match.lon ?? park.lon),
-          current: {
-            temp: Number(match.temp_f ?? 0),
-            humidity: Number(match.humidity_pct ?? 0),
-            wind_speed: Number(match.wind_speed_mph ?? 0),
-            wind_deg: Number(match.wind_deg ?? 0),
-            weather: [
-              {
-                main: match.weather_main ?? undefined,
-                description: match.weather_description ?? undefined,
-              },
-            ],
-          },
-        },
-        game_start_utc: match.game_start_utc,
-        snapshot_time_utc: match.snapshot_time_utc,
-        fetched_at: match.fetched_at,
-        source: match.source,
+        home_team: entry.home_team,
+        stadium: entry.stadium,
+        lat: entry.lat,
+        lon: entry.lon,
+        weather: entry.weather,
+        game_start_utc: entry.game_start_utc,
+        snapshot_time_utc: entry.snapshot_time_utc,
+        fetched_at: entry.fetched_at,
+        source: entry.source,
       })
     } catch (e) {
       res.status(500).json({ error: String(e) })
@@ -105,20 +90,12 @@ export function registerWeatherRoutes(app: Express) {
         .filter(Boolean)
       const unique = [...new Set(rawList)]
       const sb = getServiceClient()
-      let syncResult: Awaited<ReturnType<typeof syncWeatherForDate>> | null = null
 
-      if (config.openWeatherApiKey()) {
-        syncResult = await syncWeatherForDate(sb, date)
-      }
-      const cached = await listCachedWeatherForDate(sb, date)
-
-      const tasks = unique.map(async (h): Promise<WeatherSlateEntry> => {
-        const park = getBallparkForHomeTeam(h)
-        const norm = normalizeMlbHomeTeam(h)
-        if (!park) {
-          return { home_team: norm, stadium: null, error: 'unknown_team' }
-        }
-        if (!config.openWeatherApiKey()) {
+      if (!config.openWeatherApiKey()) {
+        const entries: WeatherSlateEntry[] = unique.map((h) => {
+          const park = getBallparkForHomeTeam(h)
+          const norm = normalizeMlbHomeTeam(h)
+          if (!park) return { home_team: norm, stadium: null, error: 'unknown_team' }
           return {
             home_team: norm,
             stadium: park.stadium,
@@ -126,55 +103,12 @@ export function registerWeatherRoutes(app: Express) {
             lon: park.lon,
             error: 'OPENWEATHER_API_KEY not configured',
           }
-        }
-        try {
-          const match = cached.find((r) => r.home_team === norm)
-          if (!match) {
-            return {
-              home_team: norm,
-              stadium: park.stadium,
-              lat: park.lat,
-              lon: park.lon,
-              error: 'No cached weather found for date',
-              sync_errors: syncResult?.errors,
-            }
-          }
-          return {
-            home_team: norm,
-            stadium: match.stadium ?? park.stadium,
-            lat: Number(match.lat ?? park.lat),
-            lon: Number(match.lon ?? park.lon),
-            weather: {
-              lat: Number(match.lat ?? park.lat),
-              lon: Number(match.lon ?? park.lon),
-              current: {
-                temp: Number(match.temp_f ?? 0),
-                humidity: Number(match.humidity_pct ?? 0),
-                wind_speed: Number(match.wind_speed_mph ?? 0),
-                wind_deg: Number(match.wind_deg ?? 0),
-                weather: [
-                  {
-                    main: match.weather_main ?? undefined,
-                    description: match.weather_description ?? undefined,
-                  },
-                ],
-              },
-            },
-            game_start_utc: match.game_start_utc,
-            snapshot_time_utc: match.snapshot_time_utc,
-            fetched_at: match.fetched_at,
-            source: match.source,
-          }
-        } catch (err) {
-          return {
-            home_team: norm,
-            stadium: park.stadium,
-            error: String(err),
-          }
-        }
-      })
+        })
+        res.json({ ok: true, entries })
+        return
+      }
 
-      const entries = await Promise.all(tasks)
+      const entries = await fetchWeatherSlateEntriesForHomes(sb, date, unique)
       res.json({ ok: true, entries })
     } catch (e) {
       res.status(500).json({ error: String(e) })
@@ -193,5 +127,4 @@ type WeatherSlateEntry = {
   fetched_at?: string
   source?: string
   error?: string
-  sync_errors?: string[]
 }

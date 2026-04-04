@@ -6,7 +6,8 @@ import {
   type NormalizedFeatures,
 } from './models/hr/hrProbability.js'
 import { expectedPaFromLineupSlot } from './models/hr/expectedPA.js'
-import { computeMatchupHrRate, zMatchup } from './models/hr/features.js'
+import { CALIBRATION } from './models/hr/calibration.js'
+import { computeMatchupHrRate, shrinkRate, zMatchup, zPower, zFlyBall, zContact, zPull } from './models/hr/features.js'
 
 export type HrProbabilityInput = {
   brl_percent: number
@@ -104,21 +105,29 @@ export function calculateHrProbability(input: HrProbabilityInput): HrProbability
   const pitcherFactor = calcPitcherFactor(input.pitcher_hr_total)
   const normalizedMatchup = calcNormalizedMatchup(input.matchup_score)
 
-  const pitcherHrPerPaAllowed =
-    input.attempts > 0 && input.pitcher_hr_total > 0
-      ? input.pitcher_hr_total / Math.max(input.attempts * 4, 1)
-      : 0.036
-  const matchupHrRate = computeMatchupHrRate(baseHrRate, pitcherHrPerPaAllowed)
-  const matchupZ = zMatchup(matchupHrRate)
+  const league = CALIBRATION.leagueAvgHrPerPa
+  const batterShrunk = shrinkRate(input.hr_total, input.attempts, league)
+  const tbfProxy = Math.max(input.attempts * 4, 1)
+  const pitcherShrunk =
+    input.attempts > 0 && input.pitcher_hr_total >= 0
+      ? shrinkRate(input.pitcher_hr_total, tbfProxy, league)
+      : league
+  const matchupHrRate = computeMatchupHrRate(batterShrunk, pitcherShrunk, league)
+  const matchupZ = zMatchup(matchupHrRate, null)
 
+  const brlDec = input.brl_percent > 1 ? input.brl_percent / 100 : input.brl_percent
   const features: NormalizedFeatures = {
-    zMatchup:      matchupZ,
-    zPark:         null,
-    zHandedness:   null,
-    zWeather:      null,
-    zRecentForm:   null,
-    zLineupSpot:   0,
-    expectedPA:    expectedPaFromLineupSlot(undefined),
+    zMatchup: matchupZ,
+    zPower: zPower(brlDec, null),
+    zFlyBall: zFlyBall(null),
+    zContact: zContact(null),
+    zPull: zPull(null),
+    zPark: null,
+    zHandedness: null,
+    zWeather: null,
+    zRecentForm: null,
+    zLineupSpot: 0,
+    expectedPA: expectedPaFromLineupSlot(undefined),
     matchupHrRate,
     featuresPresent: matchupZ != null ? ['matchup'] : [],
   }

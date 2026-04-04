@@ -2,6 +2,20 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { getBallparkForHomeTeam, normalizeMlbHomeTeam } from './mlbBallparks.js'
 import { fetchOneCallWeather, type OneCallPayload } from './openWeather.js'
 
+/** Slate/API response shape — stadium coords + OpenWeather; no DB row required. */
+export type StadiumWeatherSlateEntry = {
+  home_team: string | null
+  stadium: string | null
+  lat?: number
+  lon?: number
+  weather?: OneCallPayload
+  game_start_utc?: string | null
+  snapshot_time_utc?: string | null
+  fetched_at?: string
+  source?: string
+  error?: string
+}
+
 type CacheRow = {
   bdl_game_id: number
   game_date: string
@@ -54,6 +68,105 @@ function pickBestHourly(payload: OneCallPayload, gameStartUtc: string | null | u
     }
   }
   return best
+}
+
+/** First pitch time for this home team on the calendar date (for hourly pick). */
+export async function getGameStartUtcForHomeTeam(
+  supabase: SupabaseClient,
+  dateIso: string,
+  homeNorm: string,
+): Promise<string | null> {
+  const { data: games } = await supabase
+    .from('bdl_games')
+    .select('start_time_utc,home_team_abbrev')
+    .eq('date', dateIso)
+
+  const matches: string[] = []
+  for (const g of (games ?? []) as { start_time_utc: string | null; home_team_abbrev: string }[]) {
+    const h = normalizeMlbHomeTeam(g.home_team_abbrev)
+    if (h === homeNorm && g.start_time_utc) matches.push(g.start_time_utc)
+  }
+  if (!matches.length) return null
+  matches.sort((a, b) => new Date(a).getTime() - new Date(b).getTime())
+  return matches[0] ?? null
+}
+
+function chosenSliceToCurrentPayload(
+  payload: OneCallPayload,
+  gameStartUtc: string | null,
+): { weather: OneCallPayload; snapshot_time_utc: string | null } {
+  const chosen = pickBestHourly(payload, gameStartUtc) ?? payload.current ?? null
+  if (!chosen) {
+    throw new Error('OpenWeather payload has no current or hourly data')
+  }
+  const dt = (chosen as { dt?: number }).dt
+  const snapshot_time_utc = dt != null ? hourlyToIso(dt) : null
+  const current = {
+    temp: chosen.temp,
+    feels_like: chosen.feels_like,
+    humidity: chosen.humidity,
+    wind_speed: chosen.wind_speed,
+    wind_deg: chosen.wind_deg,
+    weather: chosen.weather,
+  }
+  return {
+    weather: {
+      lat: payload.lat,
+      lon: payload.lon,
+      current,
+    },
+    snapshot_time_utc,
+  }
+}
+
+/**
+ * Fetch weather at the home ballpark by coordinates (and optional first-pitch time from bdl_games).
+ * Does not depend on game_weather_cache or successful syncWeatherForDate.
+ */
+export async function fetchWeatherForHomeStadium(
+  supabase: SupabaseClient,
+  dateIso: string,
+  homeAbbrevRaw: string,
+): Promise<StadiumWeatherSlateEntry> {
+  const park = getBallparkForHomeTeam(homeAbbrevRaw)
+  const norm = normalizeMlbHomeTeam(homeAbbrevRaw)
+  if (!park || !norm) {
+    return { home_team: norm, stadium: null, error: 'unknown_team' }
+  }
+  try {
+    const gameStartUtc = await getGameStartUtcForHomeTeam(supabase, dateIso, norm)
+    const payload = await fetchOneCallWeather(park.lat, park.lon)
+    const { weather, snapshot_time_utc } = chosenSliceToCurrentPayload(payload, gameStartUtc)
+    return {
+      home_team: norm,
+      stadium: park.stadium,
+      lat: weather.lat,
+      lon: weather.lon,
+      weather,
+      game_start_utc: gameStartUtc,
+      snapshot_time_utc,
+      fetched_at: new Date().toISOString(),
+      source: 'openweather_stadium',
+    }
+  } catch (e) {
+    return {
+      home_team: norm,
+      stadium: park.stadium,
+      lat: park.lat,
+      lon: park.lon,
+      error: e instanceof Error ? e.message : String(e),
+    }
+  }
+}
+
+/** Parallel slate: one OpenWeather call per unique home (in-memory lat/lon dedupe in fetchOneCallWeather). */
+export async function fetchWeatherSlateEntriesForHomes(
+  supabase: SupabaseClient,
+  dateIso: string,
+  homeAbbrevs: string[],
+): Promise<StadiumWeatherSlateEntry[]> {
+  const unique = [...new Set(homeAbbrevs)]
+  return Promise.all(unique.map((h) => fetchWeatherForHomeStadium(supabase, dateIso, h)))
 }
 
 function buildCacheRow(game: BdlGameWeatherRow, payload: OneCallPayload): CacheRow {
@@ -126,32 +239,40 @@ export async function syncWeatherForDate(
   let cached = 0
   const errors: string[] = []
 
-  for (const game of rows) {
-    if (!force && existing.has(game.bdl_game_id)) {
-      cached++
-      continue
-    }
-
-    const park = getBallparkForHomeTeam(game.home_team_abbrev)
-    if (!park) {
-      errors.push(`${game.home_team_abbrev}: unknown ballpark`)
-      continue
-    }
-
-    try {
-      const payload = await fetchOneCallWeather(park.lat, park.lon)
-      const row = buildCacheRow(game, payload)
-      const { error } = await supabase
-        .from('game_weather_cache')
-        .upsert(row, { onConflict: 'bdl_game_id' })
-      if (error) {
-        errors.push(`${game.home_team_abbrev}: ${error.message}`)
-      } else {
-        synced++
+  const results = await Promise.all(
+    rows.map(async (game) => {
+      if (!force && existing.has(game.bdl_game_id)) {
+        return { kind: 'cached' as const }
       }
-    } catch (e) {
-      errors.push(`${game.home_team_abbrev}: ${e instanceof Error ? e.message : String(e)}`)
-    }
+
+      const park = getBallparkForHomeTeam(game.home_team_abbrev)
+      if (!park) {
+        return { kind: 'error' as const, msg: `${game.home_team_abbrev}: unknown ballpark` }
+      }
+
+      try {
+        const payload = await fetchOneCallWeather(park.lat, park.lon)
+        const row = buildCacheRow(game, payload)
+        const { error } = await supabase
+          .from('game_weather_cache')
+          .upsert(row, { onConflict: 'bdl_game_id' })
+        if (error) {
+          return { kind: 'error' as const, msg: `${game.home_team_abbrev}: ${error.message}` }
+        }
+        return { kind: 'synced' as const }
+      } catch (e) {
+        return {
+          kind: 'error' as const,
+          msg: `${game.home_team_abbrev}: ${e instanceof Error ? e.message : String(e)}`,
+        }
+      }
+    }),
+  )
+
+  for (const r of results) {
+    if (r.kind === 'cached') cached++
+    else if (r.kind === 'synced') synced++
+    else errors.push(r.msg)
   }
 
   return { synced, cached, errors }

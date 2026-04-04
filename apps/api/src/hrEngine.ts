@@ -19,17 +19,23 @@ import {
 
 import {
   computeMatchupHrRate,
+  shrinkRate,
   zMatchup,
   zPark,
   zHandedness,
   zWeather as computeZWeather,
   zLineupSpot,
   zRecentForm,
+  zPower,
+  zFlyBall,
+  zContact,
+  zPull,
   expectedPaForSpot,
   type BatterFeatureInput,
   type WeatherInput,
   type Hand,
 } from './models/hr/features.js'
+import { meanStd } from './models/hr/normalize.js'
 import {
   computeGameHrProbability,
   probToAmericanOdds,
@@ -38,6 +44,16 @@ import {
   type NormalizedFeatures,
 } from './models/hr/hrProbability.js'
 import { CALIBRATION, type CalibrationCoeffKey } from './models/hr/calibration.js'
+import {
+  computeContactQualityGameHr,
+  contactQualityLinearScore,
+  contactQualityZHandedness,
+  zLaunchContactQuality,
+  zLineupSpotForContactQuality,
+  zPitcherSuppressionContactQuality,
+  zPowerContactQuality,
+  zSkillContactQuality,
+} from './models/hr/contactQuality.js'
 
 /* ─── Team canonicalization ──────────────────────────────────────── */
 
@@ -58,6 +74,51 @@ function num(v: unknown): number | null {
   if (v == null || v === '') return null
   const n = Number(String(v).replace(/,/g, ''))
   return Number.isFinite(n) ? n : null
+}
+
+/** Statcast-style percents may be 0–100 or 0–1. */
+function pctDecimal(v: unknown): number | null {
+  const n = num(v)
+  if (n == null || !Number.isFinite(n)) return null
+  if (Math.abs(n) <= 1) return n
+  return n / 100
+}
+
+function avgBattedMetric(
+  bb: { lhp?: Record<string, unknown>; rhp?: Record<string, unknown> } | undefined,
+  key: string,
+): number | null {
+  if (!bb) return null
+  const a = num(bb.lhp?.[key])
+  const b = num(bb.rhp?.[key])
+  if (a != null && b != null) return (a + b) / 2
+  return a ?? b ?? null
+}
+
+function weightedHardHitFromArsenal(rows: any[]): number | null {
+  let wTot = 0
+  let s = 0
+  for (const r of rows) {
+    const u = Math.max(0, num(r.pitch_usage) ?? 0)
+    const hh = num(r.hard_hit_percent)
+    if (hh == null) continue
+    const weight = u > 0 ? u : 1
+    s += hh * weight
+    wTot += weight
+  }
+  if (wTot <= 0) return null
+  return pctDecimal(s / wTot)
+}
+
+function strikeoutRateFromStandard(row: {
+  pa: number | null
+  stats?: Record<string, unknown> | null
+} | null | undefined): number | null {
+  if (!row) return null
+  const pa = num(row.pa)
+  const so = num(row.stats?.SO ?? row.stats?.so)
+  if (pa == null || pa <= 0 || so == null) return null
+  return so / pa
 }
 
 function todayET(): string {
@@ -112,8 +173,18 @@ async function fetchPlayers(sb: SupabaseClient) {
 
 async function fetchBatterEV(sb: SupabaseClient, season: number) {
   const { data } = await sb.from('stats_exit_velocity')
-    .select('player_id, season, attempts, avg_hit_speed, avg_hit_angle, ev95percent, brl_percent, fbld')
+    .select('player_id, season, attempts, avg_hit_speed, avg_hit_angle, ev95percent, brl_percent, fbld, anglesweetspotpercent')
     .eq('role', 'batting')
+    .lte('season', season)
+    .order('season', { ascending: false })
+    .limit(30000)
+  return data ?? []
+}
+
+async function fetchPitcherEV(sb: SupabaseClient, season: number) {
+  const { data } = await sb.from('stats_exit_velocity')
+    .select('player_id, season, attempts, avg_hit_speed, brl_percent, anglesweetspotpercent')
+    .eq('role', 'pitching')
     .lte('season', season)
     .order('season', { ascending: false })
     .limit(30000)
@@ -197,14 +268,24 @@ async function fetchBdlSeasonStats(sb: SupabaseClient, season: number) {
 
 async function fetchStandardBatting(sb: SupabaseClient) {
   const { data, error } = await sb.from('stats_standard')
-    .select('player_id, pa, hr')
+    .select('player_id, pa, hr, stats')
     .eq('role', 'batting')
     .limit(10000)
   if (error) {
     console.warn('[hr-engine] stats_standard batting unavailable:', error.message)
-    return [] as Array<{ player_id: string; pa: number | null; hr: number | null }>
+    return [] as Array<{
+      player_id: string
+      pa: number | null
+      hr: number | null
+      stats?: Record<string, unknown> | null
+    }>
   }
-  return (data ?? []) as Array<{ player_id: string; pa: number | null; hr: number | null }>
+  return (data ?? []) as Array<{
+    player_id: string
+    pa: number | null
+    hr: number | null
+    stats?: Record<string, unknown> | null
+  }>
 }
 
 async function fetchStandardPitching(sb: SupabaseClient) {
@@ -340,10 +421,10 @@ export interface EngineProjection {
   americanOdds:    number
   americanOddsStr: string
   pitchArsenalWeight: number | null
-  modelVariant?: 'default' | 'weighted_pitch_arsenal'
+  modelVariant?: 'default' | 'weighted_pitch_arsenal' | 'contact_quality'
 }
 
-type ProjectionModelVariant = 'default' | 'weighted_pitch_arsenal'
+type ProjectionModelVariant = 'default' | 'weighted_pitch_arsenal' | 'contact_quality'
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value))
@@ -411,7 +492,9 @@ function computeWeightedPitchArsenalScore(
       ? pitcherCompositeParts.reduce((sum, value) => sum + value, 0) / pitcherCompositeParts.length
       : 0
 
-    weightedScore += ((batterComposite * 0.55) + (pitcherComposite * 0.45)) * weight
+    let perPitchScore = batterComposite * 0.65 + pitcherComposite * 0.35
+    if (batterComposite < -0.5) perPitchScore *= 1.25
+    weightedScore += perPitchScore * weight
     weightTotal += weight
   }
 
@@ -431,7 +514,7 @@ export async function runDailyProjections(
   if (!year) { console.warn('[hr-engine] No stats year found'); return [] }
 
   const [
-    games, players, evRows, hrRows, bbRows, parkRows, bdlPlayers, bdlStats, standardBattingRows, standardPitchingRows, batterArsenalRows, pitcherArsenalRows,
+    games, players, evRows, hrRows, bbRows, parkRows, bdlPlayers, bdlStats, standardBattingRows, standardPitchingRows, batterArsenalRows, pitcherArsenalRows, pitcherEvRows,
   ] = await Promise.all([
     fetchGames(sb, date),
     fetchPlayers(sb),
@@ -445,6 +528,7 @@ export async function runDailyProjections(
     fetchStandardPitching(sb),
     fetchBatterArsenal(sb, year),
     fetchPitcherArsenal(sb, year),
+    fetchPitcherEV(sb, year),
   ])
 
   if (!games.length) { console.log('[hr-engine] No games today'); return [] }
@@ -476,6 +560,12 @@ export async function runDailyProjections(
     const pid = String(row.player_id ?? '')
     if (!pid || evMap.has(pid)) continue
     evMap.set(pid, row)
+  }
+  const pitcherEvMap = new Map<string, any>()
+  for (const row of pitcherEvRows as any[]) {
+    const pid = String(row.player_id ?? '')
+    if (!pid || pitcherEvMap.has(pid)) continue
+    pitcherEvMap.set(pid, row)
   }
   const hrMap = new Map<string, any>()
   for (const row of hrRows as any[]) {
@@ -515,10 +605,13 @@ export async function runDailyProjections(
     if (row.split === 'vs_rhp') b.rhp = row.metrics
   }
 
-  const standardBattingMap = new Map<string, { pa: number | null; hr: number | null }>()
+  const standardBattingMap = new Map<
+    string,
+    { pa: number | null; hr: number | null; stats?: Record<string, unknown> | null }
+  >()
   for (const row of standardBattingRows) {
     if (!row.player_id || standardBattingMap.has(row.player_id)) continue
-    standardBattingMap.set(row.player_id, { pa: row.pa, hr: row.hr })
+    standardBattingMap.set(row.player_id, { pa: row.pa, hr: row.hr, stats: row.stats ?? undefined })
   }
   const standardPitchingMap = new Map<string, { tbf: number | null; hr: number | null }>()
   for (const row of standardPitchingRows) {
@@ -555,8 +648,8 @@ export async function runDailyProjections(
     awayPitcherHand: Hand | null
     homePitcherName: string | null
     awayPitcherName: string | null
-    homePitcherHrPerPaAllowed: number | null
-    awayPitcherHrPerPaAllowed: number | null
+    homePitcherHrPerPaAllowed: number
+    awayPitcherHrPerPaAllowed: number
     lineupHome: Map<string, number>
     lineupAway: Map<string, number>
   }
@@ -586,14 +679,15 @@ export async function runDailyProjections(
     return bdlById.get(bdlId)?.full_name ?? null
   }
 
-  function hrPerPaAllowedForPitcher(statPlayerId: string | null): number | null {
-    if (!statPlayerId) return null
+  function pitcherShrunkHrPerPa(statPlayerId: string | null): number {
+    const league = CALIBRATION.leagueAvgHrPerPa
+    if (!statPlayerId) return league
     const row = standardPitchingMap.get(statPlayerId)
-    if (!row) return null
+    if (!row) return league
     const tbf = num(row.tbf)
     const hr = num(row.hr)
-    if (tbf == null || tbf <= 0 || hr == null || hr < 0) return null
-    return hr / tbf
+    if (tbf == null || tbf <= 0 || hr == null || hr < 0) return league
+    return shrinkRate(hr, tbf, league)
   }
 
   const gameContexts: GameCtx[] = await Promise.all(games.map(async (g) => {
@@ -628,8 +722,8 @@ export async function runDailyProjections(
       awayPitcherHand: pitcherHandFromBdl(pp?.away ?? null),
       homePitcherName: pitcherNameFromBdl(pp?.home ?? null),
       awayPitcherName: pitcherNameFromBdl(pp?.away ?? null),
-      homePitcherHrPerPaAllowed: hrPerPaAllowedForPitcher(resolveStatIdFromBdl(pp?.home ?? null)),
-      awayPitcherHrPerPaAllowed: hrPerPaAllowedForPitcher(resolveStatIdFromBdl(pp?.away ?? null)),
+      homePitcherHrPerPaAllowed: pitcherShrunkHrPerPa(resolveStatIdFromBdl(pp?.home ?? null)),
+      awayPitcherHrPerPaAllowed: pitcherShrunkHrPerPa(resolveStatIdFromBdl(pp?.away ?? null)),
       lineupHome,
       lineupAway,
     }
@@ -665,6 +759,244 @@ export async function runDailyProjections(
     }
   }
 
+  if (modelVariant === 'contact_quality') {
+    const leagueHrFallback = CALIBRATION.leagueAvgHrPerPa
+    const cqResults: EngineProjection[] = []
+    for (const playerId of rosterPlayerIds) {
+      const player = playerMap.get(playerId)
+      if (!player) continue
+      const pTeam = canon(player.team)
+      if (!pTeam) continue
+      const gm = teamGameMap.get(pTeam)
+      if (!gm) continue
+
+      const { ctx, side } = gm
+      const lineupMap = side === 'home' ? ctx.lineupHome : ctx.lineupAway
+      if (!lineupMap.has(playerId)) continue
+
+      const oppTeam = side === 'home' ? ctx.awayTeam : ctx.homeTeam
+      const bdlInfo = bdlByStatId.get(playerId)
+      const seasonBatting = bdlInfo ? bdlStatsById.get(bdlInfo.bdl_id) : null
+
+      const positionRaw = String(bdlInfo?.position ?? player.position ?? '').toUpperCase()
+      if (positionRaw === 'P' || positionRaw === 'SP' || positionRaw === 'RP') continue
+
+      const standardBatting = standardBattingMap.get(playerId)
+      const ev = evMap.get(playerId) as any
+      const hrRow = hrMap.get(playerId) as any
+      const seasonPa =
+        (seasonBatting?.batting_ab ?? 0) +
+        (seasonBatting?.batting_bb ?? 0)
+      const seasonHr = seasonBatting?.batting_hr ?? 0
+      const standardPa = num(standardBatting?.pa) ?? 0
+      const standardHr = num(standardBatting?.hr) ?? 0
+      const histPa = num(ev?.attempts) ?? 0
+      const histHr = num(hrRow?.hr_total) ?? 0
+      const standardRate = standardPa > 0 ? standardHr / standardPa : null
+      const seasonRate = seasonPa > 0 ? seasonHr / seasonPa : null
+      const histRate = histPa > 0 ? histHr / histPa : null
+      const rawRate =
+        (standardRate != null && standardRate > 0 ? standardRate : null) ??
+        (seasonRate != null && seasonRate > 0 ? seasonRate : null) ??
+        (histRate != null && histRate > 0 ? histRate : null)
+      const batterHrPerPa = rawRate ?? leagueHrFallback
+
+      const oppPitcherHand = side === 'home' ? ctx.awayPitcherHand : ctx.homePitcherHand
+      const oppPitcherName = side === 'home' ? ctx.awayPitcherName : ctx.homePitcherName
+      const oppPitcherStatId =
+        side === 'home' ? ctx.awayPitcherStatId : ctx.homePitcherStatId
+
+      const { bats: batterHand } = parseBatsThrows(bdlInfo?.bats_throws)
+
+      const lineupPos = lineupMap.get(playerId) ?? null
+
+      const bb = bbByPlayer.get(playerId)
+      const baseHrRate = batterHrPerPa
+      let hrPerPaVsL: number | null = null
+      let hrPerPaVsR: number | null = null
+      if (bb?.lhp) {
+        const hrl = num(bb.lhp['HR/FB'])
+        const fbl = num(bb.lhp['FB%'])
+        if (hrl != null && fbl != null && fbl > 0) {
+          hrPerPaVsL = (hrl / 100) * (fbl / 100) * baseHrRate / 0.036 * 0.036
+        }
+      }
+      if (bb?.rhp) {
+        const hrr = num(bb.rhp['HR/FB'])
+        const fbr = num(bb.rhp['FB%'])
+        if (hrr != null && fbr != null && fbr > 0) {
+          hrPerPaVsR = (hrr / 100) * (fbr / 100) * baseHrRate / 0.036 * 0.036
+        }
+      }
+
+      const batterInput: BatterFeatureInput = {
+        hrPerPa: batterHrPerPa,
+        hand: batterHand,
+        lineupPosition: lineupPos,
+        hrPerPaVsL,
+        hrPerPaVsR,
+        hrLast7: null,
+        paLast7: null,
+        hrLast14: null,
+        paLast14: null,
+      }
+
+      const barrelDec = pctDecimal(ev?.brl_percent)
+      const hardHitDec = weightedHardHitFromArsenal(batterArsenalMap.get(playerId) ?? [])
+      const fbDec = pctDecimal(avgBattedMetric(bb, 'FB%'))
+      const pullDec = pctDecimal(avgBattedMetric(bb, 'Pull%'))
+      const kDec = strikeoutRateFromStandard(standardBattingMap.get(playerId) ?? null)
+      const avgEv = num(ev?.avg_hit_speed)
+      const sweetSpotDec = pctDecimal(ev?.anglesweetspotpercent)
+
+      const pEvRow = oppPitcherStatId ? pitcherEvMap.get(oppPitcherStatId) : undefined
+      const pitcherArsenalRowsForOpp = oppPitcherStatId ? pitcherArsenalMap.get(oppPitcherStatId) ?? [] : []
+
+      const zPitchSup = zPitcherSuppressionContactQuality({
+        barrelAllowedDec: pctDecimal(pEvRow?.brl_percent),
+        hardHitAllowedDec: weightedHardHitFromArsenal(pitcherArsenalRowsForOpp),
+        evAllowed: num(pEvRow?.avg_hit_speed),
+      })
+
+      const zPow = zPowerContactQuality({
+        barrelDec,
+        avgEv,
+        hardHitDec,
+        sweetSpotDec,
+      })
+      const zLaunch = zLaunchContactQuality(fbDec, pullDec)
+      const zCont = zContact(kDec)
+      const zSkill = zSkillContactQuality({
+        zPower: zPow,
+        zLaunch,
+        zContact: zCont,
+        zPitcherSuppression: zPitchSup,
+      })
+
+      const zParkVal = zPark(ctx.parkFactor) ?? 0
+      const zWeatherVal = computeZWeather(ctx.weather) ?? 0
+      const zHandCQ = contactQualityZHandedness(batterInput, oppPitcherHand)
+      const zLineupCQ = zLineupSpotForContactQuality(lineupPos)
+      const xLinear = contactQualityLinearScore({
+        zSkill,
+        zPark: zParkVal,
+        zWeather: zWeatherVal,
+        zHandedness: zHandCQ,
+        zLineupSpot: zLineupCQ,
+      })
+      const expPA = expectedPaForSpot(lineupPos)
+      const cqOut = computeContactQualityGameHr(xLinear, expPA)
+      const americanOdds = probToAmericanOdds(cqOut.probability)
+
+      cqResults.push({
+        playerId,
+        slug: player.slug ?? '',
+        name: player.name ?? 'Unknown',
+        team: pTeam,
+        position: player.position ?? null,
+        opponent: side === 'home' ? `vs ${oppTeam}` : `@ ${oppTeam}`,
+        opponentPitcher: oppPitcherName,
+        opponentPitcherHand: oppPitcherHand,
+        hrProbability: cqOut.probability,
+        probRaw: cqOut.probRaw,
+        tier: cqOut.tier,
+        pPa: cqOut.pPa,
+        linearScore: cqOut.x,
+        lambda: cqOut.lambda,
+        expectedPA: expPA,
+        dataQuality: cqOut.dataQuality,
+        matchupHrRate: null,
+        zMatchup: null,
+        americanOdds,
+        americanOddsStr: formatAmericanOdds(americanOdds),
+        pitchArsenalWeight: null,
+        modelVariant: 'contact_quality',
+      })
+    }
+
+    cqResults.sort((a, b) => b.hrProbability - a.hrProbability)
+    console.log(
+      '[hr-engine] Distribution (contact_quality):',
+      JSON.stringify(
+        summarizeProjectionDistribution(
+          cqResults.map((row) => ({
+            matchupHrRate: row.matchupHrRate,
+            zMatchup: row.zMatchup,
+            x: row.linearScore,
+            pPa: row.pPa,
+            lambda: row.lambda,
+            probRaw: row.probRaw,
+          })),
+        ),
+      ),
+    )
+    console.log(
+      `[hr-engine] Computed ${cqResults.length} contact_quality projections. Top: ${cqResults[0]?.name ?? 'none'} ${((cqResults[0]?.hrProbability ?? 0) * 100).toFixed(1)}%`,
+    )
+    return cqResults
+  }
+
+  const leagueHr = CALIBRATION.leagueAvgHrPerPa
+
+  const matchupLogSamples: number[] = []
+  for (const playerId of rosterPlayerIds) {
+    const player = playerMap.get(playerId)
+    if (!player) continue
+    const pTeam = canon(player.team)
+    if (!pTeam) continue
+    const gm = teamGameMap.get(pTeam)
+    if (!gm) continue
+    const { ctx, side } = gm
+    const lineupMap = side === 'home' ? ctx.lineupHome : ctx.lineupAway
+    if (!lineupMap.has(playerId)) continue
+    const bdlInfo = bdlByStatId.get(playerId)
+    const seasonBatting = bdlInfo ? bdlStatsById.get(bdlInfo.bdl_id) : null
+    const positionRaw = String(bdlInfo?.position ?? player.position ?? '').toUpperCase()
+    if (positionRaw === 'P' || positionRaw === 'SP' || positionRaw === 'RP') continue
+    const standardBatting = standardBattingMap.get(playerId)
+    const ev = evMap.get(playerId) as any
+    const hrRow = hrMap.get(playerId) as any
+    const seasonPa =
+      (seasonBatting?.batting_ab ?? 0) + (seasonBatting?.batting_bb ?? 0)
+    const seasonHr = seasonBatting?.batting_hr ?? 0
+    const standardPa = num(standardBatting?.pa) ?? 0
+    const standardHr = num(standardBatting?.hr) ?? 0
+    const histPa = num(ev?.attempts) ?? 0
+    const histHr = num(hrRow?.hr_total) ?? 0
+    const standardRate = standardPa > 0 ? standardHr / standardPa : null
+    const seasonRate = seasonPa > 0 ? seasonHr / seasonPa : null
+    const histRate = histPa > 0 ? histHr / histPa : null
+    const rawRate =
+      (standardRate != null && standardRate > 0 ? standardRate : null) ??
+      (seasonRate != null && seasonRate > 0 ? seasonRate : null) ??
+      (histRate != null && histRate > 0 ? histRate : null)
+    if (rawRate == null) continue
+    let rawHr = 0
+    let rawPa = 0
+    if (standardRate != null && standardRate > 0) {
+      rawHr = standardHr
+      rawPa = standardPa
+    } else if (seasonRate != null && seasonRate > 0) {
+      rawHr = seasonHr
+      rawPa = seasonPa
+    } else {
+      rawHr = histHr
+      rawPa = histPa
+    }
+    if (rawPa <= 0) continue
+    const batterShrunk = shrinkRate(rawHr, rawPa, leagueHr)
+    const pitcherShrunk =
+      side === 'home' ? ctx.awayPitcherHrPerPaAllowed : ctx.homePitcherHrPerPaAllowed
+    const m = computeMatchupHrRate(batterShrunk, pitcherShrunk, leagueHr)
+    matchupLogSamples.push(Math.log(m))
+  }
+
+  const msMatchup = meanStd(matchupLogSamples)
+  const matchupLogDist =
+    msMatchup != null && msMatchup.std > 1e-9
+      ? { mean: msMatchup.mean, std: Math.max(msMatchup.std, 0.12) }
+      : null
+
   const results: EngineProjection[] = []
 
   for (const playerId of rosterPlayerIds) {
@@ -676,6 +1008,9 @@ export async function runDailyProjections(
     if (!gm) continue
 
     const { ctx, side } = gm
+    const lineupMap = side === 'home' ? ctx.lineupHome : ctx.lineupAway
+    if (!lineupMap.has(playerId)) continue
+
     const oppTeam = side === 'home' ? ctx.awayTeam : ctx.homeTeam
     const bdlInfo = bdlByStatId.get(playerId)
     const seasonBatting = bdlInfo ? bdlStatsById.get(bdlInfo.bdl_id) : null
@@ -697,28 +1032,38 @@ export async function runDailyProjections(
     const standardRate = standardPa > 0 ? standardHr / standardPa : null
     const seasonRate = seasonPa > 0 ? seasonHr / seasonPa : null
     const histRate = histPa > 0 ? histHr / histPa : null
-    const batterHrPerPa =
+    const rawRate =
       (standardRate != null && standardRate > 0 ? standardRate : null) ??
       (seasonRate != null && seasonRate > 0 ? seasonRate : null) ??
       (histRate != null && histRate > 0 ? histRate : null)
-    if (batterHrPerPa == null || !Number.isFinite(batterHrPerPa) || batterHrPerPa <= 0) continue
+    if (rawRate == null) continue
+    let rawHr = 0
+    let rawPa = 0
+    if (standardRate != null && standardRate > 0) {
+      rawHr = standardHr
+      rawPa = standardPa
+    } else if (seasonRate != null && seasonRate > 0) {
+      rawHr = seasonHr
+      rawPa = seasonPa
+    } else {
+      rawHr = histHr
+      rawPa = histPa
+    }
+    if (rawPa <= 0) continue
+    const batterShrunk = shrinkRate(rawHr, rawPa, leagueHr)
+    const batterHrPerPa = rawRate
 
-    // Determine opposing pitcher info
-    const oppPitcherHand   = side === 'home' ? ctx.awayPitcherHand   : ctx.homePitcherHand
-    const oppPitcherName   = side === 'home' ? ctx.awayPitcherName   : ctx.homePitcherName
-    const oppPitcherHrPerPaAllowed =
+    const oppPitcherHand = side === 'home' ? ctx.awayPitcherHand : ctx.homePitcherHand
+    const oppPitcherName = side === 'home' ? ctx.awayPitcherName : ctx.homePitcherName
+    const pitcherShrunk =
       side === 'home' ? ctx.awayPitcherHrPerPaAllowed : ctx.homePitcherHrPerPaAllowed
     const oppPitcherStatId =
       side === 'home' ? ctx.awayPitcherStatId : ctx.homePitcherStatId
 
-    // Batter hand from BDL
     const { bats: batterHand } = parseBatsThrows(bdlInfo?.bats_throws)
 
-    // Lineup position
-    const lineupMap = side === 'home' ? ctx.lineupHome : ctx.lineupAway
     const lineupPos = lineupMap.get(playerId) ?? null
 
-    // Batted ball splits for handedness
     const bb = bbByPlayer.get(playerId)
     const baseHrRate = batterHrPerPa
     let hrPerPaVsL: number | null = null
@@ -739,22 +1084,38 @@ export async function runDailyProjections(
     }
 
     const batterInput: BatterFeatureInput = {
-      hrPerPa:       batterHrPerPa,
-      hand:          batterHand,
+      hrPerPa: batterHrPerPa,
+      hand: batterHand,
       lineupPosition: lineupPos,
       hrPerPaVsL,
       hrPerPaVsR,
-      hrLast7:       null,
-      paLast7:       null,
-      hrLast14:      null,
-      paLast14:      null,
+      hrLast7: null,
+      paLast7: null,
+      hrLast14: null,
+      paLast14: null,
     }
 
-    /* ── Assemble features ──────────────────────────────────────── */
+    const barrelDec = pctDecimal(ev?.brl_percent)
+    const hardHitDec = weightedHardHitFromArsenal(batterArsenalMap.get(playerId) ?? [])
+    const fbDec = pctDecimal(avgBattedMetric(bb, 'FB%'))
+    const pullDec = pctDecimal(avgBattedMetric(bb, 'Pull%'))
+    const kDec = strikeoutRateFromStandard(standardBattingMap.get(playerId) ?? null)
+
     const present: CalibrationCoeffKey[] = []
-    const matchupHrRate = computeMatchupHrRate(batterHrPerPa, oppPitcherHrPerPaAllowed ?? CALIBRATION.leagueAvgHrPerPa)
-    const fZMatchup = zMatchup(matchupHrRate)
-    if (fZMatchup != null) present.push('matchup')
+
+    const matchupHrRate = computeMatchupHrRate(batterShrunk, pitcherShrunk, leagueHr)
+
+    const fZPower = zPower(barrelDec, hardHitDec)
+    if (barrelDec != null || hardHitDec != null) present.push('power')
+
+    const fZFly = zFlyBall(fbDec)
+    if (fbDec != null) present.push('fb')
+
+    const fZContact = zContact(kDec)
+    if (kDec != null) present.push('contact')
+
+    const fZPull = zPull(pullDec)
+    if (pullDec != null) present.push('pull')
 
     const fZPark = zPark(ctx.parkFactor)
     if (fZPark != null) present.push('park')
@@ -778,28 +1139,32 @@ export async function runDailyProjections(
 
     const expPA = expectedPaForSpot(lineupPos)
 
-    const pitchArsenalWeight = modelVariant === 'weighted_pitch_arsenal'
-      ? computeWeightedPitchArsenalScore(
-          batterArsenalMap.get(playerId) ?? [],
-          oppPitcherStatId ? (pitcherArsenalMap.get(oppPitcherStatId) ?? []) : [],
-        )
-      : null
+    const pitchArsenalWeight =
+      modelVariant === 'weighted_pitch_arsenal'
+        ? computeWeightedPitchArsenalScore(
+            batterArsenalMap.get(playerId) ?? [],
+            oppPitcherStatId ? pitcherArsenalMap.get(oppPitcherStatId) ?? [] : [],
+          )
+        : null
     const adjustedMatchupHrRate =
-      pitchArsenalWeight != null
-        ? matchupHrRate != null
-          ? matchupHrRate * clamp(1 + (pitchArsenalWeight * 0.10), 0.82, 1.22)
-          : null
+      pitchArsenalWeight != null && matchupHrRate != null
+        ? Math.exp(Math.log(matchupHrRate) + pitchArsenalWeight * 0.08)
         : matchupHrRate
-    const adjustedZMatchup = zMatchup(adjustedMatchupHrRate)
+    const adjustedZMatchup = zMatchup(adjustedMatchupHrRate, matchupLogDist)
+    if (adjustedZMatchup != null) present.push('matchup')
 
     const features: NormalizedFeatures = {
-      zMatchup:      adjustedZMatchup,
-      zPark:         fZPark,
-      zHandedness:   fZHand,
-      zWeather:      fZWeather,
-      zRecentForm:   fZRecent,
-      zLineupSpot:   fZLineup,
-      expectedPA:    expPA,
+      zMatchup: adjustedZMatchup,
+      zPower: fZPower,
+      zFlyBall: fZFly,
+      zContact: fZContact,
+      zPull: fZPull,
+      zPark: fZPark,
+      zHandedness: fZHand,
+      zWeather: fZWeather,
+      zRecentForm: fZRecent,
+      zLineupSpot: fZLineup,
+      expectedPA: expPA,
       matchupHrRate: adjustedMatchupHrRate,
       featuresPresent: present,
     }
@@ -896,6 +1261,10 @@ export async function runAndSaveProjections(dateOverride?: string): Promise<{ co
 
 export async function runWeightedPitchArsenalProjections(dateOverride?: string): Promise<EngineProjection[]> {
   return runDailyProjections(dateOverride, 'weighted_pitch_arsenal')
+}
+
+export async function runContactQualityProjections(dateOverride?: string): Promise<EngineProjection[]> {
+  return runDailyProjections(dateOverride, 'contact_quality')
 }
 
 export async function runUpcomingLineupRefresh(windowMinutes = 60) {

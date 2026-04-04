@@ -190,7 +190,9 @@ export default function ProjectionsPage() {
   const [rows, setRows] = useState<DailyProjection[]>([])
   const [weightedRows, setWeightedRows] = useState<DailyProjection[]>([])
   const [weightedLoading, setWeightedLoading] = useState(false)
-  const [projectionModelTab, setProjectionModelTab] = useState<'default' | 'weighted'>('default')
+  const [contactQualityRows, setContactQualityRows] = useState<DailyProjection[]>([])
+  const [contactQualityLoading, setContactQualityLoading] = useState(false)
+  const [projectionModelTab, setProjectionModelTab] = useState<'default' | 'weighted' | 'contact_quality'>('default')
   const [games, setGames] = useState<ScheduleGame[]>([])
   const [availableDates, setAvailableDates] = useState<string[]>([])
   const [pickState, setPickState] = useState<Record<string, boolean | null>>({})
@@ -283,6 +285,28 @@ export default function ProjectionsPage() {
   }, [displayDate, projectionModelTab])
 
   useEffect(() => {
+    if (projectionModelTab !== 'contact_quality') return
+    const base = import.meta.env.VITE_API_BASE_URL ?? ''
+    if (!base) return
+    let cancelled = false
+    setContactQualityLoading(true)
+    void fetch(`${base}/bdl/projections/contact-quality?date=${encodeURIComponent(displayDate)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json: { rows?: DailyProjection[] } | null) => {
+        if (!cancelled) setContactQualityRows(json?.rows ?? [])
+      })
+      .catch(() => {
+        if (!cancelled) setContactQualityRows([])
+      })
+      .finally(() => {
+        if (!cancelled) setContactQualityLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [displayDate, projectionModelTab])
+
+  useEffect(() => {
     if (!supabase) return
     const id = setInterval(() => {
       const prevDate = new Date(`${displayDate}T12:00:00Z`)
@@ -333,7 +357,12 @@ export default function ProjectionsPage() {
       })
   }, [displayDate])
 
-  const activeRows = projectionModelTab === 'weighted' ? weightedRows : rows
+  const activeRows =
+    projectionModelTab === 'weighted'
+      ? weightedRows
+      : projectionModelTab === 'contact_quality'
+        ? contactQualityRows
+        : rows
 
   const filteredRows = useMemo(() => {
     let out = activeRows
@@ -757,9 +786,22 @@ export default function ProjectionsPage() {
         >
           Weighted Pitch Arsenal
         </button>
+        <button
+          type="button"
+          className={`pg-matchupTab ${projectionModelTab === 'contact_quality' ? 'is-active' : ''}`}
+          onClick={() => setProjectionModelTab('contact_quality')}
+        >
+          Contact Quality Model
+        </button>
       </div>
       <p className="pg-sub">
-        {displayDate} &mdash; {games.length} game{games.length !== 1 ? 's' : ''} &mdash; {projectionModelTab === 'weighted' ? 'Weighted pitch arsenal model' : 'Matchup-based HR model'} — grouped by tier.
+        {displayDate} &mdash; {games.length} game{games.length !== 1 ? 's' : ''} &mdash;{' '}
+        {projectionModelTab === 'weighted'
+          ? 'Weighted pitch arsenal model'
+          : projectionModelTab === 'contact_quality'
+            ? 'Contact quality (Statcast + suppression) HR model'
+            : 'Matchup-based HR model'}{' '}
+        — grouped by tier.
       </p>
       {!hasSubscription ? (
         <p className="pg-sub">Free preview: one random game. Subscribe to unlock full projections.</p>
@@ -780,7 +822,9 @@ export default function ProjectionsPage() {
           ) : null}
         </div>
       )}
-      {(loading || (projectionModelTab === 'weighted' && weightedLoading)) ? (
+      {(loading ||
+        (projectionModelTab === 'weighted' && weightedLoading) ||
+        (projectionModelTab === 'contact_quality' && contactQualityLoading)) ? (
         <div className="lb-skel">
           {Array.from({ length: 8 }).map((_, i) => (
             <div key={i} className="lb-skelRow" />
