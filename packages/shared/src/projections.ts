@@ -190,90 +190,6 @@ async function listDailyHrProjectionsFromTable(
     .filter((p: DailyProjection) => p.name !== 'Unknown')
 }
 
-/**
- * Three parallel queries by `model_variant` so PostgREST row limits never truncate
- * one variant when another has many rows (3× players per slate date).
- */
-export async function listDailyHrProjectionsAllModels(
-  supabase: SupabaseClient,
-  dateIso: string,
-): Promise<{
-  default: DailyProjection[]
-  weighted_pitch_arsenal: DailyProjection[]
-  contact_quality: DailyProjection[]
-}> {
-  const games = await getGamesForDateRaw(supabase, dateIso)
-  const matchupDisplayMap = new Map<string, string>()
-  for (const g of games) {
-    const home = canonicalTeam(g.home_team) ?? g.home_team
-    const away = canonicalTeam(g.away_team) ?? g.away_team
-    matchupDisplayMap.set(home, `vs ${away}`)
-    matchupDisplayMap.set(away, `@ ${home}`)
-  }
-
-  const selectCols =
-    'player_id, opponent_pitcher, opponent_pitcher_hand, hr_probability, l7_hrs, tier, players:player_id (stat_player_id,slug,name,team,position)'
-
-  const mapOne = (row: any): DailyProjection => {
-    const p = row.hr_probability != null ? Number(row.hr_probability) : null
-    const prob = p != null && Number.isFinite(p) ? p : null
-    return {
-      playerId: row.players?.stat_player_id ?? row.player_id,
-      slug: row.players?.slug ?? '',
-      name: row.players?.name ?? 'Unknown',
-      team: canonicalTeam(row.players?.team) ?? row.players?.team ?? null,
-      position: row.players?.position ?? null,
-      opponentPitcher: row.opponent_pitcher ?? null,
-      opponentPitcherHand: row.opponent_pitcher_hand ?? null,
-      hrProbability: prob,
-      l7Hrs: row.l7_hrs ?? null,
-      tier: prob != null ? probToTier(prob) : (row.tier ?? null),
-      opponent: matchupDisplayMap.get(canonicalTeam(row.players?.team) ?? row.players?.team ?? '') ?? null,
-      americanOdds: prob != null ? probToAmericanOdds(prob) : null,
-      americanOddsStr: prob != null ? formatAmericanOdds(probToAmericanOdds(prob)) : null,
-      source: 'daily_table' as const,
-    }
-  }
-
-  const byProb = (a: DailyProjection, b: DailyProjection) =>
-    (b.hrProbability ?? 0) - (a.hrProbability ?? 0)
-
-  const q = (variant: ProjectionModelVariant) =>
-    supabase
-      .from('daily_hr_projections')
-      .select(selectCols)
-      .eq('date', dateIso)
-      .eq('model_variant', variant)
-      .order('hr_probability', { ascending: false, nullsFirst: false })
-      .limit(5000)
-
-  const [defRes, wRes, cRes] = await Promise.all([
-    q('default'),
-    q('weighted_pitch_arsenal'),
-    q('contact_quality'),
-  ])
-
-  const pack = (rows: any[] | null): DailyProjection[] =>
-    (rows ?? [])
-      .map((row) => mapOne(row))
-      .filter((p) => p.name !== 'Unknown')
-      .sort(byProb)
-
-  const packSafe = (res: { data: unknown; error: { message?: string } | null }, label: string) => {
-    if (res.error) {
-      console.warn('[listDailyHrProjectionsAllModels]', label, res.error)
-      return [] as DailyProjection[]
-    }
-    return pack(res.data as any[])
-  }
-
-  return {
-    default: packSafe(defRes, 'default'),
-    weighted_pitch_arsenal: packSafe(wRes, 'weighted_pitch_arsenal'),
-    contact_quality: packSafe(cRes, 'contact_quality'),
-  }
-}
-
 /* ─── Batch data helpers ─────────────────────────────────────────── */
 
 async function fetchAllBatterEV(supabase: SupabaseClient, season: number) {
@@ -715,6 +631,31 @@ export async function listDailyHrProjections(
   const fromCalc = await calculateMatchupProjections(supabase, date)
   if (fromCalc.length > 0) return fromCalc
   return []
+}
+
+/**
+ * Loads all three model tabs. **Default** uses the same path as `listDailyHrProjections`
+ * (table + on-demand calc fallback). Weighted / contact only come from `daily_hr_projections`
+ * unless the app hydrates from the API when those buckets are empty.
+ */
+export async function listDailyHrProjectionsAllModels(
+  supabase: SupabaseClient,
+  dateIso: string,
+): Promise<{
+  default: DailyProjection[]
+  weighted_pitch_arsenal: DailyProjection[]
+  contact_quality: DailyProjection[]
+}> {
+  const [defaultRows, weightedRows, contactRows] = await Promise.all([
+    listDailyHrProjections(supabase, dateIso, { modelVariant: 'default' }),
+    listDailyHrProjections(supabase, dateIso, { modelVariant: 'weighted_pitch_arsenal' }),
+    listDailyHrProjections(supabase, dateIso, { modelVariant: 'contact_quality' }),
+  ])
+  return {
+    default: defaultRows,
+    weighted_pitch_arsenal: weightedRows,
+    contact_quality: contactRows,
+  }
 }
 
 export async function mergedHrProbabilityMapForDate(

@@ -280,6 +280,30 @@ export default function ProjectionsPage() {
         const raw = (live.data ?? []) as any[]
         const dayIso = displayDate
         setLiveGames(raw.filter((lg) => bdlRowMatchesCalendarDay(lg, dayIso)))
+
+        /* DB often only has `default` until sync runs; hydrate weighted/contact from API without blocking first paint. */
+        const base = import.meta.env.VITE_API_BASE_URL ?? ''
+        const q = encodeURIComponent(displayDate)
+        const needW = allModels.default.length > 0 && allModels.weighted_pitch_arsenal.length === 0
+        const needC = allModels.default.length > 0 && allModels.contact_quality.length === 0
+        if (base && (needW || needC)) {
+          void Promise.all([
+            needW
+              ? fetch(`${base}/bdl/projections/weighted?date=${q}`).then((r) => (r.ok ? r.json() : null))
+              : Promise.resolve(null),
+            needC
+              ? fetch(`${base}/bdl/projections/contact-quality?date=${q}`).then((r) => (r.ok ? r.json() : null))
+              : Promise.resolve(null),
+          ])
+            .then(([wJson, cJson]) => {
+              if (cancelled) return
+              const wRows = (wJson as { rows?: DailyProjection[] } | null)?.rows
+              const cRows = (cJson as { rows?: DailyProjection[] } | null)?.rows
+              if (needW && wRows?.length) setWeightedRows(wRows)
+              if (needC && cRows?.length) setContactQualityRows(cRows)
+            })
+            .catch(() => {})
+        }
       })
       .finally(() => {
         if (!cancelled) setLoading(false)
@@ -354,8 +378,15 @@ export default function ProjectionsPage() {
       const idx =
         displayDate.split('').reduce((acc, c) => acc + c.charCodeAt(0), 0) % games.length
       const g = games[idx]
-      const allowed = new Set([g.awayTeam, g.homeTeam])
-      out = out.filter((r) => r.team && allowed.has(r.team))
+      const allowed = new Set(
+        [g.awayTeam, g.homeTeam]
+          .map((t) => normalizeTeamCode(t ?? '') ?? '')
+          .filter(Boolean),
+      )
+      out = out.filter((r) => {
+        const code = normalizeTeamCode(r.team ?? '') ?? ''
+        return Boolean(code) && allowed.has(code)
+      })
     }
     if (selectedTeam) out = out.filter((r) => (normalizeTeamCode(r.team ?? '') ?? '').toUpperCase() === selectedTeam)
     if (selectedPlayerId) out = out.filter((r) => r.playerId === selectedPlayerId)
