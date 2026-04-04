@@ -27,7 +27,6 @@ function Layout() {
     ['/projections', 'Projections', '📈'],
     ['/stats', 'Homer Tracking', <img src={hrIcon64} alt="" style={{ width: 18, height: 18, objectFit: 'contain' }} />],
     ['/community', 'Leaderboard', '🏆'],
-    ['/wall', 'Wall of Bang', '💥'],
   ] as const
   const menuLinks = [
     ['/dugout', 'Scoreboard'],

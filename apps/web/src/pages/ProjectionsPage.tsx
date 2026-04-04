@@ -136,6 +136,29 @@ function formatPercent(value: number | null | undefined, digits = 1): string {
   return `${Number(value).toFixed(digits)}%`
 }
 
+/** Quick letter grade for batter ISO vs pitcher SLG allowed on this pitch. */
+function arsenalPitchGrade(row: MatchupPitchRow): string {
+  const iso = row.batter_iso != null ? Number(row.batter_iso) : null
+  const slg = row.pitcher_slg_allowed != null ? Number(row.pitcher_slg_allowed) : null
+  let score = 0
+  let n = 0
+  if (iso != null && Number.isFinite(iso)) {
+    score += Math.min(1.2, Math.max(0, iso / 0.35)) * 50
+    n += 1
+  }
+  if (slg != null && Number.isFinite(slg)) {
+    score += Math.min(1.2, Math.max(0, (slg - 0.35) / 0.25)) * 50
+    n += 1
+  }
+  if (n === 0) return '—'
+  const avg = score / n
+  if (avg >= 85) return 'A'
+  if (avg >= 70) return 'B'
+  if (avg >= 55) return 'C'
+  if (avg >= 40) return 'D'
+  return 'F'
+}
+
 function extractHomerHitters(scoringSummary: any): Set<string> {
   const out = new Set<string>()
   const plays = Array.isArray(scoringSummary) ? scoringSummary : []
@@ -202,6 +225,7 @@ export default function ProjectionsPage() {
   const [matchupFor, setMatchupFor] = useState<DailyProjection | null>(null)
   const [matchupData, setMatchupData] = useState<any>(null)
   const [matchupTab, setMatchupTab] = useState<'default' | 'pitch'>('default')
+  const [pitchCarouselIndex, setPitchCarouselIndex] = useState(0)
   const [playerInputs, setPlayerInputs] = useState<any>(null)
   const [selectedYear, setSelectedYear] = useState<number>(2026)
   const [liveGames, setLiveGames] = useState<any[]>([])
@@ -635,6 +659,7 @@ export default function ProjectionsPage() {
     setMatchupFor(r)
     setMatchupData(null)
     setMatchupTab('default')
+    setPitchCarouselIndex(0)
     setPlayerInputs(null)
     const opponentTeam = parseOpponentTeam(r)
     if (!opponentTeam) return
@@ -771,31 +796,35 @@ export default function ProjectionsPage() {
           </button>
         )}
       </div>
-      <div className="pg-matchupTabs" style={{ marginBottom: 10 }}>
-        <button
-          type="button"
-          className={`pg-matchupTab ${projectionModelTab === 'default' ? 'is-active' : ''}`}
-          onClick={() => setProjectionModelTab('default')}
-        >
-          AH Default
-        </button>
-        <button
-          type="button"
-          className={`pg-matchupTab ${projectionModelTab === 'weighted' ? 'is-active' : ''}`}
-          onClick={() => setProjectionModelTab('weighted')}
-        >
-          Weighted Pitch Arsenal
-        </button>
-        <button
-          type="button"
-          className={`pg-matchupTab ${projectionModelTab === 'contact_quality' ? 'is-active' : ''}`}
-          onClick={() => setProjectionModelTab('contact_quality')}
-        >
-          Contact Quality Model
-        </button>
+      <div className="pg-projModelRow" role="group" aria-label="Projection model">
+        <div className="pg-projModelGroup pg-projModelGroup--left">
+          <button
+            type="button"
+            className={`pg-matchupTab ${projectionModelTab === 'default' ? 'is-active' : ''}`}
+            onClick={() => setProjectionModelTab('default')}
+          >
+            AH Default
+          </button>
+          <button
+            type="button"
+            className={`pg-matchupTab ${projectionModelTab === 'weighted' ? 'is-active' : ''}`}
+            onClick={() => setProjectionModelTab('weighted')}
+          >
+            Weighted Pitch Arsenal
+          </button>
+        </div>
+        <div className="pg-projModelGroup pg-projModelGroup--center">
+          <button
+            type="button"
+            className={`pg-matchupTab ${projectionModelTab === 'contact_quality' ? 'is-active' : ''}`}
+            onClick={() => setProjectionModelTab('contact_quality')}
+          >
+            Contact Quality Model
+          </button>
+        </div>
+        <div className="pg-projModelGroup pg-projModelGroup--spacer" aria-hidden="true" />
       </div>
       <p className="pg-sub">
-        {displayDate} &mdash; {games.length} game{games.length !== 1 ? 's' : ''} &mdash;{' '}
         {projectionModelTab === 'weighted'
           ? 'Weighted pitch arsenal model'
           : projectionModelTab === 'contact_quality'
@@ -1237,48 +1266,102 @@ export default function ProjectionsPage() {
                           </div>
                         </>
                       ) : pitchArsenalRows.length ? (
-                        <div className="pg-arsenalGrid" style={{ marginTop: 10 }}>
-                          {pitchArsenalRows.map((row, idx) => {
+                        <div className="pg-pitchArsenalWrap" style={{ marginTop: 10 }}>
+                          {(() => {
+                            const sortedArsenal = [...pitchArsenalRows].sort((a, b) => {
+                              const ua = a.usage != null ? Number(a.usage) : 0
+                              const ub = b.usage != null ? Number(b.usage) : 0
+                              return ub - ua
+                            })
+                            const n = sortedArsenal.length
+                            const idx = n ? ((pitchCarouselIndex % n) + n) % n : 0
+                            const row = sortedArsenal[idx]!
                             const usage = row.usage != null ? Number(row.usage) : null
-                            const batterIso = row.batter_iso != null ? Number(row.batter_iso) : null
                             const usageBig = usage != null && usage >= 20
+                            const batterIso = row.batter_iso != null ? Number(row.batter_iso) : null
                             const batterHot = batterIso != null && batterIso >= 0.25
                             return (
-                              <div key={`${row.pitch_type ?? row.pitch_name ?? 'pitch'}-${idx}`} className="pg-arsenalCard">
-                                <div className="pg-arsenalTop">
-                                  <div>
-                                    <div className="pg-arsenalPitch">{row.pitch_name ?? row.pitch_type ?? 'Pitch'}</div>
-                                    <div className="pg-small">{row.pitch_type ?? '—'}</div>
-                                  </div>
-                                  <span className={`pg-pill ${usageBig ? 'is-green' : ''}`}>
-                                    Usage {usage != null ? `${usage.toFixed(1)}%` : '—'}
-                                  </span>
+                              <>
+                                <div className="pg-label">Full arsenal overview</div>
+                                <div className="pg-pitchOverview">
+                                  {sortedArsenal.map((pr, i) => {
+                                    const u = pr.usage != null ? Number(pr.usage) : null
+                                    const g = arsenalPitchGrade(pr)
+                                    return (
+                                      <button
+                                        key={`${pr.pitch_type ?? pr.pitch_name ?? 'p'}-${i}`}
+                                        type="button"
+                                        className={`pg-pitchOverviewChip ${i === idx ? 'is-active' : ''}`}
+                                        onClick={() => setPitchCarouselIndex(i)}
+                                      >
+                                        <span className="pg-pitchOverviewName">{pr.pitch_name ?? pr.pitch_type ?? 'Pitch'}</span>
+                                        <span className="pg-pitchOverviewUsage">{u != null ? `${u.toFixed(0)}%` : '—'}</span>
+                                        <span
+                                          className={`pg-pitchOverviewGrade ${g !== '—' ? `grade-${g}` : ''}`}
+                                        >
+                                          {g}
+                                        </span>
+                                      </button>
+                                    )
+                                  })}
                                 </div>
-                                <div className="pg-arsenalStats">
-                                  <div className="pg-arsenalSide">
-                                    <div className="pg-label">Pitcher</div>
-                                    <div className="pg-arsenalMetric">BA allowed: {formatMetric(row.pitcher_ba_allowed)}</div>
-                                    <div className="pg-arsenalMetric">SLG allowed: {formatMetric(row.pitcher_slg_allowed)}</div>
-                                    <div className="pg-arsenalMetric">wOBA allowed: {formatMetric(row.pitcher_woba_allowed)}</div>
-                                    <div className="pg-arsenalMetric">xSLG allowed: {formatMetric(row.pitcher_est_slg_allowed)}</div>
-                                    <div className="pg-arsenalMetric">xwOBA allowed: {formatMetric(row.pitcher_est_woba_allowed)}</div>
-                                    <div className="pg-arsenalMetric">Hard-hit allowed: {formatPercent(row.pitcher_hard_hit_percent)}</div>
+                                <div className="pg-pitchCarousel">
+                                  <button
+                                    type="button"
+                                    className="pg-pitchCarouselBtn"
+                                    aria-label="Previous pitch"
+                                    onClick={() => setPitchCarouselIndex((c) => (n ? (c - 1 + n) % n : 0))}
+                                  >
+                                    ←
+                                  </button>
+                                  <div className="pg-pitchCarouselCard">
+                                    <div className="pg-arsenalTop">
+                                      <div>
+                                        <div className="pg-arsenalPitch">{row.pitch_name ?? row.pitch_type ?? 'Pitch'}</div>
+                                        <div className="pg-small">{row.pitch_type ?? '—'}</div>
+                                      </div>
+                                      <span className={`pg-pill ${usageBig ? 'is-green' : ''}`}>
+                                        Usage {usage != null ? `${usage.toFixed(1)}%` : '—'}
+                                      </span>
+                                    </div>
+                                    <div className="pg-arsenalStats">
+                                      <div className="pg-arsenalSide">
+                                        <div className="pg-label">Pitcher</div>
+                                        <div className="pg-arsenalMetric">BA allowed: {formatMetric(row.pitcher_ba_allowed)}</div>
+                                        <div className="pg-arsenalMetric">SLG allowed: {formatMetric(row.pitcher_slg_allowed)}</div>
+                                        <div className="pg-arsenalMetric">wOBA allowed: {formatMetric(row.pitcher_woba_allowed)}</div>
+                                        <div className="pg-arsenalMetric">xSLG allowed: {formatMetric(row.pitcher_est_slg_allowed)}</div>
+                                        <div className="pg-arsenalMetric">xwOBA allowed: {formatMetric(row.pitcher_est_woba_allowed)}</div>
+                                        <div className="pg-arsenalMetric">Hard-hit allowed: {formatPercent(row.pitcher_hard_hit_percent)}</div>
+                                      </div>
+                                      <div className="pg-arsenalSide">
+                                        <div className="pg-label">Batter vs this pitch</div>
+                                        <div className={`pg-arsenalMetric ${batterHot ? 'is-green' : ''}`}>ISO: {formatMetric(row.batter_iso)}</div>
+                                        <div className="pg-arsenalMetric">BA: {formatMetric(row.batter_ba)}</div>
+                                        <div className="pg-arsenalMetric">SLG: {formatMetric(row.batter_slg)}</div>
+                                        <div className="pg-arsenalMetric">wOBA: {formatMetric(row.batter_woba)}</div>
+                                        <div className="pg-arsenalMetric">xSLG: {formatMetric(row.batter_est_slg)}</div>
+                                        <div className="pg-arsenalMetric">xwOBA: {formatMetric(row.batter_est_woba)}</div>
+                                        <div className="pg-arsenalMetric">K%: {formatPercent(row.batter_k_percent)}</div>
+                                        <div className="pg-arsenalMetric">Hard-hit %: {formatPercent(row.batter_hard_hit_percent)}</div>
+                                      </div>
+                                    </div>
                                   </div>
-                                  <div className="pg-arsenalSide">
-                                    <div className="pg-label">Batter Vs This Pitch</div>
-                                    <div className={`pg-arsenalMetric ${batterHot ? 'is-green' : ''}`}>ISO: {formatMetric(row.batter_iso)}</div>
-                                    <div className="pg-arsenalMetric">BA: {formatMetric(row.batter_ba)}</div>
-                                    <div className="pg-arsenalMetric">SLG: {formatMetric(row.batter_slg)}</div>
-                                    <div className="pg-arsenalMetric">wOBA: {formatMetric(row.batter_woba)}</div>
-                                    <div className="pg-arsenalMetric">xSLG: {formatMetric(row.batter_est_slg)}</div>
-                                    <div className="pg-arsenalMetric">xwOBA: {formatMetric(row.batter_est_woba)}</div>
-                                    <div className="pg-arsenalMetric">K%: {formatPercent(row.batter_k_percent)}</div>
-                                    <div className="pg-arsenalMetric">Hard-hit %: {formatPercent(row.batter_hard_hit_percent)}</div>
-                                  </div>
+                                  <button
+                                    type="button"
+                                    className="pg-pitchCarouselBtn"
+                                    aria-label="Next pitch"
+                                    onClick={() => setPitchCarouselIndex((c) => (n ? (c + 1) % n : 0))}
+                                  >
+                                    →
+                                  </button>
                                 </div>
-                              </div>
+                                <div className="pg-pitchCarouselHint">
+                                  Pitch {idx + 1} of {n} — use arrows or tap a pitch above
+                                </div>
+                              </>
                             )
-                          })}
+                          })()}
                         </div>
                       ) : (
                         <p className="pg-sub" style={{ marginTop: 10 }}>

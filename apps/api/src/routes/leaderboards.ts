@@ -21,6 +21,15 @@ function parseIncludeLow(req: Request): boolean {
   return req.query.include_low_sample === 'true'
 }
 
+/** YYYY-MM for the current month in America/New_York (MLB calendar context). */
+function defaultCalendarMonthIso(): string {
+  const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }))
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+
+/** ~68 team AB per 9-inning game (34 per side). Used when box AB totals are unavailable. */
+const EST_AB_PER_GAME = 68
+
 async function fetchAggregates(
   orderColumn: string,
   ascending: boolean,
@@ -302,19 +311,48 @@ export function registerLeaderboardRoutes(app: Express) {
       }
       rows.sort(cmp)
 
-      const marchMonth = `${season}-03`
-      const marchCounts = rows.reduce<Record<string, number>>((acc, row) => {
-        if (!row.game_date?.startsWith(`${marchMonth}-`)) return acc
+      const monthParam = String(req.query.month ?? '').trim()
+      const calendarMonth = /^\d{4}-\d{2}$/.test(monthParam) ? monthParam : defaultCalendarMonthIso()
+      const monthPrefix = `${calendarMonth}-`
+
+      const calendar_counts = rowsUnsorted.reduce<Record<string, number>>((acc, row) => {
+        if (!row.game_date?.startsWith(monthPrefix)) return acc
         acc[row.game_date] = (acc[row.game_date] ?? 0) + 1
         return acc
       }, {})
+
+      const calendar_games_per_date: Record<string, number> = {}
+      const calendar_ab_per_date: Record<string, number> = {}
+      const calendar_hr_pct_per_date: Record<string, number | null> = {}
+      for (const g of seasonGames ?? []) {
+        const d = String((g as { date: string }).date)
+        if (!d.startsWith(monthPrefix)) continue
+        calendar_games_per_date[d] = (calendar_games_per_date[d] ?? 0) + 1
+      }
+      for (const d of Object.keys(calendar_counts)) {
+        const games = calendar_games_per_date[d] ?? 0
+        const ab = games * EST_AB_PER_GAME
+        calendar_ab_per_date[d] = ab
+        const hr = calendar_counts[d] ?? 0
+        if (ab > 0) calendar_hr_pct_per_date[d] = (hr / ab) * 100
+        else calendar_hr_pct_per_date[d] = hr > 0 ? null : 0
+      }
+      for (const d of Object.keys(calendar_games_per_date)) {
+        if (calendar_counts[d] != null) continue
+        calendar_ab_per_date[d] = (calendar_games_per_date[d] ?? 0) * EST_AB_PER_GAME
+        calendar_hr_pct_per_date[d] = 0
+      }
 
       res.json({
         last_updated: new Date().toISOString(),
         season,
         count: rows.length,
-        calendar_month: marchMonth,
-        calendar_counts: marchCounts,
+        calendar_month: calendarMonth,
+        calendar_counts,
+        calendar_games_per_date,
+        calendar_ab_per_date,
+        calendar_hr_pct_per_date,
+        calendar_ab_per_game_estimate: EST_AB_PER_GAME,
         persisted:
           'Each HR is stored in Supabase `bdl_hr_events` (enriched from `bdl_games`) for future reference.',
         events: rows.slice(0, limit),

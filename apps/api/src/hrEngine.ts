@@ -153,7 +153,7 @@ async function fetchGames(sb: SupabaseClient, date: string) {
     .from('schedule_games')
     .select('home_team, away_team')
     .eq('date', date)
-  return (sched ?? []).map((g: any) => {
+  let rows = (sched ?? []).map((g: any) => {
     const key = `${canon(g.away_team)}|${canon(g.home_team)}`
     const resolvedGame = byPair.get(key)
     return {
@@ -162,6 +162,22 @@ async function fetchGames(sb: SupabaseClient, date: string) {
       away_team_abbrev: resolvedGame?.away_team_abbrev ?? g.away_team,
     }
   })
+  if (!rows.length) {
+    const { data: bdl } = await sb
+      .from('bdl_games')
+      .select('bdl_game_id, home_team_abbrev, away_team_abbrev')
+      .eq('date', date)
+    rows = (bdl ?? []).map((g: any) => {
+      const key = `${canon(g.away_team_abbrev)}|${canon(g.home_team_abbrev)}`
+      const resolvedGame = byPair.get(key)
+      return {
+        bdl_game_id: resolvedGame?.bdl_game_id ?? (Number(g.bdl_game_id) || 0),
+        home_team_abbrev: resolvedGame?.home_team_abbrev ?? g.home_team_abbrev,
+        away_team_abbrev: resolvedGame?.away_team_abbrev ?? g.away_team_abbrev,
+      }
+    })
+  }
+  return rows
 }
 
 async function fetchPlayers(sb: SupabaseClient) {
@@ -757,6 +773,15 @@ export async function runDailyProjections(
     if (team && teamsPlaying.has(team)) {
       rosterPlayerIds.add(p.stat_player_id)
     }
+  }
+
+  const { data: savedProjRows } = await sb
+    .from('daily_hr_projections')
+    .select('player_id')
+    .eq('date', date)
+  for (const row of savedProjRows ?? []) {
+    const pid = String((row as { player_id?: string }).player_id ?? '')
+    if (pid) rosterPlayerIds.add(pid)
   }
 
   if (modelVariant === 'contact_quality') {

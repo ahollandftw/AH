@@ -1413,6 +1413,50 @@ body,
   flex-wrap: wrap;
 }
 
+/* Projections: three-column model picker (left pair | center | spacer) */
+.pg-projModelRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  gap: 8px 10px;
+  margin-bottom: 10px;
+}
+
+.pg-projModelGroup--left {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-start;
+  min-width: 0;
+}
+
+.pg-projModelGroup--center {
+  display: flex;
+  justify-content: center;
+  min-width: 0;
+}
+
+.pg-projModelGroup--spacer {
+  min-width: 0;
+}
+
+.pg-projModelRow .pg-matchupTab {
+  white-space: normal;
+  text-align: center;
+  line-height: 1.15;
+  max-width: 100%;
+}
+
+.pg-projModelGroup--left .pg-matchupTab {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.pg-projModelGroup--center .pg-matchupTab {
+  width: 100%;
+  max-width: 220px;
+}
+
 .pg-matchupTab {
   background: color-mix(in srgb, var(--color-surface) 70%, transparent);
   border: 1px solid color-mix(in srgb, var(--color-secondary) 20%, transparent);
@@ -1640,6 +1684,111 @@ body,
   border-color: rgba(70, 255, 170, 0.55);
   background: rgba(30, 255, 165, 0.08);
   color: rgba(200, 255, 235, 0.98);
+}
+
+.pg-pitchArsenalWrap {
+  overflow: hidden;
+}
+
+.pg-pitchOverview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 14px;
+  max-height: none;
+}
+
+.pg-pitchOverviewChip {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--color-secondary) 14%, transparent);
+  background: color-mix(in srgb, var(--color-bg) 50%, var(--color-surface));
+  color: var(--color-text);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+  min-width: 0;
+}
+
+.pg-pitchOverviewChip.is-active {
+  border-color: color-mix(in srgb, var(--color-primary) 55%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-primary) 35%, transparent);
+}
+
+.pg-pitchOverviewName {
+  font-weight: 800;
+  font-size: 0.78rem;
+}
+
+.pg-pitchOverviewUsage {
+  font-size: 0.7rem;
+  color: var(--color-muted);
+  font-weight: 700;
+}
+
+.pg-pitchOverviewGrade {
+  font-size: 0.95rem;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+}
+
+.pg-pitchOverviewGrade.grade-A {
+  color: #00e639;
+}
+.pg-pitchOverviewGrade.grade-B {
+  color: #adc8f5;
+}
+.pg-pitchOverviewGrade.grade-C {
+  color: #c9cacf;
+}
+.pg-pitchOverviewGrade.grade-D {
+  color: #8f9097;
+}
+.pg-pitchOverviewGrade.grade-F {
+  color: #ff6b6b;
+}
+
+.pg-pitchCarousel {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  min-height: 0;
+}
+
+.pg-pitchCarouselBtn {
+  flex: 0 0 40px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--color-secondary) 14%, transparent);
+  background: color-mix(in srgb, var(--color-surface) 70%, transparent);
+  color: var(--color-text);
+  font-size: 1.1rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.pg-pitchCarouselBtn:hover {
+  border-color: color-mix(in srgb, var(--color-primary) 40%, transparent);
+}
+
+.pg-pitchCarouselCard {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: visible;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--color-secondary) 14%, transparent);
+  padding: 12px;
+  background: color-mix(in srgb, var(--color-bg) 50%, var(--color-surface));
+}
+
+.pg-pitchCarouselHint {
+  margin-top: 8px;
+  font-size: 0.72rem;
+  color: var(--color-muted);
+  font-weight: 700;
 }
 
 /* ── Scoreboard table ──────────────────────────────────── */

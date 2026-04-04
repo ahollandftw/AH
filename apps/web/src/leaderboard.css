@@ -65,11 +65,32 @@
 }
 
 .lb-calendarHead {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 10px 12px;
   margin-bottom: 12px;
+}
+
+.lb-calendarNav {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.lb-calendarNavBtn {
+  min-width: 36px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 28%, transparent);
+  background: color-mix(in srgb, var(--color-surface) 65%, transparent);
+  color: var(--color-text);
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.lb-calendarNavBtn:hover {
+  border-color: color-mix(in srgb, var(--color-primary) 55%, transparent);
 }
 
 .lb-calendarKicker {
@@ -114,7 +135,7 @@
 }
 
 .lb-calendarDay {
-  min-height: 74px;
+  min-height: 118px;
   padding: 10px 8px;
   border-radius: 12px;
   border: 1px solid color-mix(in srgb, var(--color-secondary) 14%, transparent);
@@ -147,6 +168,34 @@
   font-size: 0.78rem;
   font-weight: 800;
   color: color-mix(in srgb, var(--color-primary) 86%, white);
+}
+
+.lb-calendarDow {
+  font-size: 0.65rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--color-secondary) 80%, transparent);
+}
+
+.lb-calendarIso {
+  font-size: 0.6rem;
+  font-weight: 700;
+  color: var(--color-muted);
+  letter-spacing: 0.02em;
+}
+
+.lb-calendarMeta {
+  font-size: 0.68rem;
+  font-weight: 800;
+  color: var(--color-text);
+}
+
+.lb-calendarHrPct {
+  font-size: 0.65rem;
+  font-weight: 900;
+  color: color-mix(in srgb, var(--color-secondary) 88%, white);
+  margin-top: 2px;
 }
 
 .lb-tabs {

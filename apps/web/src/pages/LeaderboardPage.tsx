@@ -27,6 +27,10 @@ type HomersResponse = {
   count: number
   calendar_month?: string
   calendar_counts?: Record<string, number>
+  calendar_games_per_date?: Record<string, number>
+  calendar_ab_per_date?: Record<string, number>
+  calendar_hr_pct_per_date?: Record<string, number | null>
+  calendar_ab_per_game_estimate?: number
   events: HrEventRow[]
 }
 
@@ -35,6 +39,17 @@ const apiBase = () => import.meta.env.VITE_API_BASE_URL ?? ''
 function fmtPct(x: number | null | undefined): string {
   if (x == null || Number.isNaN(x)) return '—'
   return `${(x * 100).toFixed(1)}%`
+}
+
+function currentMonthIsoEt(): string {
+  const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }))
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+
+function shiftMonthIso(ym: string, delta: number): string {
+  const [y, m] = ym.split('-').map(Number)
+  const d = new Date(Date.UTC(y, (m ?? 1) - 1 + delta, 1))
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`
 }
 
 function buildMonthCells(monthIso: string): Array<{ iso: string | null; day: number | null }> {
@@ -62,6 +77,7 @@ export default function LeaderboardPage() {
   const [data, setData] = useState<HomersResponse | null>(null)
   const [err, setErr] = useState<string | null>(null)
   const [season, setSeason] = useState(() => new Date().getFullYear())
+  const [calendarMonth, setCalendarMonth] = useState(currentMonthIsoEt)
   const [sort, setSort] = useState<SortKey>('date')
   const [dir, setDir] = useState<'asc' | 'desc'>('desc')
   const [stadium, setStadium] = useState('')
@@ -77,14 +93,15 @@ export default function LeaderboardPage() {
     p.set('season', String(season))
     p.set('sort', sort)
     p.set('dir', dir)
+    p.set('month', calendarMonth)
     if (stadium.trim()) p.set('stadium', stadium.trim())
     if (team.trim()) p.set('team', team.trim())
     if (pitcher.trim()) p.set('pitcher', pitcher.trim())
     if (batter.trim()) p.set('batter', batter.trim())
     return p.toString()
-  }, [season, sort, dir, stadium, team, pitcher, batter])
+  }, [season, sort, dir, calendarMonth, stadium, team, pitcher, batter])
 
-  const monthIso = data?.calendar_month ?? `${season}-03`
+  const monthIso = data?.calendar_month ?? calendarMonth
   const monthLabel = useMemo(() => {
     const [yearStr, monthStr] = monthIso.split('-')
     const d = new Date(Date.UTC(Number(yearStr), Number(monthStr) - 1, 1))
@@ -174,6 +191,24 @@ export default function LeaderboardPage() {
               <div className="lb-calendarKicker">Home Runs by Day</div>
               <h2 className="lb-calendarTitle">{monthLabel}</h2>
             </div>
+            <div className="lb-calendarNav">
+              <button
+                type="button"
+                className="lb-calendarNavBtn"
+                onClick={() => setCalendarMonth((m) => shiftMonthIso(m, -1))}
+                aria-label="Previous month"
+              >
+                ←
+              </button>
+              <button
+                type="button"
+                className="lb-calendarNavBtn"
+                onClick={() => setCalendarMonth((m) => shiftMonthIso(m, 1))}
+                aria-label="Next month"
+              >
+                →
+              </button>
+            </div>
             <div className="lb-calendarLegend">
               {data?.calendar_counts ? `${Object.keys(data.calendar_counts).length} active days` : 'No homers logged'}
             </div>
@@ -186,7 +221,13 @@ export default function LeaderboardPage() {
           <div className="lb-calendarGrid">
             {monthCells.map((cell, idx) => {
               const count = cell.iso ? (data?.calendar_counts?.[cell.iso] ?? 0) : 0
+              const gamesOnDay = cell.iso ? (data?.calendar_games_per_date?.[cell.iso] ?? 0) : 0
+              const hrPct = cell.iso ? data?.calendar_hr_pct_per_date?.[cell.iso] : undefined
               const intensity = maxCalendarCount > 0 ? Math.max(0.14, count / maxCalendarCount) : 0
+              const pctLabel =
+                hrPct == null || Number.isNaN(hrPct)
+                  ? 'HR% —'
+                  : `HR% ${hrPct.toFixed(2)}%`
               return (
                 <div
                   key={cell.iso ?? `blank-${idx}`}
@@ -199,8 +240,21 @@ export default function LeaderboardPage() {
                 >
                   {cell.iso ? (
                     <>
-                      <div className="lb-calendarDate">{cell.day}</div>
-                      <div className="lb-calendarCount">{count > 0 ? `${count} HR` : '0'}</div>
+                      <div className="lb-calendarDate">
+                        <span className="lb-calendarDow">
+                          {new Date(`${cell.iso}T12:00:00Z`).toLocaleDateString('en-US', {
+                            weekday: 'short',
+                            timeZone: 'UTC',
+                          })}
+                        </span>{' '}
+                        {cell.day}
+                      </div>
+                      <div className="lb-calendarIso">{cell.iso}</div>
+                      <div className="lb-calendarMeta">{gamesOnDay} gm</div>
+                      <div className="lb-calendarCount">{count} HR</div>
+                      <div className="lb-calendarHrPct" title="Home runs ÷ estimated AB (68 AB per scheduled game).">
+                        {pctLabel}
+                      </div>
                     </>
                   ) : null}
                 </div>
