@@ -277,9 +277,10 @@ export function registerBdlRoutes(app: Express) {
         res.json({ ok: true, rows: fromDb, source: 'db' })
         return
       }
-      const { runWeightedPitchArsenalProjections } = await import('../hrEngine.js')
+      const { runWeightedPitchArsenalProjections, saveDailyProjectionsForVariant } = await import('../hrEngine.js')
       const rows = await runWeightedPitchArsenalProjections(date)
-      res.json({ ok: true, rows, source: 'fallback' })
+      await saveDailyProjectionsForVariant(date, 'weighted_pitch_arsenal', rows)
+      res.json({ ok: true, rows, source: 'computed' })
     } catch (e) {
       console.error('[bdl/projections/weighted] failed:', e)
       res.status(500).json({ error: e instanceof Error ? e.message : String(e) })
@@ -294,9 +295,10 @@ export function registerBdlRoutes(app: Express) {
         res.json({ ok: true, rows: fromDb, source: 'db' })
         return
       }
-      const { runContactQualityProjections } = await import('../hrEngine.js')
+      const { runContactQualityProjections, saveDailyProjectionsForVariant } = await import('../hrEngine.js')
       const rows = await runContactQualityProjections(date)
-      res.json({ ok: true, rows, source: 'fallback' })
+      await saveDailyProjectionsForVariant(date, 'contact_quality', rows)
+      res.json({ ok: true, rows, source: 'computed' })
     } catch (e) {
       console.error('[bdl/projections/contact-quality] failed:', e)
       res.status(500).json({ error: e instanceof Error ? e.message : String(e) })

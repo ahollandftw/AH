@@ -14,6 +14,10 @@ import { useWebAuth } from '../auth/WebAuthProvider.tsx'
 import { normalizeTeamCode } from '../theme/teamPalette'
 import { bdlRowMatchesCalendarDay } from '../utils/bdlCalendarDay'
 import { resolveApiBaseUrl } from '../utils/apiBase'
+import {
+  recordProjectionHydrateAttempt,
+  shouldAttemptProjectionHydrate,
+} from '../utils/projectionHydrateThrottle'
 
 function tierColor(k: string): string {
   switch (k) {
@@ -285,15 +289,21 @@ export default function ProjectionsPage() {
 
         const base = resolveApiBaseUrl()
         const q = encodeURIComponent(displayDate)
-        const needW = allModels.default.length > 0 && allModels.weighted_pitch_arsenal.length === 0
-        const needC = allModels.default.length > 0 && allModels.contact_quality.length === 0
-        if (needW || needC) {
+        const needW = allModels.weighted_pitch_arsenal.length === 0
+        const needC = allModels.contact_quality.length === 0
+        const tryW =
+          needW && shouldAttemptProjectionHydrate('weighted_pitch_arsenal', displayDate)
+        const tryC =
+          needC && shouldAttemptProjectionHydrate('contact_quality', displayDate)
+        if (tryW || tryC) {
+          if (tryW) recordProjectionHydrateAttempt('weighted_pitch_arsenal', displayDate)
+          if (tryC) recordProjectionHydrateAttempt('contact_quality', displayDate)
           try {
             const [wJson, cJson] = await Promise.all([
-              needW
+              tryW
                 ? fetch(`${base}/bdl/projections/weighted?date=${q}`).then((r) => (r.ok ? r.json() : null))
                 : Promise.resolve(null),
-              needC
+              tryC
                 ? fetch(`${base}/bdl/projections/contact-quality?date=${q}`).then((r) => (r.ok ? r.json() : null))
                 : Promise.resolve(null),
             ])
@@ -366,24 +376,10 @@ export default function ProjectionsPage() {
   }, [displayDate])
 
   const activeRows = useMemo(() => {
-    if (projectionModelTab === 'default') return rows
-    if (projectionModelTab === 'weighted') {
-      if (weightedRows.length > 0) return weightedRows
-      return rows.length > 0 ? rows : []
-    }
-    if (projectionModelTab === 'contact_quality') {
-      if (contactQualityRows.length > 0) return contactQualityRows
-      return rows.length > 0 ? rows : []
-    }
+    if (projectionModelTab === 'weighted') return weightedRows
+    if (projectionModelTab === 'contact_quality') return contactQualityRows
     return rows
   }, [projectionModelTab, rows, weightedRows, contactQualityRows])
-
-  const altModelFallback =
-    projectionModelTab === 'weighted' && weightedRows.length === 0 && rows.length > 0
-      ? 'weighted'
-      : projectionModelTab === 'contact_quality' && contactQualityRows.length === 0 && rows.length > 0
-        ? 'contact'
-        : null
 
   const filteredRows = useMemo(() => {
     let out = activeRows
@@ -812,13 +808,6 @@ export default function ProjectionsPage() {
           Contact Quality
         </button>
       </div>
-      {altModelFallback ? (
-        <p className="pg-sub" style={{ marginBottom: 12 }}>
-          {altModelFallback === 'weighted'
-            ? 'Weighted Pitch Arsenal rows are not loaded yet (sync or API). Showing the default matchup model for this tab until they are available.'
-            : 'Contact Quality rows are not loaded yet (sync or API). Showing the default matchup model for this tab until they are available.'}
-        </p>
-      ) : null}
       {(selectedTeam || selectedPlayer) && (
         <div className="pg-focusCard">
           {selectedTeam ? <div className="pg-focusLine">Team filter: {selectedTeam}</div> : null}
@@ -837,7 +826,13 @@ export default function ProjectionsPage() {
           ))}
         </div>
       ) : sections.length === 0 ? (
-        <p className="pg-empty">No games scheduled or projection data for {displayDate}.</p>
+        <p className="pg-empty">
+          {games.length > 0 && projectionModelTab === 'weighted' && weightedRows.length === 0
+            ? `No Weighted Pitch Arsenal projections for ${displayDate}.`
+            : games.length > 0 && projectionModelTab === 'contact_quality' && contactQualityRows.length === 0
+              ? `No Contact Quality projections for ${displayDate}.`
+              : `No games scheduled or projection data for ${displayDate}.`}
+        </p>
       ) : (
         sections.map((s) => (
           <div key={s.key} style={{ marginBottom: 24 }}>

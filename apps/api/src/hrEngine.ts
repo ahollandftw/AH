@@ -440,7 +440,7 @@ export interface EngineProjection {
   modelVariant?: 'default' | 'weighted_pitch_arsenal' | 'contact_quality'
 }
 
-type ProjectionModelVariant = 'default' | 'weighted_pitch_arsenal' | 'contact_quality'
+export type ProjectionModelVariant = 'default' | 'weighted_pitch_arsenal' | 'contact_quality'
 
 const ALL_MODEL_VARIANTS: ProjectionModelVariant[] = ['default', 'weighted_pitch_arsenal', 'contact_quality']
 
@@ -1315,6 +1315,50 @@ export async function runAndSaveProjections(dateOverride?: string): Promise<{ co
     `[hr-engine] Saved ${saved}/${allRows.length} projection rows (${ALL_MODEL_VARIANTS.length} models) for ${date}`,
   )
   return { computed: allRows.length, saved }
+}
+
+/**
+ * Replace one model variant for a date (used when GET computes on-demand so the next Supabase read is warm).
+ */
+export async function saveDailyProjectionsForVariant(
+  date: string,
+  modelVariant: ProjectionModelVariant,
+  projections: EngineProjection[],
+): Promise<{ saved: number }> {
+  const sb = getServiceClient()
+  const { error: delErr } = await sb.from('daily_hr_projections').delete().eq('date', date).eq('model_variant', modelVariant)
+  if (delErr) {
+    console.error(`[hr-engine] delete ${modelVariant} for ${date}:`, delErr.message)
+  }
+  if (!projections.length) return { saved: 0 }
+
+  const allRows = projections.map((p) => ({
+    date,
+    player_id: p.playerId,
+    opponent_pitcher: p.opponentPitcher,
+    opponent_pitcher_hand: p.opponentPitcherHand,
+    hr_probability: p.hrProbability,
+    l7_hrs: null as null,
+    tier: p.tier,
+    model_variant: modelVariant,
+  }))
+
+  const BATCH = 200
+  let saved = 0
+  for (let i = 0; i < allRows.length; i += BATCH) {
+    const batch = allRows.slice(i, i + BATCH)
+    const { error } = await sb.from('daily_hr_projections').upsert(batch, {
+      onConflict: 'date,player_id,model_variant',
+      ignoreDuplicates: false,
+    })
+    if (error) {
+      console.error(`[hr-engine] upsert ${modelVariant} batch ${i} failed:`, error.message)
+    } else {
+      saved += batch.length
+    }
+  }
+  console.log(`[hr-engine] Saved ${saved} ${modelVariant} rows for ${date} (single-variant persist)`)
+  return { saved }
 }
 
 export async function runWeightedPitchArsenalProjections(dateOverride?: string): Promise<EngineProjection[]> {

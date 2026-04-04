@@ -13,6 +13,7 @@ import {
 import { useWebAuth } from '../auth/WebAuthProvider.tsx'
 import { normalizeTeamCode, paletteForTeam, teamAbbrevContrastStyle } from '../theme/teamPalette'
 import { bdlRowMatchesCalendarDay } from '../utils/bdlCalendarDay'
+import { resolveApiBaseUrl } from '../utils/apiBase.ts'
 import hrIcon96 from '../../../../data/icons8-home-run-96.png'
 import hrIcon64 from '../../../../data/icons8-home-run-64.png'
 
@@ -85,6 +86,32 @@ function normalizePlayerName(name: string | null | undefined): string {
     .replace(/[^a-z0-9 ]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+function resolveLineupProjection(
+  p: LineupPlayer,
+  teamCode: string,
+  rows: DailyProjection[],
+  lineupStatByBdlId: Map<number, string>,
+): DailyProjection | null {
+  const fromLineup = p.stat_player_id?.trim()
+  const fromBdl =
+    p.bdl_player_id != null && p.bdl_player_id > 0 ? lineupStatByBdlId.get(p.bdl_player_id) : undefined
+  const statId = fromLineup || fromBdl || null
+  if (statId) {
+    const byId = rows.find((r) => r.playerId === statId)
+    if (byId) return byId
+  }
+  const key = normalizePlayerName(p.full_name)
+  if (!key) return null
+  const teamNorm = (normalizeTeamCode(teamCode) ?? '').toUpperCase()
+  const candidates = rows.filter((r) => {
+    if (normalizePlayerName(r.name) !== key) return false
+    if (!teamNorm) return true
+    return (normalizeTeamCode(r.team ?? '') ?? '').toUpperCase() === teamNorm
+  })
+  if (candidates.length === 1) return candidates[0] ?? null
+  return null
 }
 
 const SUPPORTED_SPORTSBOOKS = ['draftkings', 'fanduel', 'fanatics', 'caesars', 'betmgm', 'betrivers'] as const
@@ -357,6 +384,8 @@ export default function DugoutPage() {
   const [playerInputs, setPlayerInputs] = useState<any>(null)
   const [weatherByHome, setWeatherByHome] = useState<Record<string, WeatherSlateEntry>>({})
   const [lineupByGame, setLineupByGame] = useState<Record<string, GameLineup | null>>({})
+  /** BDL id → stats `player_id` for lineup rows missing `stat_player_id` from the feed */
+  const [lineupStatByBdlId, setLineupStatByBdlId] = useState<Map<number, string>>(() => new Map())
   const [lineupsLoading, setLineupsLoading] = useState(false)
   // { [bdlGameId]: { home: pitcherName|null, away: pitcherName|null } }
   const [probablePitchers, setProbablePitchers] = useState<Record<string, { home: string | null; away: string | null }>>({})
@@ -404,8 +433,7 @@ export default function DugoutPage() {
 
   // Fetch probable pitchers from BDL for this date
   useEffect(() => {
-    const base = import.meta.env.VITE_API_BASE_URL ?? ''
-    if (!base) return
+    const base = resolveApiBaseUrl()
     void fetch(`${base}/bdl/probable-pitchers?date=${displayDate}`)
       .then((r) => r.ok ? r.json() : null)
       .then((json: { data?: Record<string, { home: string | null; away: string | null }> } | null) => {
@@ -567,8 +595,8 @@ export default function DugoutPage() {
   }, [displayDate, games, hasSubscription, liveGames])
 
   useEffect(() => {
-    const base = import.meta.env.VITE_API_BASE_URL ?? ''
-    if (!base || visibleGames.length === 0) {
+    const base = resolveApiBaseUrl()
+    if (visibleGames.length === 0) {
       setWeatherByHome({})
       return
     }
@@ -596,11 +624,11 @@ export default function DugoutPage() {
   }, [displayDate, visibleGames])
 
   useEffect(() => {
-    const base = import.meta.env.VITE_API_BASE_URL ?? ''
+    const base = resolveApiBaseUrl()
     const gameIds = visibleGames
       .map((g) => String(g.gameId ?? ''))
       .filter((id) => /^\d+$/.test(id))
-    if (!base || !gameIds.length) {
+    if (!gameIds.length) {
       setLineupsLoading(false)
       setLineupByGame({})
       return
@@ -633,6 +661,42 @@ export default function DugoutPage() {
       setLineupsLoading(false)
     }
   }, [displayDate, visibleGames])
+
+  useEffect(() => {
+    if (!supabase) return
+    const ids = new Set<number>()
+    for (const lu of Object.values(lineupByGame)) {
+      if (!lu) continue
+      for (const side of [lu.away, lu.home] as const) {
+        for (const e of side) {
+          if (e?.bdl_player_id != null && e.bdl_player_id > 0) ids.add(e.bdl_player_id)
+        }
+      }
+    }
+    if (!ids.size) {
+      setLineupStatByBdlId(new Map())
+      return
+    }
+    const idList = [...ids].slice(0, 500)
+    let cancelled = false
+    void supabase
+      .from('bdl_players')
+      .select('bdl_id,stat_player_id')
+      .in('bdl_id', idList)
+      .then(({ data }) => {
+        if (cancelled) return
+        const m = new Map<number, string>()
+        for (const row of data ?? []) {
+          const bid = Number((row as { bdl_id?: number }).bdl_id)
+          const sid = String((row as { stat_player_id?: string | null }).stat_player_id ?? '').trim()
+          if (Number.isFinite(bid) && bid > 0 && sid) m.set(bid, sid)
+        }
+        setLineupStatByBdlId(m)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [supabase, lineupByGame])
 
   function toProjections(params: { date: string; team?: string; player?: string }) {
     const qp = new URLSearchParams()
@@ -727,7 +791,7 @@ export default function DugoutPage() {
     if (!opponentTeam) return
     setMatchupLoading(true)
     try {
-      const base = import.meta.env.VITE_API_BASE_URL ?? ''
+      const base = resolveApiBaseUrl()
       const opponentPitcher = displayOpponentPitcher(r)
       const q = new URLSearchParams({
         player_id: r.playerId,
@@ -1386,9 +1450,7 @@ export default function DugoutPage() {
                                         <span style={{ width: 32 }} />
                                       </div>
                                       {batters.map((p, idx) => {
-                                        const proj = p.stat_player_id
-                                          ? rows.find((r) => r.playerId === p.stat_player_id)
-                                          : null
+                                        const proj = resolveLineupProjection(p, teamCode, rows, lineupStatByBdlId)
                                         const hasPick = proj && Object.prototype.hasOwnProperty.call(pickState, proj.playerId)
                                         const isHomer = didPlayerHomer(p.full_name ?? proj?.name, homerHitters)
                                         return (
