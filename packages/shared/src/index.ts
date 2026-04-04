@@ -17,11 +17,12 @@ export {
   setGlobalAlertsEnabled,
 } from './watchlist'
 
-export type { DailyProjection } from './projections'
+export type { DailyProjection, ProjectionModelVariant } from './projections'
 export {
   formatProbability,
   groupProjectionsByTier,
   listDailyHrProjections,
+  listDailyHrProjectionsAllModels,
   mergedHrProbabilityMapForDate,
 } from './projections'
 

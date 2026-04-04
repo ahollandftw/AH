@@ -34,14 +34,29 @@ export async function calculateEdge(
 ): Promise<EdgeResult | null> {
   const sb = getServiceClient()
 
-  // Get our model probability
-  const { data: proj } = await sb
+  const { data: game } = await sb
+    .from('bdl_games')
+    .select('date')
+    .eq('bdl_game_id', bdlGameId)
+    .maybeSingle()
+
+  const gameDate =
+    game?.date != null ? String((game as { date: string }).date).slice(0, 10) : null
+
+  // Get our model probability (default variant for the slate date of this game)
+  let projQuery = sb
     .from('daily_hr_projections')
     .select('hr_probability')
     .eq('player_id', statPlayerId)
-    .order('date', { ascending: false })
-    .limit(1)
-    .maybeSingle()
+    .eq('model_variant', 'default')
+
+  if (gameDate) {
+    projQuery = projQuery.eq('date', gameDate)
+  } else {
+    projQuery = projQuery.order('date', { ascending: false }).limit(1)
+  }
+
+  const { data: proj } = await projQuery.maybeSingle()
 
   let ourProb = (proj as { hr_probability: number } | null)?.hr_probability ?? null
 

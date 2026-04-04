@@ -442,6 +442,8 @@ export interface EngineProjection {
 
 type ProjectionModelVariant = 'default' | 'weighted_pitch_arsenal' | 'contact_quality'
 
+const ALL_MODEL_VARIANTS: ProjectionModelVariant[] = ['default', 'weighted_pitch_arsenal', 'contact_quality']
+
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value))
 }
@@ -1245,32 +1247,55 @@ export async function runDailyProjections(
 
 /* ─── Persist to daily_hr_projections ────────────────────────────── */
 
+/**
+ * Computes and stores **all** model variants for the slate date (default, weighted arsenal, contact quality).
+ * Intended for daily cron (~8am ET) and for manual/lineup-triggered full reruns.
+ * Per-game incremental recompute can call this with the same date (full day is still acceptable vs on-demand API).
+ */
 export async function runAndSaveProjections(dateOverride?: string): Promise<{ computed: number; saved: number }> {
   const date = dateOverride ?? todayET()
-  const projections = await runDailyProjections(date, 'default')
-  if (!projections.length) return { computed: 0, saved: 0 }
-
   const sb = getServiceClient()
 
-  // Delete existing projections for this date to avoid stale data
-  await sb.from('daily_hr_projections').delete().eq('date', date)
+  const allRows: Array<{
+    date: string
+    player_id: string
+    opponent_pitcher: string | null
+    opponent_pitcher_hand: string | null
+    hr_probability: number
+    l7_hrs: null
+    tier: string
+    model_variant: ProjectionModelVariant
+  }> = []
 
-  const rows = projections.map((p) => ({
-    date,
-    player_id:             p.playerId,
-    opponent_pitcher:      p.opponentPitcher,
-    opponent_pitcher_hand: p.opponentPitcherHand,
-    hr_probability:        p.hrProbability,
-    l7_hrs:                null,
-    tier:                  p.tier,
-  }))
+  for (const modelVariant of ALL_MODEL_VARIANTS) {
+    const projections = await runDailyProjections(date, modelVariant)
+    for (const p of projections) {
+      allRows.push({
+        date,
+        player_id: p.playerId,
+        opponent_pitcher: p.opponentPitcher,
+        opponent_pitcher_hand: p.opponentPitcherHand,
+        hr_probability: p.hrProbability,
+        l7_hrs: null,
+        tier: p.tier,
+        model_variant: modelVariant,
+      })
+    }
+  }
+
+  if (!allRows.length) {
+    await sb.from('daily_hr_projections').delete().eq('date', date)
+    return { computed: 0, saved: 0 }
+  }
+
+  await sb.from('daily_hr_projections').delete().eq('date', date)
 
   const BATCH = 200
   let saved = 0
-  for (let i = 0; i < rows.length; i += BATCH) {
-    const batch = rows.slice(i, i + BATCH)
+  for (let i = 0; i < allRows.length; i += BATCH) {
+    const batch = allRows.slice(i, i + BATCH)
     const { error } = await sb.from('daily_hr_projections').upsert(batch, {
-      onConflict: 'date,player_id',
+      onConflict: 'date,player_id,model_variant',
       ignoreDuplicates: false,
     })
     if (error) {
@@ -1280,8 +1305,10 @@ export async function runAndSaveProjections(dateOverride?: string): Promise<{ co
     }
   }
 
-  console.log(`[hr-engine] Saved ${saved}/${projections.length} projections for ${date}`)
-  return { computed: projections.length, saved }
+  console.log(
+    `[hr-engine] Saved ${saved}/${allRows.length} projection rows (${ALL_MODEL_VARIANTS.length} models) for ${date}`,
+  )
+  return { computed: allRows.length, saved }
 }
 
 export async function runWeightedPitchArsenalProjections(dateOverride?: string): Promise<EngineProjection[]> {

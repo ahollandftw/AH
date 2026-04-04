@@ -133,9 +133,16 @@ function utcToETDateIso(utcStr: string | null | undefined): string | null {
 
 /* ─── daily_hr_projections table path ────────────────────────────── */
 
-async function listDailyHrProjectionsFromTable(
+export type DailyHrProjectionModelVariant =
+  | 'default'
+  | 'weighted_pitch_arsenal'
+  | 'contact_quality'
+
+/** Read precomputed rows from `daily_hr_projections` (used by API routes and on-demand fallback). */
+export async function listDailyHrProjectionsFromTable(
   supabase: SupabaseClient,
   dateIso: string,
+  modelVariant: DailyHrProjectionModelVariant = 'default',
 ): Promise<DailyProjection[]> {
   const { data, error } = await supabase
     .from('daily_hr_projections')
@@ -143,6 +150,7 @@ async function listDailyHrProjectionsFromTable(
       'player_id, opponent_pitcher, opponent_pitcher_hand, hr_probability, l7_hrs, tier, players:player_id (stat_player_id,slug,name,team,position)',
     )
     .eq('date', dateIso)
+    .eq('model_variant', modelVariant)
     .order('hr_probability', { ascending: false, nullsFirst: false })
 
   if (error || !data) return []
@@ -576,4 +584,4 @@ async function getGamesForDateRaw(supabase: SupabaseClient, dateIso: string) {
   return out
 }
 
-export { calculateMatchupProjections, listDailyHrProjectionsFromTable }
+export { calculateMatchupProjections }

@@ -47,6 +47,9 @@ export type DailyProjection = {
   source?: 'daily_table' | 'hr_model'
 }
 
+/** Stored in `daily_hr_projections.model_variant` — all three are precomputed by the daily sync. */
+export type ProjectionModelVariant = 'default' | 'weighted_pitch_arsenal' | 'contact_quality'
+
 function num(v: unknown): number | null {
   if (v == null || v === '') return null
   const n = Number(String(v).replace(/,/g, ''))
@@ -141,6 +144,7 @@ function hasBrokenCapDistribution(rows: DailyProjection[]): boolean {
 async function listDailyHrProjectionsFromTable(
   supabase: SupabaseClient,
   dateIso: string,
+  modelVariant: ProjectionModelVariant = 'default',
 ): Promise<DailyProjection[]> {
   const games = await getGamesForDateRaw(supabase, dateIso)
   const matchupDisplayMap = new Map<string, string>()
@@ -156,6 +160,7 @@ async function listDailyHrProjectionsFromTable(
       'player_id, opponent_pitcher, opponent_pitcher_hand, hr_probability, l7_hrs, tier, players:player_id (stat_player_id,slug,name,team,position)',
     )
     .eq('date', dateIso)
+    .eq('model_variant', modelVariant)
     .order('hr_probability', { ascending: false, nullsFirst: false })
 
   if (error || !data) return []
@@ -182,6 +187,83 @@ async function listDailyHrProjectionsFromTable(
       }
     })
     .filter((p: DailyProjection) => p.name !== 'Unknown')
+}
+
+/**
+ * One round-trip: all precomputed models for a date (requires `model_variant` column + daily sync).
+ */
+export async function listDailyHrProjectionsAllModels(
+  supabase: SupabaseClient,
+  dateIso: string,
+): Promise<{
+  default: DailyProjection[]
+  weighted_pitch_arsenal: DailyProjection[]
+  contact_quality: DailyProjection[]
+}> {
+  const empty = {
+    default: [] as DailyProjection[],
+    weighted_pitch_arsenal: [] as DailyProjection[],
+    contact_quality: [] as DailyProjection[],
+  }
+  const games = await getGamesForDateRaw(supabase, dateIso)
+  const matchupDisplayMap = new Map<string, string>()
+  for (const g of games) {
+    const home = canonicalTeam(g.home_team) ?? g.home_team
+    const away = canonicalTeam(g.away_team) ?? g.away_team
+    matchupDisplayMap.set(home, `vs ${away}`)
+    matchupDisplayMap.set(away, `@ ${home}`)
+  }
+  const { data, error } = await supabase
+    .from('daily_hr_projections')
+    .select(
+      'player_id, opponent_pitcher, opponent_pitcher_hand, hr_probability, l7_hrs, tier, model_variant, players:player_id (stat_player_id,slug,name,team,position)',
+    )
+    .eq('date', dateIso)
+
+  if (error || !data) return empty
+
+  const mapOne = (row: any): DailyProjection => {
+    const p = row.hr_probability != null ? Number(row.hr_probability) : null
+    const prob = p != null && Number.isFinite(p) ? p : null
+    return {
+      playerId: row.players?.stat_player_id ?? row.player_id,
+      slug: row.players?.slug ?? '',
+      name: row.players?.name ?? 'Unknown',
+      team: canonicalTeam(row.players?.team) ?? row.players?.team ?? null,
+      position: row.players?.position ?? null,
+      opponentPitcher: row.opponent_pitcher ?? null,
+      opponentPitcherHand: row.opponent_pitcher_hand ?? null,
+      hrProbability: prob,
+      l7Hrs: row.l7_hrs ?? null,
+      tier: prob != null ? probToTier(prob) : (row.tier ?? null),
+      opponent: matchupDisplayMap.get(canonicalTeam(row.players?.team) ?? row.players?.team ?? '') ?? null,
+      americanOdds: prob != null ? probToAmericanOdds(prob) : null,
+      americanOddsStr: prob != null ? formatAmericanOdds(probToAmericanOdds(prob)) : null,
+      source: 'daily_table' as const,
+    }
+  }
+
+  const defaultRows: DailyProjection[] = []
+  const weightedRows: DailyProjection[] = []
+  const contactRows: DailyProjection[] = []
+  for (const row of data as any[]) {
+    const m = mapOne(row)
+    if (m.name === 'Unknown') continue
+    const v = String(row.model_variant ?? 'default')
+    if (v === 'weighted_pitch_arsenal') weightedRows.push(m)
+    else if (v === 'contact_quality') contactRows.push(m)
+    else defaultRows.push(m)
+  }
+  const byProb = (a: DailyProjection, b: DailyProjection) =>
+    (b.hrProbability ?? 0) - (a.hrProbability ?? 0)
+  defaultRows.sort(byProb)
+  weightedRows.sort(byProb)
+  contactRows.sort(byProb)
+  return {
+    default: defaultRows,
+    weighted_pitch_arsenal: weightedRows,
+    contact_quality: contactRows,
+  }
 }
 
 /* ─── Batch data helpers ─────────────────────────────────────────── */
@@ -615,10 +697,13 @@ async function getGamesForDateRaw(supabase: SupabaseClient, dateIso: string) {
 export async function listDailyHrProjections(
   supabase: SupabaseClient,
   dateIso?: string,
+  options?: { modelVariant?: ProjectionModelVariant },
 ): Promise<DailyProjection[]> {
   const date = dateIso ?? getAppDisplayDateIso()
-  const fromDaily = await listDailyHrProjectionsFromTable(supabase, date)
+  const modelVariant = options?.modelVariant ?? 'default'
+  const fromDaily = await listDailyHrProjectionsFromTable(supabase, date, modelVariant)
   if (fromDaily.length > 0 && !hasBrokenCapDistribution(fromDaily)) return fromDaily
+  if (modelVariant !== 'default') return []
   const fromCalc = await calculateMatchupProjections(supabase, date)
   if (fromCalc.length > 0) return fromCalc
   return []
@@ -630,7 +715,7 @@ export async function mergedHrProbabilityMapForDate(
   playerIdsHint?: Iterable<string>,
 ): Promise<Map<string, number>> {
   const out = new Map<string, number>()
-  const fromDaily = await listDailyHrProjectionsFromTable(supabase, dateIso)
+  const fromDaily = await listDailyHrProjectionsFromTable(supabase, dateIso, 'default')
   const usableDaily = hasBrokenCapDistribution(fromDaily) ? [] : fromDaily
   for (const d of usableDaily) {
     if (d.hrProbability != null) out.set(d.playerId, d.hrProbability)

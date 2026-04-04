@@ -13,8 +13,10 @@ create table if not exists public.daily_hr_projections (
   hr_probability numeric,
   l7_hrs int,
   tier text,
+  model_variant text not null default 'default'
+    check (model_variant in ('default', 'weighted_pitch_arsenal', 'contact_quality')),
   created_at timestamptz not null default now(),
-  unique (date, player_id)
+  unique (date, player_id, model_variant)
 );
 
 alter table public.daily_hr_projections enable row level security;
@@ -58,7 +60,8 @@ begin
     opponent_pitcher_hand,
     hr_probability,
     l7_hrs,
-    tier
+    tier,
+    model_variant
   )
   values (
     current_date,
@@ -67,9 +70,10 @@ begin
     'RHP',
     0.28,
     2,
-    'S'
+    'S',
+    'default'
   )
-  on conflict (date, player_id) do update
+  on conflict (date, player_id, model_variant) do update
   set
     opponent_pitcher = excluded.opponent_pitcher,
     opponent_pitcher_hand = excluded.opponent_pitcher_hand,
@@ -84,7 +88,8 @@ begin
     opponent_pitcher_hand,
     hr_probability,
     l7_hrs,
-    tier
+    tier,
+    model_variant
   )
   values (
     current_date,
@@ -93,9 +98,10 @@ begin
     'LHP',
     0.22,
     4,
-    'A'
+    'A',
+    'default'
   )
-  on conflict (date, player_id) do update
+  on conflict (date, player_id, model_variant) do update
   set
     opponent_pitcher = excluded.opponent_pitcher,
     opponent_pitcher_hand = excluded.opponent_pitcher_hand,

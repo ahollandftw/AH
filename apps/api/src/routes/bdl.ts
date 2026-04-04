@@ -14,6 +14,12 @@ import { getServiceClient } from '../supabase.js'
 import { bdlFetch, bdlFetchAll, type BdlPlay, type BdlPlateAppearance } from '../bdl/client.js'
 import { buildHrEventEnrichment } from '../bdl/hrEventEnrichment.js'
 import { getBestLineupForGame, getBestLineupsForDate, getResolvedGamesForDate } from '../bdl/lineups.js'
+import { listDailyHrProjectionsFromTable } from '../hrModelCalc.js'
+
+function todayETDate(): string {
+  const d = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }))
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
 
 export function registerBdlRoutes(app: Express) {
   /** Short TTL: fewer BDL round-trips, faster page loads; data refreshes within minutes. */
@@ -261,10 +267,19 @@ export function registerBdlRoutes(app: Express) {
 
   app.get('/bdl/projections/weighted', async (req, res) => {
     try {
+      const date = typeof req.query?.date === 'string' ? req.query.date : todayETDate()
+      const fromDb = await listDailyHrProjectionsFromTable(
+        getServiceClient(),
+        date,
+        'weighted_pitch_arsenal',
+      )
+      if (fromDb.length) {
+        res.json({ ok: true, rows: fromDb, source: 'db' })
+        return
+      }
       const { runWeightedPitchArsenalProjections } = await import('../hrEngine.js')
-      const date = typeof req.query?.date === 'string' ? req.query.date : undefined
       const rows = await runWeightedPitchArsenalProjections(date)
-      res.json({ ok: true, rows })
+      res.json({ ok: true, rows, source: 'fallback' })
     } catch (e) {
       console.error('[bdl/projections/weighted] failed:', e)
       res.status(500).json({ error: e instanceof Error ? e.message : String(e) })
@@ -273,10 +288,15 @@ export function registerBdlRoutes(app: Express) {
 
   app.get('/bdl/projections/contact-quality', async (req, res) => {
     try {
+      const date = typeof req.query?.date === 'string' ? req.query.date : todayETDate()
+      const fromDb = await listDailyHrProjectionsFromTable(getServiceClient(), date, 'contact_quality')
+      if (fromDb.length) {
+        res.json({ ok: true, rows: fromDb, source: 'db' })
+        return
+      }
       const { runContactQualityProjections } = await import('../hrEngine.js')
-      const date = typeof req.query?.date === 'string' ? req.query.date : undefined
       const rows = await runContactQualityProjections(date)
-      res.json({ ok: true, rows })
+      res.json({ ok: true, rows, source: 'fallback' })
     } catch (e) {
       console.error('[bdl/projections/contact-quality] failed:', e)
       res.status(500).json({ error: e instanceof Error ? e.message : String(e) })
