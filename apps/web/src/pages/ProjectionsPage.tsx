@@ -13,6 +13,7 @@ import {
 import { useWebAuth } from '../auth/WebAuthProvider.tsx'
 import { normalizeTeamCode } from '../theme/teamPalette'
 import { bdlRowMatchesCalendarDay } from '../utils/bdlCalendarDay'
+import { resolveApiBaseUrl } from '../utils/apiBase'
 
 function tierColor(k: string): string {
   switch (k) {
@@ -262,16 +263,17 @@ export default function ProjectionsPage() {
     const prevIso = prevDate.toISOString().slice(0, 10)
     const nextIso = nextDate.toISOString().slice(0, 10)
 
-    void Promise.all([
-      listDailyHrProjectionsAllModels(supabase, displayDate),
-      getGamesForDate(supabase, displayDate),
-      supabase
-        .from('bdl_games')
-        .select('bdl_game_id,date,start_time_utc,home_team_abbrev,away_team_abbrev,status,scoring_summary')
-        .gte('date', prevIso)
-        .lte('date', nextIso),
-    ])
-      .then(([allModels, sched, live]) => {
+    void (async () => {
+      try {
+        const [allModels, sched, live] = await Promise.all([
+          listDailyHrProjectionsAllModels(supabase, displayDate),
+          getGamesForDate(supabase, displayDate),
+          supabase
+            .from('bdl_games')
+            .select('bdl_game_id,date,start_time_utc,home_team_abbrev,away_team_abbrev,status,scoring_summary')
+            .gte('date', prevIso)
+            .lte('date', nextIso),
+        ])
         if (cancelled) return
         setRows(allModels.default)
         setWeightedRows(allModels.weighted_pitch_arsenal)
@@ -281,33 +283,33 @@ export default function ProjectionsPage() {
         const dayIso = displayDate
         setLiveGames(raw.filter((lg) => bdlRowMatchesCalendarDay(lg, dayIso)))
 
-        /* DB often only has `default` until sync runs; hydrate weighted/contact from API without blocking first paint. */
-        const base = import.meta.env.VITE_API_BASE_URL ?? ''
+        const base = resolveApiBaseUrl()
         const q = encodeURIComponent(displayDate)
         const needW = allModels.default.length > 0 && allModels.weighted_pitch_arsenal.length === 0
         const needC = allModels.default.length > 0 && allModels.contact_quality.length === 0
-        if (base && (needW || needC)) {
-          void Promise.all([
-            needW
-              ? fetch(`${base}/bdl/projections/weighted?date=${q}`).then((r) => (r.ok ? r.json() : null))
-              : Promise.resolve(null),
-            needC
-              ? fetch(`${base}/bdl/projections/contact-quality?date=${q}`).then((r) => (r.ok ? r.json() : null))
-              : Promise.resolve(null),
-          ])
-            .then(([wJson, cJson]) => {
-              if (cancelled) return
-              const wRows = (wJson as { rows?: DailyProjection[] } | null)?.rows
-              const cRows = (cJson as { rows?: DailyProjection[] } | null)?.rows
-              if (needW && wRows?.length) setWeightedRows(wRows)
-              if (needC && cRows?.length) setContactQualityRows(cRows)
-            })
-            .catch(() => {})
+        if (needW || needC) {
+          try {
+            const [wJson, cJson] = await Promise.all([
+              needW
+                ? fetch(`${base}/bdl/projections/weighted?date=${q}`).then((r) => (r.ok ? r.json() : null))
+                : Promise.resolve(null),
+              needC
+                ? fetch(`${base}/bdl/projections/contact-quality?date=${q}`).then((r) => (r.ok ? r.json() : null))
+                : Promise.resolve(null),
+            ])
+            if (cancelled) return
+            const wRows = (wJson as { rows?: DailyProjection[] } | null)?.rows
+            const cRows = (cJson as { rows?: DailyProjection[] } | null)?.rows
+            if (needW && wRows?.length) setWeightedRows(wRows)
+            if (needC && cRows?.length) setContactQualityRows(cRows)
+          } catch {
+            /* ignore */
+          }
         }
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setLoading(false)
-      })
+      }
+    })()
 
     return () => {
       cancelled = true
@@ -338,8 +340,7 @@ export default function ProjectionsPage() {
   }, [displayDate, supabase])
 
   useEffect(() => {
-    const base = import.meta.env.VITE_API_BASE_URL ?? ''
-    if (!base) return
+    const base = resolveApiBaseUrl()
     void fetch(`${base}/bdl/probable-pitchers?date=${displayDate}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((json: { data?: Record<string, { home: string | null; away: string | null }> } | null) => {
@@ -349,8 +350,7 @@ export default function ProjectionsPage() {
   }, [displayDate])
 
   useEffect(() => {
-    const base = import.meta.env.VITE_API_BASE_URL ?? ''
-    if (!base) return
+    const base = resolveApiBaseUrl()
     void fetch(`${base}/bdl/lineups/slate?date=${encodeURIComponent(displayDate)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((json: { data?: Record<string, GameLineup | null> } | null) => {
@@ -365,12 +365,25 @@ export default function ProjectionsPage() {
       })
   }, [displayDate])
 
-  const activeRows =
-    projectionModelTab === 'weighted'
-      ? weightedRows
-      : projectionModelTab === 'contact_quality'
-        ? contactQualityRows
-        : rows
+  const activeRows = useMemo(() => {
+    if (projectionModelTab === 'default') return rows
+    if (projectionModelTab === 'weighted') {
+      if (weightedRows.length > 0) return weightedRows
+      return rows.length > 0 ? rows : []
+    }
+    if (projectionModelTab === 'contact_quality') {
+      if (contactQualityRows.length > 0) return contactQualityRows
+      return rows.length > 0 ? rows : []
+    }
+    return rows
+  }, [projectionModelTab, rows, weightedRows, contactQualityRows])
+
+  const altModelFallback =
+    projectionModelTab === 'weighted' && weightedRows.length === 0 && rows.length > 0
+      ? 'weighted'
+      : projectionModelTab === 'contact_quality' && contactQualityRows.length === 0 && rows.length > 0
+        ? 'contact'
+        : null
 
   const filteredRows = useMemo(() => {
     let out = activeRows
@@ -646,7 +659,7 @@ export default function ProjectionsPage() {
     const displayPitcher = displayOpponentPitcher(r)
     setMatchupLoading(true)
     try {
-      const base = import.meta.env.VITE_API_BASE_URL ?? ''
+      const base = resolveApiBaseUrl()
       const [matchupRes, evRes, hrRes] = await Promise.all([
         fetch(
           `${base}/bdl/matchup-card?player_id=${encodeURIComponent(r.playerId)}&opponent_team=${encodeURIComponent(opponentTeam)}&season=${selectedYear}${displayPitcher.name ? `&pitcher_name=${encodeURIComponent(displayPitcher.name)}` : ''}`,
@@ -799,6 +812,13 @@ export default function ProjectionsPage() {
           Contact Quality
         </button>
       </div>
+      {altModelFallback ? (
+        <p className="pg-sub" style={{ marginBottom: 12 }}>
+          {altModelFallback === 'weighted'
+            ? 'Weighted Pitch Arsenal rows are not loaded yet (sync or API). Showing the default matchup model for this tab until they are available.'
+            : 'Contact Quality rows are not loaded yet (sync or API). Showing the default matchup model for this tab until they are available.'}
+        </p>
+      ) : null}
       {(selectedTeam || selectedPlayer) && (
         <div className="pg-focusCard">
           {selectedTeam ? <div className="pg-focusLine">Team filter: {selectedTeam}</div> : null}

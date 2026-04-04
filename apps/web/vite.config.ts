@@ -31,6 +31,7 @@ export default defineConfig({
   },
   server: {
     proxy: {
+      '/bdl': { target: 'http://localhost:3001', changeOrigin: true },
       '/leaderboard': { target: 'http://localhost:3001', changeOrigin: true },
       '/internal': { target: 'http://localhost:3001', changeOrigin: true },
       '/health': { target: 'http://localhost:3001', changeOrigin: true },
