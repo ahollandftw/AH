@@ -626,7 +626,14 @@ export async function listDailyHrProjections(
   const date = dateIso ?? getAppDisplayDateIso()
   const modelVariant = options?.modelVariant ?? 'default'
   const fromDaily = await listDailyHrProjectionsFromTable(supabase, date, modelVariant)
-  if (fromDaily.length > 0 && !hasBrokenCapDistribution(fromDaily)) return fromDaily
+  if (fromDaily.length > 0) {
+    /* Broken-cap heuristic only triggers on-demand recalc for the default model — never discard weighted/contact table rows. */
+    if (modelVariant === 'default' && hasBrokenCapDistribution(fromDaily)) {
+      // fall through to calculateMatchupProjections below
+    } else {
+      return fromDaily
+    }
+  }
   if (modelVariant !== 'default') return []
   const fromCalc = await calculateMatchupProjections(supabase, date)
   if (fromCalc.length > 0) return fromCalc
