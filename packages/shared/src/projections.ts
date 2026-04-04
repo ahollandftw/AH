@@ -250,6 +250,9 @@ export async function listDailyHrProjectionsAllModels(
     const m = mapOne(row)
     if (m.name === 'Unknown') continue
     const v = String(row.model_variant ?? 'default')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, '_')
     if (v === 'weighted_pitch_arsenal') weightedRows.push(m)
     else if (v === 'contact_quality') contactRows.push(m)
     else defaultRows.push(m)
