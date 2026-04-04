@@ -43,6 +43,27 @@ function todayET(): string {
   return `${y}-${m}-${dd}`
 }
 
+/** Distinct slate dates (yesterday through +7d) so each day gets all three model variants in daily_hr_projections. */
+async function projectionSlateDates(sb: ReturnType<typeof getServiceClient>, today: string): Promise<string[]> {
+  const start = new Date(`${today}T12:00:00Z`)
+  start.setUTCDate(start.getUTCDate() - 1)
+  const startIso = start.toISOString().slice(0, 10)
+  const end = new Date(`${today}T12:00:00Z`)
+  end.setUTCDate(end.getUTCDate() + 7)
+  const endIso = end.toISOString().slice(0, 10)
+  const [{ data: s }, { data: b }] = await Promise.all([
+    sb.from('schedule_games').select('date').gte('date', startIso).lte('date', endIso),
+    sb.from('bdl_games').select('date').gte('date', startIso).lte('date', endIso),
+  ])
+  const set = new Set<string>()
+  for (const r of [...(s ?? []), ...(b ?? [])]) {
+    const d = (r as { date?: string }).date
+    if (d) set.add(String(d).slice(0, 10))
+  }
+  set.add(today)
+  return [...set].sort()
+}
+
 /**
  * Derive the Eastern Time calendar date from a UTC timestamp string.
  * A West Coast game starting 7 PM PT (10 PM ET) on 3/26 has start_time_utc
@@ -524,7 +545,7 @@ export async function syncMatchupsForTodayGames(): Promise<{ synced: number }> {
   return { synced: totalSynced }
 }
 
-/* ─── 7. Full daily sync (called at 10 AM CT) ────────────────────── */
+/* ─── 7. Full daily sync (GitHub cron ~8 AM ET → POST /bdl/sync/daily) ─ */
 
 export async function runDailySync(): Promise<Record<string, unknown>> {
   const players = await syncActivePlayers()
@@ -547,11 +568,20 @@ export async function runDailySync(): Promise<Record<string, unknown>> {
   // Bulk BvP matchup sync for all today's batters
   const matchups = await syncMatchupsForTodayGames()
 
-  // Run the HR projection engine and persist results for fast frontend reads
-  let projections: { computed: number; saved: number } = { computed: 0, saved: 0 }
+  // Run the HR projection engine for today + upcoming slate dates (all model variants per date)
+  let projections: Array<{ date: string; computed: number; saved: number }> = []
   try {
     const { runAndSaveProjections } = await import('../hrEngine.js')
-    projections = await runAndSaveProjections(today)
+    const dates = await projectionSlateDates(sb, today)
+    console.log(`[daily-sync] HR projections for ${dates.length} date(s):`, dates.join(', '))
+    for (const d of dates) {
+      try {
+        const r = await runAndSaveProjections(d)
+        projections.push({ date: d, ...r })
+      } catch (err) {
+        console.error(`[daily-sync] runAndSaveProjections failed for ${d}:`, err)
+      }
+    }
   } catch (e) {
     console.error('[daily-sync] HR projection engine failed:', e)
   }

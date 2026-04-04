@@ -1283,6 +1283,12 @@ export async function runAndSaveProjections(dateOverride?: string): Promise<{ co
     }
   }
 
+  const byVariant = ALL_MODEL_VARIANTS.map((v) => ({
+    variant: v,
+    n: allRows.filter((r) => r.model_variant === v).length,
+  }))
+  console.log(`[hr-engine] Persist ${date}: ${byVariant.map((x) => `${x.variant}=${x.n}`).join(', ')}`)
+
   if (!allRows.length) {
     await sb.from('daily_hr_projections').delete().eq('date', date)
     return { computed: 0, saved: 0 }

@@ -2,14 +2,14 @@ name: Daily BDL Sync
 
 on:
   schedule:
-    # 10:00 AM Central = 15:00 UTC (CDT) / 16:00 UTC (CST)
-    - cron: '0 15 * * *'
+    # ~8:00 AM Eastern (13:00 UTC during EDT; adjust if you need exact EST winter time)
+    - cron: '0 13 * * *'
   workflow_dispatch: {}
 
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       API_BASE_URL: ${{ vars.API_BASE_URL || secrets.API_BASE_URL }}
     steps:
