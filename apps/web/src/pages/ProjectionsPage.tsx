@@ -6,7 +6,7 @@ import {
   getGamesForDate,
   getScheduleDates,
   groupProjectionsByTier,
-  listDailyHrProjections,
+  listDailyHrProjectionsAllModels,
   type DailyProjection,
   type ScheduleGame,
 } from '@kinetic/shared'
@@ -114,10 +114,6 @@ function oddsProfitScore(odds: number): number {
   return 10000 / Math.abs(odds)
 }
 
-function buildTooltip(all: Array<{ vendor: string; odds: number }>): string {
-  return all.map((entry) => `${sportsbookLabel(entry.vendor)} ${formatBookOdds(entry.odds)}`).join('\n')
-}
-
 function normalizePlayerName(name: string | null | undefined): string {
   return String(name ?? '')
     .toLowerCase()
@@ -212,15 +208,12 @@ export default function ProjectionsPage() {
   const [loading, setLoading] = useState(true)
   const [rows, setRows] = useState<DailyProjection[]>([])
   const [weightedRows, setWeightedRows] = useState<DailyProjection[]>([])
-  const [weightedLoading, setWeightedLoading] = useState(false)
   const [contactQualityRows, setContactQualityRows] = useState<DailyProjection[]>([])
-  const [contactQualityLoading, setContactQualityLoading] = useState(false)
   const [projectionModelTab, setProjectionModelTab] = useState<'default' | 'weighted' | 'contact_quality'>('default')
   const [games, setGames] = useState<ScheduleGame[]>([])
   const [availableDates, setAvailableDates] = useState<string[]>([])
   const [pickState, setPickState] = useState<Record<string, boolean | null>>({})
   const [pickBusy, setPickBusy] = useState<string | null>(null)
-  const [pickMsg, setPickMsg] = useState('')
   const [matchupLoading, setMatchupLoading] = useState(false)
   const [matchupFor, setMatchupFor] = useState<DailyProjection | null>(null)
   const [matchupData, setMatchupData] = useState<any>(null)
@@ -268,7 +261,7 @@ export default function ProjectionsPage() {
     const prevIso = prevDate.toISOString().slice(0, 10)
     const nextIso = nextDate.toISOString().slice(0, 10)
     void Promise.all([
-      listDailyHrProjections(supabase, displayDate),
+      listDailyHrProjectionsAllModels(supabase, displayDate),
       getGamesForDate(supabase, displayDate),
       supabase
         .from('bdl_games')
@@ -276,8 +269,10 @@ export default function ProjectionsPage() {
         .gte('date', prevIso)
         .lte('date', nextIso),
     ])
-      .then(([proj, sched, live]) => {
-        setRows(proj)
+      .then(([allModels, sched, live]) => {
+        setRows(allModels.default)
+        setWeightedRows(allModels.weighted_pitch_arsenal)
+        setContactQualityRows(allModels.contact_quality)
         setGames(sched)
         const raw = (live.data ?? []) as any[]
         const dayIso = displayDate
@@ -285,50 +280,6 @@ export default function ProjectionsPage() {
       })
       .finally(() => setLoading(false))
   }, [supabase, displayDate])
-
-  useEffect(() => {
-    if (projectionModelTab !== 'weighted') return
-    const base = import.meta.env.VITE_API_BASE_URL ?? ''
-    if (!base) return
-    let cancelled = false
-    setWeightedLoading(true)
-    void fetch(`${base}/bdl/projections/weighted?date=${encodeURIComponent(displayDate)}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((json: { rows?: DailyProjection[] } | null) => {
-        if (!cancelled) setWeightedRows(json?.rows ?? [])
-      })
-      .catch(() => {
-        if (!cancelled) setWeightedRows([])
-      })
-      .finally(() => {
-        if (!cancelled) setWeightedLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [displayDate, projectionModelTab])
-
-  useEffect(() => {
-    if (projectionModelTab !== 'contact_quality') return
-    const base = import.meta.env.VITE_API_BASE_URL ?? ''
-    if (!base) return
-    let cancelled = false
-    setContactQualityLoading(true)
-    void fetch(`${base}/bdl/projections/contact-quality?date=${encodeURIComponent(displayDate)}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((json: { rows?: DailyProjection[] } | null) => {
-        if (!cancelled) setContactQualityRows(json?.rows ?? [])
-      })
-      .catch(() => {
-        if (!cancelled) setContactQualityRows([])
-      })
-      .finally(() => {
-        if (!cancelled) setContactQualityLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [displayDate, projectionModelTab])
 
   useEffect(() => {
     if (!supabase) return
@@ -506,11 +457,6 @@ export default function ProjectionsPage() {
     return out
   }, [liveGames])
 
-  const selectedCount = useMemo(
-    () => Object.keys(pickState).length,
-    [pickState],
-  )
-
   function parseOpponentTeam(r: DailyProjection): string | null {
     const txt = (r.opponent ?? '').trim()
     if (!txt) return null
@@ -595,7 +541,6 @@ export default function ProjectionsPage() {
 
   async function togglePick(playerId: string) {
     if (!supabase || !session?.user.id) {
-      setPickMsg('Sign in to use targets.')
       return
     }
     const player = activeRows.find((r) => r.playerId === playerId)
@@ -608,12 +553,10 @@ export default function ProjectionsPage() {
       return started && (playerTeam === a || playerTeam === h)
     })
     if (locked) {
-      setPickMsg('Game already started. Picks are locked for players in active/final games.')
       return
     }
 
     if (pickBusy) return
-    setPickMsg('')
     setPickBusy(playerId)
 
     const currentlyPicked = Object.prototype.hasOwnProperty.call(pickState, playerId)
@@ -624,8 +567,7 @@ export default function ProjectionsPage() {
         .eq('user_id', session.user.id)
         .eq('pick_date', displayDate)
         .eq('player_id', playerId)
-      if (error) setPickMsg(error.message)
-      else {
+      if (!error) {
         const next = { ...pickState }
         delete next[playerId]
         setPickState(next)
@@ -638,7 +580,6 @@ export default function ProjectionsPage() {
     const count = Object.keys(pickState).length
     if (count >= 3) {
       setPickBusy(null)
-      setPickMsg('You can target up to 3 players per day.')
       return
     }
 
@@ -647,8 +588,7 @@ export default function ProjectionsPage() {
       pick_date: displayDate,
       player_id: playerId,
     })
-    if (error) setPickMsg(error.message)
-    else {
+    if (!error) {
       setPickState((prev) => ({ ...prev, [playerId]: null }))
       window.dispatchEvent(new CustomEvent('ah:picks-changed', { detail: { date: displayDate } }))
     }
@@ -771,7 +711,6 @@ export default function ProjectionsPage() {
           ))}
         </select>
         <div className="pg-searchWrap">
-          <label htmlFor="proj-search" className="pg-label">Player Search</label>
           <input
             id="proj-search"
             className="pg-input pg-input--search"
@@ -779,6 +718,7 @@ export default function ProjectionsPage() {
             value={playerQuery}
             placeholder="Search player..."
             onChange={(e) => setPlayerQuery(e.target.value)}
+            aria-label="Search players"
           />
         </div>
         {(selectedTeam || selectedPlayerId) && (
@@ -796,50 +736,29 @@ export default function ProjectionsPage() {
           </button>
         )}
       </div>
-      <div className="pg-projModelRow" role="group" aria-label="Projection model">
-        <div className="pg-projModelGroup pg-projModelGroup--left">
-          <button
-            type="button"
-            className={`pg-matchupTab ${projectionModelTab === 'default' ? 'is-active' : ''}`}
-            onClick={() => setProjectionModelTab('default')}
-          >
-            AH Default
-          </button>
-          <button
-            type="button"
-            className={`pg-matchupTab ${projectionModelTab === 'weighted' ? 'is-active' : ''}`}
-            onClick={() => setProjectionModelTab('weighted')}
-          >
-            Weighted Pitch Arsenal
-          </button>
-        </div>
-        <div className="pg-projModelGroup pg-projModelGroup--center">
-          <button
-            type="button"
-            className={`pg-matchupTab ${projectionModelTab === 'contact_quality' ? 'is-active' : ''}`}
-            onClick={() => setProjectionModelTab('contact_quality')}
-          >
-            Contact Quality Model
-          </button>
-        </div>
-        <div className="pg-projModelGroup pg-projModelGroup--spacer" aria-hidden="true" />
+      <div className="pg-projModelBar" role="group" aria-label="Projection model">
+        <button
+          type="button"
+          className={`pg-projModelTab ${projectionModelTab === 'default' ? 'is-active' : ''}`}
+          onClick={() => setProjectionModelTab('default')}
+        >
+          AH Default
+        </button>
+        <button
+          type="button"
+          className={`pg-projModelTab ${projectionModelTab === 'weighted' ? 'is-active' : ''}`}
+          onClick={() => setProjectionModelTab('weighted')}
+        >
+          Weighted Pitch Arsenal
+        </button>
+        <button
+          type="button"
+          className={`pg-projModelTab ${projectionModelTab === 'contact_quality' ? 'is-active' : ''}`}
+          onClick={() => setProjectionModelTab('contact_quality')}
+        >
+          Contact Quality
+        </button>
       </div>
-      <p className="pg-sub">
-        {projectionModelTab === 'weighted'
-          ? 'Weighted pitch arsenal model'
-          : projectionModelTab === 'contact_quality'
-            ? 'Contact quality (Statcast + suppression) HR model'
-            : 'Matchup-based HR model'}{' '}
-        — grouped by tier.
-      </p>
-      {!hasSubscription ? (
-        <p className="pg-sub">Free preview: one random game. Subscribe to unlock full projections.</p>
-      ) : null}
-      {session ? (
-        <p className="pg-sub">Targets used: {selectedCount}/3 {pickMsg ? `— ${pickMsg}` : ''}</p>
-      ) : (
-        <p className="pg-sub">Sign in to select up to 3 daily targets.</p>
-      )}
       {(selectedTeam || selectedPlayer) && (
         <div className="pg-focusCard">
           {selectedTeam ? <div className="pg-focusLine">Team filter: {selectedTeam}</div> : null}
@@ -851,9 +770,7 @@ export default function ProjectionsPage() {
           ) : null}
         </div>
       )}
-      {(loading ||
-        (projectionModelTab === 'weighted' && weightedLoading) ||
-        (projectionModelTab === 'contact_quality' && contactQualityLoading)) ? (
+      {loading ? (
         <div className="lb-skel">
           {Array.from({ length: 8 }).map((_, i) => (
             <div key={i} className="lb-skelRow" />
@@ -876,7 +793,6 @@ export default function ProjectionsPage() {
                 const bestBook = playerOdds[r.playerId] ?? null
                 const bookOdds = formatBookOdds(bestBook?.bestOdds)
                 const bookVendor = bestBook?.bestVendor ?? ''
-                const oddsTooltip = bestBook ? buildTooltip(bestBook.all) : 'Sportsbook HR odds unavailable'
                 const team = (normalizeTeamCode(r.team ?? '') ?? '').toUpperCase()
                 const opp = (displayOpponentTeam(r) ?? '').toUpperCase()
                 const gameResult = team && opp ? gameResultByMatchup.get(`${team}|${opp}`) ?? null : null
@@ -906,7 +822,7 @@ export default function ProjectionsPage() {
                       <button
                         type="button"
                         className={`pg-targetBtn ${Object.prototype.hasOwnProperty.call(pickState, r.playerId) ? 'is-selected' : ''}`}
-                        title="Toggle target pick"
+                        aria-label="Toggle target pick"
                         disabled={pickBusy === r.playerId}
                         onClick={(e) => {
                           e.stopPropagation()
@@ -942,7 +858,6 @@ export default function ProjectionsPage() {
                     <span
                       className="pg-odds"
                       style={{ color: tierColor(r.tier ?? 'D') }}
-                      title={oddsTooltip}
                     >
                       {bookOdds ?? '—'}
                     </span>
