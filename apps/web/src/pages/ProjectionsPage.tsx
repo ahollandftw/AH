@@ -262,19 +262,17 @@ export default function ProjectionsPage() {
     const prevIso = prevDate.toISOString().slice(0, 10)
     const nextIso = nextDate.toISOString().slice(0, 10)
 
-    void (async () => {
-      try {
-        const [allModels, sched, live] = await Promise.all([
-          listDailyHrProjectionsAllModels(supabase, displayDate),
-          getGamesForDate(supabase, displayDate),
-          supabase
-            .from('bdl_games')
-            .select('bdl_game_id,date,start_time_utc,home_team_abbrev,away_team_abbrev,status,scoring_summary')
-            .gte('date', prevIso)
-            .lte('date', nextIso),
-        ])
+    void Promise.all([
+      listDailyHrProjectionsAllModels(supabase, displayDate),
+      getGamesForDate(supabase, displayDate),
+      supabase
+        .from('bdl_games')
+        .select('bdl_game_id,date,start_time_utc,home_team_abbrev,away_team_abbrev,status,scoring_summary')
+        .gte('date', prevIso)
+        .lte('date', nextIso),
+    ])
+      .then(([allModels, sched, live]) => {
         if (cancelled) return
-
         setRows(allModels.default)
         setWeightedRows(allModels.weighted_pitch_arsenal)
         setContactQualityRows(allModels.contact_quality)
@@ -282,31 +280,10 @@ export default function ProjectionsPage() {
         const raw = (live.data ?? []) as any[]
         const dayIso = displayDate
         setLiveGames(raw.filter((lg) => bdlRowMatchesCalendarDay(lg, dayIso)))
-
-        /* If alternate model rows were never synced to daily_hr_projections, fill from API (same compute as server fallback). */
-        const base = import.meta.env.VITE_API_BASE_URL ?? ''
-        const q = encodeURIComponent(displayDate)
-        const needWeighted = allModels.weighted_pitch_arsenal.length === 0
-        const needContact = allModels.contact_quality.length === 0
-        if (base && (needWeighted || needContact)) {
-          const [wJson, cJson] = await Promise.all([
-            needWeighted
-              ? fetch(`${base}/bdl/projections/weighted?date=${q}`).then((r) => (r.ok ? r.json() : null))
-              : Promise.resolve(null),
-            needContact
-              ? fetch(`${base}/bdl/projections/contact-quality?date=${q}`).then((r) => (r.ok ? r.json() : null))
-              : Promise.resolve(null),
-          ])
-          if (cancelled) return
-          const wRows = (wJson as { rows?: DailyProjection[] } | null)?.rows
-          const cRows = (cJson as { rows?: DailyProjection[] } | null)?.rows
-          if (needWeighted && wRows?.length) setWeightedRows(wRows)
-          if (needContact && cRows?.length) setContactQualityRows(cRows)
-        }
-      } finally {
+      })
+      .finally(() => {
         if (!cancelled) setLoading(false)
-      }
-    })()
+      })
 
     return () => {
       cancelled = true

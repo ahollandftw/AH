@@ -13,6 +13,7 @@
     "import:stats": "node scripts/import-stat-csv.mjs",
     "dev:api": "npm run dev --workspace=@kinetic/api",
     "aggregate": "npm run aggregate --workspace=@kinetic/api",
+    "sync:projections": "npm run projections --workspace=@kinetic/api --",
     "ingest:statcast": "python scripts/statcast/ingest_statcast.py"
   },
   "devDependencies": {
