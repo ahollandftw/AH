@@ -623,3 +623,70 @@
 .lb-warn {
   cursor: help;
 }
+
+/* Pitches page — arsenal vs opposing pitcher */
+.pitch-slate-table .pitch-sort {
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+}
+
+.pitch-slate-table .pitch-sort:hover {
+  color: var(--color-secondary);
+}
+
+.pitch-grade {
+  display: inline-block;
+  min-width: 2rem;
+  text-align: center;
+  font-weight: 900;
+}
+
+.pitch-grade--A {
+  color: #00e639;
+}
+.pitch-grade--B {
+  color: #7dd3c0;
+}
+.pitch-grade--C {
+  color: #adc8f5;
+}
+.pitch-grade--D {
+  color: #c9a227;
+}
+.pitch-grade--F {
+  color: #ff6b6b;
+}
+.pitch-grade--na {
+  color: var(--color-muted);
+}
+
+.pitch-detail-row td {
+  padding: 0 !important;
+  background: color-mix(in srgb, var(--color-bg) 70%, transparent);
+}
+
+.pitch-detail-wrap {
+  padding: 12px 10px 16px;
+  overflow-x: auto;
+}
+
+.pitch-nested {
+  font-size: 0.85rem;
+}
+
+.pitch-edge-pos {
+  color: #00e639;
+  font-weight: 800;
+}
+
+.pitch-edge-neg {
+  color: color-mix(in srgb, var(--color-muted) 90%, white);
+}

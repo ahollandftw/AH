@@ -5,6 +5,7 @@ import { runAggregation } from './aggregate.js'
 import { config } from './config.js'
 import { registerLeaderboardRoutes } from './routes/leaderboards.js'
 import { registerBdlRoutes } from './routes/bdl.js'
+import { registerPitchArsenalSlateRoute } from './routes/pitchArsenalSlate.js'
 import { registerWallRoutes } from './routes/wall.js'
 import { registerWeatherRoutes } from './routes/weather.js'
 import { startLiveMonitor } from './bdl/liveMonitor.js'
@@ -89,6 +90,7 @@ app.get('/health', (_req, res) => {
 
 registerLeaderboardRoutes(app)
 registerBdlRoutes(app)
+registerPitchArsenalSlateRoute(app)
 registerWeatherRoutes(app)
 registerWallRoutes(app)
 

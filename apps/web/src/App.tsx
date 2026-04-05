@@ -4,6 +4,7 @@ import { WebAuthProvider } from './auth/WebAuthProvider.tsx'
 import { useWebAuth } from './auth/WebAuthProvider.tsx'
 import LeaderboardPage from './pages/LeaderboardPage.tsx'
 import DugoutPage from './pages/DugoutPage.tsx'
+import PitchesPage from './pages/PitchesPage.tsx'
 import ProjectionsPage from './pages/ProjectionsPage.tsx'
 import AccountPage from './pages/AccountPage.tsx'
 import CommunityLeaderboardPage from './pages/CommunityLeaderboardPage.tsx'
@@ -25,12 +26,13 @@ function Layout() {
   const fullLinks = [
     ['/dugout', 'Scoreboard', '⚾'],
     ['/projections', 'Projections', '📈'],
+    ['/pitches', 'Pitches', '🎯'],
     ['/stats', 'Homer Tracking', <img src={hrIcon64} alt="" style={{ width: 18, height: 18, objectFit: 'contain' }} />],
-    ['/community', 'Leaderboard', '🏆'],
   ] as const
   const menuLinks = [
     ['/dugout', 'Scoreboard'],
     ['/projections', 'Projections'],
+    ['/pitches', 'Pitches'],
     ['/stats', 'Homer Tracking'],
     ['/community', 'Leaderboard'],
     ['/wall', 'Wall of Bang'],
@@ -47,6 +49,7 @@ function Layout() {
     const pageName =
       pathname === '/dugout' ? 'Scoreboard'
       : pathname === '/projections' ? 'Projections'
+      : pathname === '/pitches' ? 'Pitches'
       : pathname === '/stats' ? 'Homer Tracking'
       : pathname === '/community' ? 'Leaderboard'
       : pathname === '/wall' ? 'Wall of Bang'
@@ -239,6 +242,7 @@ export default function App() {
             <Route path="/" element={<Navigate to="/dugout" replace />} />
             <Route path="/dugout" element={<DugoutPage />} />
             <Route path="/projections" element={<ProjectionsPage />} />
+            <Route path="/pitches" element={<PitchesPage />} />
             <Route path="/stats" element={<LeaderboardPage />} />
             <Route path="/community" element={<CommunityLeaderboardPage />} />
             <Route path="/wall" element={<WallOfBangPage />} />
