@@ -2,14 +2,20 @@ import { config } from '../config.js'
 
 const BASE = 'https://api.balldontlie.io'
 
+/** Serial queue + min spacing so sustained traffic stays under the 600/min plan cap. */
+const BDL_MIN_GAP_MS = 120
+
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms))
 }
 
-export async function bdlFetch<T = unknown>(
+let lastBdlStartAt = 0
+let bdlQueueTail: Promise<void> = Promise.resolve()
+
+function buildBdlUrl(
   path: string,
   params?: Record<string, string | string[] | number | undefined>,
-): Promise<T> {
+): URL {
   const url = new URL(`${BASE}${path}`)
   if (params) {
     for (const [k, v] of Object.entries(params)) {
@@ -21,23 +27,48 @@ export async function bdlFetch<T = unknown>(
       }
     }
   }
+  return url
+}
 
-  const res = await fetch(url.toString(), {
-    headers: { Authorization: config.bdlApiKey() },
+async function bdlFetchOnce<T>(
+  path: string,
+  params?: Record<string, string | string[] | number | undefined>,
+): Promise<T> {
+  const url = buildBdlUrl(path, params)
+
+  for (;;) {
+    const res = await fetch(url.toString(), {
+      headers: { Authorization: config.bdlApiKey() },
+    })
+
+    if (res.status === 429) {
+      console.warn('[BDL] rate-limited, waiting 5s…')
+      await sleep(5000)
+      continue
+    }
+
+    if (!res.ok) {
+      const body = await res.text().catch(() => '')
+      throw new Error(`BDL ${res.status} ${path}: ${body}`)
+    }
+
+    return res.json() as Promise<T>
+  }
+}
+
+export async function bdlFetch<T = unknown>(
+  path: string,
+  params?: Record<string, string | string[] | number | undefined>,
+): Promise<T> {
+  const task = bdlQueueTail.then(async () => {
+    const now = Date.now()
+    const wait = Math.max(0, BDL_MIN_GAP_MS - (now - lastBdlStartAt))
+    if (wait > 0) await sleep(wait)
+    lastBdlStartAt = Date.now()
+    return bdlFetchOnce<T>(path, params)
   })
-
-  if (res.status === 429) {
-    console.warn('[BDL] rate-limited, waiting 5s…')
-    await sleep(5000)
-    return bdlFetch(path, params)
-  }
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => '')
-    throw new Error(`BDL ${res.status} ${path}: ${body}`)
-  }
-
-  return res.json() as Promise<T>
+  bdlQueueTail = task.then(() => void 0, () => void 0)
+  return task
 }
 
 type Paginated<T> = { data: T[]; meta?: { next_cursor?: number | null } }
@@ -58,7 +89,6 @@ export async function bdlFetchAll<T = unknown>(
     const res = await bdlFetch<Paginated<T>>(path, p)
     all.push(...res.data)
     cursor = res.meta?.next_cursor ?? undefined
-    if (cursor != null) await sleep(250)
   } while (cursor != null)
 
   return all

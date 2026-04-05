@@ -2,8 +2,90 @@
  * Slate-wide pitch arsenal vs opposing pitcher (same merge as matchup-card), for Pitches page grid.
  */
 import type { Express } from 'express'
+import { getBestLineupsForDate } from '../bdl/lineups.js'
 import { getServiceClient } from '../supabase.js'
 import { listDailyHrProjectionsFromTable, type DailyProjection } from '../hrModelCalc.js'
+
+/** Short TTL: slate is expensive; repeat visits within the window are instant. */
+const slateCache = new Map<string, { at: number; body: unknown }>()
+const SLATE_CACHE_MS = 90 * 1000
+
+async function buildBattersFromLineups(
+  sb: ReturnType<typeof getServiceClient>,
+  date: string,
+): Promise<DailyProjection[]> {
+  const lineupsByGame = await getBestLineupsForDate(sb, date)
+  const gameIds = Object.keys(lineupsByGame)
+    .map(Number)
+    .filter((n) => Number.isFinite(n) && n > 0)
+  if (!gameIds.length) return []
+
+  const { data: gameRows } = await sb
+    .from('bdl_games')
+    .select('bdl_game_id,home_team_abbrev,away_team_abbrev')
+    .in('bdl_game_id', gameIds)
+  const gameById = new Map<number, { home: string; away: string }>()
+  for (const g of gameRows ?? []) {
+    const r = g as { bdl_game_id?: number; home_team_abbrev?: string; away_team_abbrev?: string }
+    gameById.set(Number(r.bdl_game_id), {
+      home: canonTeam(String(r.home_team_abbrev ?? '')),
+      away: canonTeam(String(r.away_team_abbrev ?? '')),
+    })
+  }
+
+  const seen = new Set<string>()
+  const out: DailyProjection[] = []
+
+  for (const [gidStr, lu] of Object.entries(lineupsByGame)) {
+    const gid = Number(gidStr)
+    const pair = gameById.get(gid)
+    if (!pair?.home || !pair?.away) continue
+    const { home: homeAbbr, away: awayAbbr } = pair
+    const homePitcher = lu.home_pitcher?.full_name ?? null
+    const awayPitcher = lu.away_pitcher?.full_name ?? null
+
+    const addSide = (
+      side: Array<{
+        batting_order?: number | null
+        position?: string | null
+        stat_player_id?: string | null
+        full_name?: string | null
+      }>,
+      teamAbbr: string,
+      opposingPitcher: string | null,
+    ) => {
+      for (const p of side) {
+        if (p.batting_order == null || p.batting_order <= 0) continue
+        const pos = String(p.position ?? '').toUpperCase()
+        if (pos === 'P' || pos.startsWith('P')) continue
+        const sid = String(p.stat_player_id ?? '').trim()
+        if (!sid || seen.has(sid)) continue
+        seen.add(sid)
+        out.push({
+          playerId: sid,
+          slug: '',
+          name: String(p.full_name ?? 'Unknown'),
+          team: teamAbbr,
+          position: p.position ?? null,
+          opponentPitcher: opposingPitcher,
+          opponentPitcherHand: null,
+          hrProbability: null,
+          l7Hrs: null,
+          tier: null,
+          opponent: null,
+          americanOdds: null,
+          americanOddsStr: null,
+          source: 'daily_table',
+        })
+      }
+    }
+
+    addSide(lu.home, homeAbbr, awayPitcher)
+    addSide(lu.away, awayAbbr, homePitcher)
+  }
+
+  return out.filter((p) => p.name !== 'Unknown')
+}
 
 function canonTeam(team: string): string {
   const t = team.trim().toUpperCase()
@@ -87,6 +169,107 @@ function weightedWobaEdge(pitches: any[]): number | null {
 
 type PitcherPick = { pitcher_bdl_id: number | null; pitcher_name: string | null }
 
+/** BDL team abbrev variants for a canonical code (TB/TBR, etc.). */
+function abbrevsForCanonTeam(canon: string): string[] {
+  const c = canonTeam(canon)
+  const set = new Set<string>([c])
+  const map: Record<string, string> = {
+    TB: 'TBR',
+    TBR: 'TBR',
+    WSH: 'WSN',
+    WSN: 'WSN',
+    WAS: 'WSN',
+    AZ: 'ARI',
+    ARI: 'ARI',
+    KC: 'KCR',
+    KCR: 'KCR',
+    SF: 'SFG',
+    SFG: 'SFG',
+    SD: 'SDP',
+    SDP: 'SDP',
+    OAK: 'ATH',
+    ATH: 'ATH',
+    CWS: 'CHW',
+    CHW: 'CHW',
+  }
+  for (const [alias, mapped] of Object.entries(map)) {
+    if (mapped === c) set.add(alias)
+  }
+  return [...set]
+}
+
+function normalizeNameKey(name: string): string {
+  return name
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/** When bdl_matchups is empty or stale, match probable pitcher from lineups / projections to bdl_players. */
+async function resolvePitcherPickFromProbableName(
+  sb: ReturnType<typeof getServiceClient>,
+  opponentTeamCanon: string,
+  pitcherNameRaw: string,
+): Promise<PitcherPick | null> {
+  const q = pitcherNameRaw.trim().toLowerCase()
+  if (!q) return null
+  const abbrevs = abbrevsForCanonTeam(opponentTeamCanon)
+  const { data: rows } = await sb
+    .from('bdl_players')
+    .select('bdl_id, full_name, team_abbrev')
+    .in('team_abbrev', abbrevs)
+    .limit(250)
+  const candidates = (rows ?? []) as Array<{ bdl_id?: number; full_name?: string | null }>
+  const byExact = candidates.find((r) => String(r.full_name ?? '').toLowerCase() === q)
+  if (byExact?.bdl_id) {
+    return { pitcher_bdl_id: Number(byExact.bdl_id), pitcher_name: byExact.full_name ?? null }
+  }
+  const byPartial = candidates.find((r) => {
+    const nm = String(r.full_name ?? '').toLowerCase()
+    return nm.includes(q) || q.includes(nm)
+  })
+  if (byPartial?.bdl_id) {
+    return { pitcher_bdl_id: Number(byPartial.bdl_id), pitcher_name: byPartial.full_name ?? null }
+  }
+  return null
+}
+
+/** Same idea as /bdl/matchup-card: find Statcast player_id when bdl_players.stat_player_id is null. */
+async function resolveStatPlayerIdByName(
+  sb: ReturnType<typeof getServiceClient>,
+  fullName: string | null | undefined,
+): Promise<string | null> {
+  const raw = String(fullName ?? '').trim()
+  if (!raw) return null
+
+  const directLookups = await Promise.all([
+    sb.from('players').select('stat_player_id').eq('name', raw).limit(1).maybeSingle(),
+    sb.from('stats_standard').select('player_id').eq('player_name', raw).limit(1).maybeSingle(),
+  ])
+  const directId =
+    (directLookups[0].data as { stat_player_id?: string | null } | null)?.stat_player_id ??
+    (directLookups[1].data as { player_id?: string | null } | null)?.player_id ??
+    null
+  if (directId) return String(directId)
+
+  const parts = raw.split(/\s+/).filter(Boolean)
+  if (parts.length < 2) return null
+  const reversed = `${parts[parts.length - 1]}, ${parts.slice(0, -1).join(' ')}`
+  const { data: arsenalRows } = await sb
+    .from('stats_pitch_arsenal')
+    .select('player_id,last_name_first_name')
+    .ilike('last_name_first_name', `${parts[parts.length - 1]}%`)
+    .limit(50)
+  const targetNames = new Set([normalizeNameKey(raw), normalizeNameKey(reversed)])
+  const match = (arsenalRows ?? []).find((row: { last_name_first_name?: string | null }) =>
+    targetNames.has(normalizeNameKey(String(row.last_name_first_name ?? ''))),
+  )
+  return match?.player_id ? String(match.player_id) : null
+}
+
 function resolvePitcherFromMatchupRows(
   rows: Array<{ opponent_bdl_player_id?: number | null; at_bats?: number | null }>,
   opponentTeam: string,
@@ -132,15 +315,33 @@ export function registerPitchArsenalSlateRoute(app: Express) {
         return
       }
 
+      const cacheKey = `${date}|${season}`
+      const cached = slateCache.get(cacheKey)
+      if (cached && Date.now() - cached.at < SLATE_CACHE_MS) {
+        res.json(cached.body)
+        return
+      }
+
       const sb = getServiceClient()
       const projections = await listDailyHrProjectionsFromTable(sb, date, 'default')
-      const batters = projections.filter((p) => {
+      let batters = projections.filter((p) => {
         const pos = String(p.position ?? '').toUpperCase()
         if (pos === 'P' || pos.startsWith('P')) return false
         return true
       })
+      let batterSource: 'projections' | 'lineups' = 'projections'
       if (!batters.length) {
-        res.json({ ok: true, date, season, rows: [] })
+        try {
+          batters = await buildBattersFromLineups(sb, date)
+          batterSource = 'lineups'
+        } catch (e) {
+          console.error('[pitch-arsenal/slate] lineup fallback failed:', e)
+        }
+      }
+      if (!batters.length) {
+        const body = { ok: true, date, season, rows: [], source: 'empty' as const }
+        slateCache.set(cacheKey, { at: Date.now(), body })
+        res.json(body)
         return
       }
 
@@ -237,6 +438,13 @@ export function registerPitchArsenalSlateRoute(app: Express) {
         pitcherPicks.push({ proj, pick, opponentTeam })
       }
 
+      for (let i = 0; i < pitcherPicks.length; i++) {
+        const row = pitcherPicks[i]
+        if (row.pick || !row.opponentTeam || !String(row.proj.opponentPitcher ?? '').trim()) continue
+        const fb = await resolvePitcherPickFromProbableName(sb, row.opponentTeam, String(row.proj.opponentPitcher))
+        if (fb) pitcherPicks[i] = { ...row, pick: fb }
+      }
+
       const pitcherBdlIds = [
         ...new Set(
           pitcherPicks.map((x) => x.pick?.pitcher_bdl_id).filter((id): id is number => id != null && id > 0),
@@ -253,35 +461,71 @@ export function registerPitchArsenalSlateRoute(app: Express) {
         if (bid > 0 && sid) pitcherBdlToStat.set(bid, sid)
       }
 
-      const pitcherStatIds = [...new Set([...pitcherBdlToStat.values()].filter(Boolean))]
+      const pitcherStatByBdlFallback = new Map<number, string>()
+      const resolvedStatIdByPitcherName = new Map<string, string>()
+      for (const { pick } of pitcherPicks) {
+        if (!pick?.pitcher_bdl_id || !pick.pitcher_name) continue
+        if (pitcherBdlToStat.has(pick.pitcher_bdl_id)) continue
+        const nk = normalizeNameKey(pick.pitcher_name)
+        if (!resolvedStatIdByPitcherName.has(nk)) {
+          const sid = await resolveStatPlayerIdByName(sb, pick.pitcher_name)
+          resolvedStatIdByPitcherName.set(nk, sid ?? '')
+        }
+        const sid = resolvedStatIdByPitcherName.get(nk)
+        if (sid) pitcherStatByBdlFallback.set(pick.pitcher_bdl_id, sid)
+      }
+
+      const pitcherStatIds = [
+        ...new Set([...pitcherBdlToStat.values(), ...pitcherStatByBdlFallback.values()].filter(Boolean)),
+      ]
       const batterStatIds = statIds.slice(0, 500)
 
-      const [pitcherArsRes, batterArsRes] = await Promise.all([
-        pitcherStatIds.length
-          ? sb
-              .from('stats_pitch_arsenal')
-              .select(
-                'player_id,pitch_type,pitch_name,pitch_usage,slg,ba,woba,est_slg,est_woba,k_percent,whiff_percent,hard_hit_percent,season',
-              )
-              .eq('role', 'pitching')
-              .in('player_id', pitcherStatIds)
-              .lte('season', season)
-              .order('season', { ascending: false })
-              .limit(8000)
-          : Promise.resolve({ data: [] as any[] }),
-        batterStatIds.length
-          ? sb
-              .from('stats_pitch_arsenal')
-              .select(
-                'player_id,pitch_type,pitch_name,pitch_usage,slg,ba,woba,est_slg,est_woba,k_percent,whiff_percent,hard_hit_percent,season',
-              )
-              .eq('role', 'batting')
-              .in('player_id', batterStatIds)
-              .lte('season', season)
-              .order('season', { ascending: false })
-              .limit(20000)
-          : Promise.resolve({ data: [] as any[] }),
-      ])
+      const arsenalSelect =
+        'player_id,pitch_type,pitch_name,pitch_usage,slg,ba,woba,est_slg,est_woba,k_percent,whiff_percent,hard_hit_percent,season'
+
+      async function loadPitchingArsenal(): Promise<any[]> {
+        if (!pitcherStatIds.length) return []
+        const q1 = await sb
+          .from('stats_pitch_arsenal')
+          .select(arsenalSelect)
+          .eq('role', 'pitching')
+          .in('player_id', pitcherStatIds)
+          .eq('season', season)
+          .limit(6000)
+        if ((q1.data?.length ?? 0) > 0) return q1.data ?? []
+        const q2 = await sb
+          .from('stats_pitch_arsenal')
+          .select(arsenalSelect)
+          .eq('role', 'pitching')
+          .in('player_id', pitcherStatIds)
+          .lte('season', season)
+          .order('season', { ascending: false })
+          .limit(8000)
+        return q2.data ?? []
+      }
+
+      async function loadBattingArsenal(): Promise<any[]> {
+        if (!batterStatIds.length) return []
+        const q1 = await sb
+          .from('stats_pitch_arsenal')
+          .select(arsenalSelect)
+          .eq('role', 'batting')
+          .in('player_id', batterStatIds)
+          .eq('season', season)
+          .limit(15000)
+        if ((q1.data?.length ?? 0) > 0) return q1.data ?? []
+        const q2 = await sb
+          .from('stats_pitch_arsenal')
+          .select(arsenalSelect)
+          .eq('role', 'batting')
+          .in('player_id', batterStatIds)
+          .lte('season', season)
+          .order('season', { ascending: false })
+          .limit(20000)
+        return q2.data ?? []
+      }
+
+      const [pitchRowsRaw, batRowsRaw] = await Promise.all([loadPitchingArsenal(), loadBattingArsenal()])
 
       function latestSeasonRows(rows: any[], playerId: string): any[] {
         const mine = (rows ?? []).filter((r: any) => String(r.player_id) === playerId)
@@ -290,12 +534,15 @@ export function registerPitchArsenalSlateRoute(app: Express) {
         return mine.filter((r: any) => Number(r.season ?? 0) === maxS)
       }
 
-      const pitchRows = pitcherArsRes.data ?? []
-      const batRows = batterArsRes.data ?? []
+      const pitchRows = pitchRowsRaw
+      const batRows = batRowsRaw
 
       const out: any[] = []
       for (const { proj, pick, opponentTeam } of pitcherPicks) {
-        const pitStat = pick?.pitcher_bdl_id ? pitcherBdlToStat.get(pick.pitcher_bdl_id) : null
+        let pitStat = pick?.pitcher_bdl_id ? pitcherBdlToStat.get(pick.pitcher_bdl_id) : null
+        if (!pitStat && pick?.pitcher_bdl_id) {
+          pitStat = pitcherStatByBdlFallback.get(pick.pitcher_bdl_id) ?? null
+        }
         const pRows = pitStat ? latestSeasonRows(pitchRows, pitStat) : []
         const bRows = latestSeasonRows(batRows, proj.playerId)
         const pitches = pRows.length && bRows.length ? mergePitchArsenal(pRows, bRows) : []
@@ -315,7 +562,9 @@ export function registerPitchArsenalSlateRoute(app: Express) {
         })
       }
 
-      res.json({ ok: true, date, season, rows: out })
+      const body = { ok: true, date, season, rows: out, source: batterSource }
+      slateCache.set(cacheKey, { at: Date.now(), body })
+      res.json(body)
     } catch (e) {
       console.error('[bdl/pitch-arsenal/slate] failed:', e)
       res.status(500).json({ error: e instanceof Error ? e.message : String(e) })

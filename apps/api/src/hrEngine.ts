@@ -523,6 +523,9 @@ function computeWeightedPitchArsenalScore(
 export async function runDailyProjections(
   dateOverride?: string,
   modelVariant: ProjectionModelVariant = 'default',
+  options?: {
+    probablePitchers?: Map<number, { home: number | null; away: number | null }>
+  },
 ): Promise<EngineProjection[]> {
   const date = dateOverride ?? todayET()
   const sb = getServiceClient()
@@ -552,7 +555,7 @@ export async function runDailyProjections(
   if (!games.length) { console.log('[hr-engine] No games today'); return [] }
   console.log(`[hr-engine] ${games.length} games, ${standardBattingRows.length} batting standard rows, ${standardPitchingRows.length} pitching standard rows`)
 
-  const probPitchers = await fetchBdlProbablePitchers(sb, date)
+  const probPitchers = options?.probablePitchers ?? await fetchBdlProbablePitchers(sb, date)
 
   const weatherByGameId = new Map<number, ReturnType<typeof weatherToInput>>()
   if (config.openWeatherApiKey()) {
@@ -1267,8 +1270,9 @@ export async function runAndSaveProjections(dateOverride?: string): Promise<{ co
     model_variant: ProjectionModelVariant
   }> = []
 
+  const probablePitchers = await fetchBdlProbablePitchers(sb, date)
   for (const modelVariant of ALL_MODEL_VARIANTS) {
-    const projections = await runDailyProjections(date, modelVariant)
+    const projections = await runDailyProjections(date, modelVariant, { probablePitchers })
     for (const p of projections) {
       allRows.push({
         date,

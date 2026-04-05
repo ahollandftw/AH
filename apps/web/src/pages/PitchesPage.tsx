@@ -51,7 +51,11 @@ function fmtNum(n: number | null | undefined, d = 3): string {
 
 export default function PitchesPage() {
   const [displayDate, setDisplayDate] = useState(getAppDisplayDateIso())
-  const [season] = useState(() => new Date().getFullYear())
+  /** Match Statcast season to slate year (avoid querying wrong season vs calendar year). */
+  const season = useMemo(() => {
+    const y = Number(displayDate.slice(0, 4))
+    return y >= 2020 && y <= 2100 ? y : new Date().getFullYear()
+  }, [displayDate])
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState<string | null>(null)
   const [rows, setRows] = useState<SlateBatter[]>([])
@@ -143,7 +147,10 @@ export default function PitchesPage() {
           ))}
         </div>
       ) : sorted.length === 0 ? (
-        <p className="lb-meta">No slate batters or projections for {displayDate}. Run daily sync or pick a day with games.</p>
+        <p className="lb-meta">
+          No batters for {displayDate}. Ensure games exist in BDL for this date (lineups load from schedule). If projections
+          are empty, we fall back to lineups—sync games/lineups or pick a day with scheduled games.
+        </p>
       ) : (
         <div className="lb-tableWrap">
           <table className="lb-table pitch-slate-table">
