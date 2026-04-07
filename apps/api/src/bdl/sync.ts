@@ -566,8 +566,9 @@ export async function runDailySync(): Promise<Record<string, unknown>> {
     propsTotal += r.synced
   }
 
-  // Bulk BvP matchup sync for all today's batters
-  const matchups = await syncMatchupsForTodayGames()
+  // BvP matchups are synced on-demand when a user opens a matchup card
+  // (see /bdl/matchup-card route). No bulk pre-sync needed here.
+  const matchups = { synced: 0 }
 
   // Run the HR projection engine for today + upcoming slate dates (all model variants per date)
   let projections: Array<{ date: string; computed: number; saved: number }> = []

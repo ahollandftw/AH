@@ -73,23 +73,9 @@ jobs:
             -d "{\"date\":\"$TODAY\"}" \
             --max-time 300
 
-  # Phase 3: Bulk batter-vs-pitcher matchup sync (one BDL call per batter)
-  phase3-matchups:
+  # Phase 3: Run HR projections for today (pure computation, no BDL calls)
+  phase3-projections:
     needs: phase2-props
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      API_BASE_URL: ${{ needs.validate.outputs.api_url }}
-    steps:
-      - name: Sync BvP matchups for today
-        run: |
-          curl -sf -X POST "$API_BASE_URL/bdl/sync/matchups-today" \
-            -H "Content-Type: application/json" \
-            --max-time 600
-
-  # Phase 4: Run HR projections for today (pure computation, no BDL calls)
-  phase4-projections:
-    needs: phase3-matchups
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -111,7 +97,7 @@ jobs:
             --max-time 300 || echo "No games tomorrow or projections skipped"
 
   notify-failure:
-    needs: [phase1-players-games-stats, phase2-props, phase3-matchups, phase4-projections]
+    needs: [phase1-players-games-stats, phase2-props, phase3-projections]
     if: failure()
     runs-on: ubuntu-latest
     steps:
