@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   formatProbability,
@@ -1444,30 +1444,32 @@ export default function DugoutPage() {
                       {isExpanded ? (
                         <div className="pg-detailWrap">
                           <div className="pg-gameRows">
-                            {/* Probable pitchers — BDL feed takes priority, fallback to projection data */}
+                            {/* Probable pitchers — show each team's OWN pitcher */}
                             {(() => {
                               const lineupPitchers = /^\d+$/.test(String(g.gameId))
                                 ? lineupByGame[`game:${g.gameId}`] ?? null
                                 : null
                               const bdlPitchers = live?.bdl_game_id ? probablePitchers[String(live.bdl_game_id)] : null
-                              // BDL: home pitcher faces away batters; away pitcher faces home batters
-                              const awayTeamPitcher = bdlPitchers?.home ?? lineupPitchers?.home_pitcher?.full_name ?? homeTop?.opponentPitcher
-                              const awayTeamPitcherHand = bdlPitchers ? null : homeTop?.opponentPitcherHand
-                              const homeTeamPitcher = bdlPitchers?.away ?? lineupPitchers?.away_pitcher?.full_name ?? awayTop?.opponentPitcher
-                              const homeTeamPitcherHand = bdlPitchers ? null : awayTop?.opponentPitcherHand
+                              // Own pitcher = the pitcher that team sends to the mound
+                              const awayOwnPitcher =
+                                bdlPitchers?.away ?? lineupPitchers?.away_pitcher?.full_name ?? homeTop?.opponentPitcher ?? null
+                              const homeOwnPitcher =
+                                bdlPitchers?.home ?? lineupPitchers?.home_pitcher?.full_name ?? awayTop?.opponentPitcher ?? null
+                              const awayHand = !bdlPitchers ? homeTop?.opponentPitcherHand : null
+                              const homeHand = !bdlPitchers ? awayTop?.opponentPitcherHand : null
                               return (
                                 <div className="pg-gameLine">
                                   <span className="pg-gameLabel">Probable pitchers{bdlPitchers ? ' ✓' : ''}</span>
                                   <span className="pg-gameValue">
-                                    {g.awayTeam}: {awayTeamPitcher ? `${awayTeamPitcher}${awayTeamPitcherHand ? ` (${awayTeamPitcherHand})` : ''}` : '—'}
+                                    {g.awayTeam}: {awayOwnPitcher ? `${awayOwnPitcher}${awayHand ? ` (${awayHand})` : ''}` : '—'}
                                     {' · '}
-                                    {g.homeTeam}: {homeTeamPitcher ? `${homeTeamPitcher}${homeTeamPitcherHand ? ` (${homeTeamPitcherHand})` : ''}` : '—'}
+                                    {g.homeTeam}: {homeOwnPitcher ? `${homeOwnPitcher}${homeHand ? ` (${homeHand})` : ''}` : '—'}
                                   </span>
                                 </div>
                               )
                             })()}
 
-                            {/* Lineup — BDL official when available, projected fallback */}
+                            {/* Lineup — shared two-column CSS grid for perfectly aligned rows */}
                             {(() => {
                               const bdlLineup = lineupByGame[lineupCacheKey]
                               const bdlPitchers = live?.bdl_game_id ? probablePitchers[String(live.bdl_game_id)] : null
@@ -1480,93 +1482,129 @@ export default function DugoutPage() {
                                 return <div className="pg-sub" style={{ marginTop: 12 }}>Loading lineup…</div>
                               }
 
+                              const lineupPitchers = /^\d+$/.test(String(g.gameId))
+                                ? lineupByGame[`game:${g.gameId}`] ?? null
+                                : null
+
+                              // Own pitchers for each team (what they send to the mound)
+                              const awayOwnPitcher =
+                                bdlPitchers?.away ?? lineupPitchers?.away_pitcher?.full_name ?? homeTop?.opponentPitcher ?? null
+                              const homeOwnPitcher =
+                                bdlPitchers?.home ?? lineupPitchers?.home_pitcher?.full_name ?? awayTop?.opponentPitcher ?? null
+
+                              // Away batters face the HOME pitcher; home batters face the AWAY pitcher
+                              const awayFacesPitcher = homeOwnPitcher
+                              const homeFacesPitcher = awayOwnPitcher
+
                               const hasResolvedLineup =
                                 !!bdlLineup &&
                                 ((bdlLineup.away?.length ?? 0) > 0 || (bdlLineup.home?.length ?? 0) > 0)
 
                               if (hasResolvedLineup && bdlLineup) {
-                                const renderBdlTeam = (
-                                  entries: typeof bdlLineup.away,
+                                const awayBatters = (bdlLineup.away ?? [])
+                                  .filter((e) => e.batting_order != null && e.batting_order > 0)
+                                  .sort((a, b) => (a.batting_order ?? 0) - (b.batting_order ?? 0))
+                                const homeBatters = (bdlLineup.home ?? [])
+                                  .filter((e) => e.batting_order != null && e.batting_order > 0)
+                                  .sort((a, b) => (a.batting_order ?? 0) - (b.batting_order ?? 0))
+                                const awayByOrder = new Map(awayBatters.map((b) => [b.batting_order!, b]))
+                                const homeByOrder = new Map(homeBatters.map((b) => [b.batting_order!, b]))
+
+                                const renderCell = (
+                                  p: typeof awayBatters[number] | null,
                                   teamCode: string,
-                                  source: 'official' | 'previous_game' | 'none' | undefined,
-                                  teamPitcher: string | null,
+                                  opposingPitcher: string | null,
+                                  order: number,
                                 ) => {
-                                  const batters = entries.filter((e) => e.batting_order != null && e.batting_order > 0)
+                                  if (!p) return <div className="pg-lineupRow pg-lineupRow--empty" />
+                                  const proj = resolveLineupProjection(p, teamCode, rows, lineupStatByBdlId)
+                                  const hasPick = proj && Object.prototype.hasOwnProperty.call(pickState, proj.playerId)
+                                  const isHomer = didPlayerHomer(p.full_name ?? proj?.name, homerHitters)
+                                  // All batters on the same team face the SAME pitcher
+                                  const modProj = proj
+                                    ? { ...proj, opponentPitcher: opposingPitcher ?? proj.opponentPitcher }
+                                    : null
                                   return (
-                                    <div className="pg-lineupTeam">
-                                      <div className="pg-lineupTeamTitle">
-                                        {teamCode}
-                                        {source === 'previous_game' ? <span className="pg-lineupBadge">Projected</span> : null}
-                                      </div>
-                                      <div className="pg-lineupPitcherRow pg-lineupRow pg-lineupRow--pitcher">
-                                        <span className="pg-lineupOrder">SP</span>
-                                        <span className="pg-lineupPos">P</span>
-                                        {teamPitcher ? (
-                                          <button
-                                            type="button"
-                                            className="pg-lineupName pg-lineupName--pitcherBtn"
-                                            onClick={() => void openPitcherPanel(teamPitcher, teamCode)}
-                                          >
-                                            {teamPitcher}
-                                          </button>
-                                        ) : (
-                                          <span className="pg-lineupName pg-lineupName--plain">—</span>
-                                        )}
-                                        <span className="pg-lineupProj">Pitcher</span>
-                                        <span style={{ width: 32 }} />
-                                      </div>
-                                      {batters.map((p, idx) => {
-                                        const proj = resolveLineupProjection(p, teamCode, rows, lineupStatByBdlId)
-                                        const hasPick = proj && Object.prototype.hasOwnProperty.call(pickState, proj.playerId)
-                                        const isHomer = didPlayerHomer(p.full_name ?? proj?.name, homerHitters)
-                                        return (
-                                          <div key={p.bdl_player_id ?? idx} className={`pg-lineupRow ${isHomer ? 'pg-lineupRow--homer' : ''}`}>
-                                            <span className="pg-lineupOrder">{ordinal(idx + 1)}</span>
-                                            <span className="pg-lineupPos">{String(p.position ?? '—').toUpperCase().slice(0, 3)}</span>
-                                            {proj ? (
-                                              <button
-                                                type="button"
-                                                className={`pg-lineupName ${isHomer ? 'pg-lineupName--homer' : ''}`}
-                                                onClick={() => void openMatchup(proj)}
-                                              >
-                                                {p.full_name ?? proj.name}
-                                              </button>
-                                            ) : (
-                                              <span className={`pg-lineupName pg-lineupName--plain ${isHomer ? 'pg-lineupName--homer' : ''}`}>{p.full_name ?? '—'}</span>
-                                            )}
-                                            <span className={`pg-lineupProj ${isHomer ? 'pg-lineupProj--homer' : ''}`}>
-                                              {proj ? formatProbability(proj.hrProbability) : '—'}
-                                            </span>
-                                            {proj ? (
-                                              <button
-                                                type="button"
-                                                className={`pg-targetBtn ${hasPick ? 'is-selected' : ''}`}
-                                                disabled={pickBusy === proj.playerId}
-                                                onClick={() => void togglePick(proj.playerId)}
-                                              >
-                                                🎯
-                                              </button>
-                                            ) : <span style={{ width: 32 }} />}
-                                          </div>
-                                        )
-                                      })}
+                                    <div className={`pg-lineupRow ${isHomer ? 'pg-lineupRow--homer' : ''}`}>
+                                      <span className="pg-lineupOrder">{ordinal(order)}</span>
+                                      <span className="pg-lineupPos">{String(p.position ?? '—').toUpperCase().slice(0, 3)}</span>
+                                      {modProj ? (
+                                        <button
+                                          type="button"
+                                          className={`pg-lineupName ${isHomer ? 'pg-lineupName--homer' : ''}`}
+                                          onClick={() => void openMatchup(modProj)}
+                                        >
+                                          {p.full_name ?? modProj.name}
+                                        </button>
+                                      ) : p.stat_player_id ? (
+                                        <Link
+                                          to={`/projections?date=${encodeURIComponent(displayDate)}&player=${encodeURIComponent(p.stat_player_id)}`}
+                                          className={`pg-lineupName pg-lineupName--link ${isHomer ? 'pg-lineupName--homer' : ''}`}
+                                          onClick={(e) => e.stopPropagation()}
+                                        >
+                                          {p.full_name ?? '—'}
+                                        </Link>
+                                      ) : (
+                                        <span className={`pg-lineupName pg-lineupName--plain ${isHomer ? 'pg-lineupName--homer' : ''}`}>{p.full_name ?? '—'}</span>
+                                      )}
+                                      <span className={`pg-lineupProj ${isHomer ? 'pg-lineupProj--homer' : ''}`}>
+                                        {proj ? formatProbability(proj.hrProbability) : '—'}
+                                      </span>
+                                      {proj ? (
+                                        <button
+                                          type="button"
+                                          className={`pg-targetBtn ${hasPick ? 'is-selected' : ''}`}
+                                          disabled={pickBusy === proj.playerId}
+                                          onClick={() => void togglePick(proj.playerId)}
+                                        >
+                                          🎯
+                                        </button>
+                                      ) : <span style={{ width: 32 }} />}
                                     </div>
                                   )
                                 }
+
                                 return (
-                                  <div className="pg-lineupGrid" style={{ marginTop: 12 }}>
-                                    {renderBdlTeam(
-                                      bdlLineup.away,
-                                      g.awayTeam,
-                                      bdlLineup.away_source,
-                                      bdlPitchers?.home ?? bdlLineup.home_pitcher?.full_name ?? homeTop?.opponentPitcher ?? null,
-                                    )}
-                                    {renderBdlTeam(
-                                      bdlLineup.home,
-                                      g.homeTeam,
-                                      bdlLineup.home_source,
-                                      bdlPitchers?.away ?? bdlLineup.away_pitcher?.full_name ?? awayTop?.opponentPitcher ?? null,
-                                    )}
+                                  <div className="pg-lineupGridShared" style={{ marginTop: 12 }}>
+                                    {/* Team title row */}
+                                    <div className="pg-lineupTeamTitle">
+                                      {g.awayTeam}
+                                      {bdlLineup.away_source === 'previous_game' ? <span className="pg-lineupBadge">Projected</span> : null}
+                                    </div>
+                                    <div className="pg-lineupTeamTitle">
+                                      {g.homeTeam}
+                                      {bdlLineup.home_source === 'previous_game' ? <span className="pg-lineupBadge">Projected</span> : null}
+                                    </div>
+                                    {/* SP row — each team's OWN pitcher */}
+                                    <div className="pg-lineupRow pg-lineupRow--pitcher pg-lineupPitcherRow">
+                                      <span className="pg-lineupOrder">SP</span>
+                                      <span className="pg-lineupPos">P</span>
+                                      {awayOwnPitcher ? (
+                                        <button type="button" className="pg-lineupName pg-lineupName--pitcherBtn" onClick={() => void openPitcherPanel(awayOwnPitcher, g.homeTeam)}>
+                                          {awayOwnPitcher}
+                                        </button>
+                                      ) : <span className="pg-lineupName pg-lineupName--plain">—</span>}
+                                      <span className="pg-lineupProj">SP</span>
+                                      <span style={{ width: 32 }} />
+                                    </div>
+                                    <div className="pg-lineupRow pg-lineupRow--pitcher pg-lineupPitcherRow">
+                                      <span className="pg-lineupOrder">SP</span>
+                                      <span className="pg-lineupPos">P</span>
+                                      {homeOwnPitcher ? (
+                                        <button type="button" className="pg-lineupName pg-lineupName--pitcherBtn" onClick={() => void openPitcherPanel(homeOwnPitcher, g.awayTeam)}>
+                                          {homeOwnPitcher}
+                                        </button>
+                                      ) : <span className="pg-lineupName pg-lineupName--plain">—</span>}
+                                      <span className="pg-lineupProj">SP</span>
+                                      <span style={{ width: 32 }} />
+                                    </div>
+                                    {/* Batter rows — aligned by batting order so both columns stay in sync */}
+                                    {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((order) => (
+                                      <Fragment key={order}>
+                                        {renderCell(awayByOrder.get(order) ?? null, g.awayTeam, awayFacesPitcher, order)}
+                                        {renderCell(homeByOrder.get(order) ?? null, g.homeTeam, homeFacesPitcher, order)}
+                                      </Fragment>
+                                    ))}
                                   </div>
                                 )
                               }
@@ -1594,63 +1632,75 @@ export default function DugoutPage() {
                                 )
                               }
 
-                              const renderProjTeam = (lineup: typeof awayLineup, teamCode: string, teamPitcher: string | null) => (
-                                <div className="pg-lineupTeam">
-                                  <div className="pg-lineupTeamTitle">{teamCode} <span className="pg-lineupBadge">Projected</span></div>
-                                  <div className="pg-lineupPitcherRow pg-lineupRow pg-lineupRow--pitcher">
-                                    <span className="pg-lineupOrder">SP</span>
-                                    <span className="pg-lineupPos">P</span>
-                                    {teamPitcher ? (
-                                      <button
-                                        type="button"
-                                        className="pg-lineupName pg-lineupName--pitcherBtn"
-                                        onClick={() => void openPitcherPanel(teamPitcher, teamCode)}
-                                      >
-                                        {teamPitcher}
-                                      </button>
-                                    ) : (
-                                      <span className="pg-lineupName pg-lineupName--plain">—</span>
-                                    )}
-                                    <span className="pg-lineupProj">Pitcher</span>
-                                    <span style={{ width: 32 }} />
-                                  </div>
-                                  {lineup.map((p, idx) => {
-                                    const hasPick = Object.prototype.hasOwnProperty.call(pickState, p.playerId)
-                                    const isHomer = didPlayerHomer(p.name, homerHitters)
-                                    return (
-                                      <div key={p.playerId} className={`pg-lineupRow ${isHomer ? 'pg-lineupRow--homer' : ''}`}>
-                                        <span className="pg-lineupOrder">{ordinal(idx + 1)}</span>
-                                        <span className="pg-lineupPos">{String(p.position ?? '—').toUpperCase().slice(0, 3)}</span>
-                                        <button type="button" className={`pg-lineupName ${isHomer ? 'pg-lineupName--homer' : ''}`} onClick={() => void openMatchup(p)}>
-                                          {p.name}
-                                        </button>
-                                        <span className={`pg-lineupProj ${isHomer ? 'pg-lineupProj--homer' : ''}`}>{formatProbability(p.hrProbability)}</span>
-                                        <button
-                                          type="button"
-                                          className={`pg-targetBtn ${hasPick ? 'is-selected' : ''}`}
-                                          disabled={pickBusy === p.playerId}
-                                          onClick={() => void togglePick(p.playerId)}
-                                        >
-                                          🎯
-                                        </button>
-                                      </div>
-                                    )
-                                  })}
-                                </div>
-                              )
+                              const gamePitchKey = String(live?.bdl_game_id ?? g.gameId)
+                              const projAwayOwnPitcher =
+                                probablePitchers[gamePitchKey]?.away ?? homeTop?.opponentPitcher ?? null
+                              const projHomeOwnPitcher =
+                                probablePitchers[gamePitchKey]?.home ?? awayTop?.opponentPitcher ?? null
 
                               return (
-                                <div className="pg-lineupGrid" style={{ marginTop: 12 }}>
-                                  {renderProjTeam(
-                                    awayLineup,
-                                    g.awayTeam,
-                                    probablePitchers[String(live?.bdl_game_id ?? g.gameId)]?.home ?? homeTop?.opponentPitcher ?? null,
-                                  )}
-                                  {renderProjTeam(
-                                    homeLineup,
-                                    g.homeTeam,
-                                    probablePitchers[String(live?.bdl_game_id ?? g.gameId)]?.away ?? awayTop?.opponentPitcher ?? null,
-                                  )}
+                                <div className="pg-lineupGridShared" style={{ marginTop: 12 }}>
+                                  <div className="pg-lineupTeamTitle">{g.awayTeam} <span className="pg-lineupBadge">Projected</span></div>
+                                  <div className="pg-lineupTeamTitle">{g.homeTeam} <span className="pg-lineupBadge">Projected</span></div>
+                                  {/* SP rows — own pitchers */}
+                                  <div className="pg-lineupRow pg-lineupRow--pitcher pg-lineupPitcherRow">
+                                    <span className="pg-lineupOrder">SP</span>
+                                    <span className="pg-lineupPos">P</span>
+                                    {projAwayOwnPitcher ? (
+                                      <button type="button" className="pg-lineupName pg-lineupName--pitcherBtn" onClick={() => void openPitcherPanel(projAwayOwnPitcher, g.homeTeam)}>
+                                        {projAwayOwnPitcher}
+                                      </button>
+                                    ) : <span className="pg-lineupName pg-lineupName--plain">—</span>}
+                                    <span className="pg-lineupProj">SP</span>
+                                    <span style={{ width: 32 }} />
+                                  </div>
+                                  <div className="pg-lineupRow pg-lineupRow--pitcher pg-lineupPitcherRow">
+                                    <span className="pg-lineupOrder">SP</span>
+                                    <span className="pg-lineupPos">P</span>
+                                    {projHomeOwnPitcher ? (
+                                      <button type="button" className="pg-lineupName pg-lineupName--pitcherBtn" onClick={() => void openPitcherPanel(projHomeOwnPitcher, g.awayTeam)}>
+                                        {projHomeOwnPitcher}
+                                      </button>
+                                    ) : <span className="pg-lineupName pg-lineupName--plain">—</span>}
+                                    <span className="pg-lineupProj">SP</span>
+                                    <span style={{ width: 32 }} />
+                                  </div>
+                                  {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((order) => {
+                                    const awayP = awayLineup[order - 1] ?? null
+                                    const homeP = homeLineup[order - 1] ?? null
+                                    return (
+                                      <Fragment key={order}>
+                                        {awayP ? (() => {
+                                          const hasPick = Object.prototype.hasOwnProperty.call(pickState, awayP.playerId)
+                                          const isHomer = didPlayerHomer(awayP.name, homerHitters)
+                                          const modP = projHomeOwnPitcher ? { ...awayP, opponentPitcher: projHomeOwnPitcher } : awayP
+                                          return (
+                                            <div className={`pg-lineupRow ${isHomer ? 'pg-lineupRow--homer' : ''}`}>
+                                              <span className="pg-lineupOrder">{ordinal(order)}</span>
+                                              <span className="pg-lineupPos">{String(awayP.position ?? '—').toUpperCase().slice(0, 3)}</span>
+                                              <button type="button" className={`pg-lineupName ${isHomer ? 'pg-lineupName--homer' : ''}`} onClick={() => void openMatchup(modP)}>{awayP.name}</button>
+                                              <span className={`pg-lineupProj ${isHomer ? 'pg-lineupProj--homer' : ''}`}>{formatProbability(awayP.hrProbability)}</span>
+                                              <button type="button" className={`pg-targetBtn ${hasPick ? 'is-selected' : ''}`} disabled={pickBusy === awayP.playerId} onClick={() => void togglePick(awayP.playerId)}>🎯</button>
+                                            </div>
+                                          )
+                                        })() : <div className="pg-lineupRow pg-lineupRow--empty" />}
+                                        {homeP ? (() => {
+                                          const hasPick = Object.prototype.hasOwnProperty.call(pickState, homeP.playerId)
+                                          const isHomer = didPlayerHomer(homeP.name, homerHitters)
+                                          const modP = projAwayOwnPitcher ? { ...homeP, opponentPitcher: projAwayOwnPitcher } : homeP
+                                          return (
+                                            <div className={`pg-lineupRow ${isHomer ? 'pg-lineupRow--homer' : ''}`}>
+                                              <span className="pg-lineupOrder">{ordinal(order)}</span>
+                                              <span className="pg-lineupPos">{String(homeP.position ?? '—').toUpperCase().slice(0, 3)}</span>
+                                              <button type="button" className={`pg-lineupName ${isHomer ? 'pg-lineupName--homer' : ''}`} onClick={() => void openMatchup(modP)}>{homeP.name}</button>
+                                              <span className={`pg-lineupProj ${isHomer ? 'pg-lineupProj--homer' : ''}`}>{formatProbability(homeP.hrProbability)}</span>
+                                              <button type="button" className={`pg-targetBtn ${hasPick ? 'is-selected' : ''}`} disabled={pickBusy === homeP.playerId} onClick={() => void togglePick(homeP.playerId)}>🎯</button>
+                                            </div>
+                                          )
+                                        })() : <div className="pg-lineupRow pg-lineupRow--empty" />}
+                                      </Fragment>
+                                    )
+                                  })}
                                 </div>
                               )
                             })()}

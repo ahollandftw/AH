@@ -1929,6 +1929,38 @@ body,
   margin-top: 12px;
 }
 
+/* Shared two-column grid: both team columns rendered as flat cells so batting-order rows align perfectly */
+.pg-lineupGridShared {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 10px;
+  margin-top: 12px;
+}
+
+.pg-lineupRow--empty {
+  min-height: 38px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+}
+
+.pg-lineupName--link {
+  color: var(--color-secondary);
+  font-size: 0.82rem;
+  font-weight: 600;
+  flex: 1;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  padding: 0;
+  text-decoration: none;
+}
+
+.pg-lineupName--link:hover {
+  text-decoration: underline;
+  text-decoration-style: dotted;
+}
+
 .pg-lineupTeam {
   flex: 1;
   min-width: 0;

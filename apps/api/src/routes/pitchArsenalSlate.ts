@@ -13,8 +13,9 @@ const SLATE_CACHE_MS = 5 * 60 * 1000
 async function buildBattersFromLineups(
   sb: ReturnType<typeof getServiceClient>,
   date: string,
+  preloadedLineups?: Record<string, any>,
 ): Promise<DailyProjection[]> {
-  const lineupsByGame = await getBestLineupsForDate(sb, date)
+  const lineupsByGame: Record<string, any> = preloadedLineups ?? await getBestLineupsForDate(sb, date)
   const gameIds = Object.keys(lineupsByGame)
     .map(Number)
     .filter((n) => Number.isFinite(n) && n > 0)
@@ -324,11 +325,14 @@ export function registerPitchArsenalSlateRoute(app: Express) {
 
       const sb = getServiceClient()
 
-      // Fetch all 3 model variants in parallel — no extra latency vs fetching one
-      const [projDefault, projWeighted, projContact] = await Promise.all([
-        listDailyHrProjectionsFromTable(sb, date, 'default'),
-        listDailyHrProjectionsFromTable(sb, date, 'weighted_pitch_arsenal'),
-        listDailyHrProjectionsFromTable(sb, date, 'contact_quality'),
+      // Fetch projections (all 3 variants) AND lineups in parallel — zero extra latency
+      const [[projDefault, projWeighted, projContact], lineupsByGame] = await Promise.all([
+        Promise.all([
+          listDailyHrProjectionsFromTable(sb, date, 'default'),
+          listDailyHrProjectionsFromTable(sb, date, 'weighted_pitch_arsenal'),
+          listDailyHrProjectionsFromTable(sb, date, 'contact_quality'),
+        ]),
+        getBestLineupsForDate(sb, date).catch(() => ({} as Record<string, any>)),
       ])
 
       // Build per-player avg HR% across all available model variants
@@ -353,7 +357,7 @@ export function registerPitchArsenalSlateRoute(app: Express) {
       let batterSource: 'projections' | 'lineups' = 'projections'
       if (!batters.length) {
         try {
-          batters = await buildBattersFromLineups(sb, date)
+          batters = await buildBattersFromLineups(sb, date, lineupsByGame)
           batterSource = 'lineups'
         } catch (e) {
           console.error('[pitch-arsenal/slate] lineup fallback failed:', e)
@@ -368,21 +372,27 @@ export function registerPitchArsenalSlateRoute(app: Express) {
 
       const { data: games } = await sb
         .from('bdl_games')
-        .select('home_team_abbrev,away_team_abbrev')
+        .select('bdl_game_id,home_team_abbrev,away_team_abbrev')
         .eq('date', date)
       const oppMap = new Map<string, string>()
-      const addPair = (homeRaw: string | null | undefined, awayRaw: string | null | undefined) => {
+      // Maps canonical team abbrev → which side of which lineup to look up
+      const teamToLineupSide = new Map<string, { gidStr: string; side: 'home' | 'away' }>()
+      const addPair = (gid: number | null | undefined, homeRaw: string | null | undefined, awayRaw: string | null | undefined) => {
         const h = canonTeam(String(homeRaw ?? ''))
         const a = canonTeam(String(awayRaw ?? ''))
         if (h && a) {
           oppMap.set(h, a)
           oppMap.set(a, h)
+          if (gid) {
+            teamToLineupSide.set(h, { gidStr: String(gid), side: 'home' })
+            teamToLineupSide.set(a, { gidStr: String(gid), side: 'away' })
+          }
         }
       }
-      for (const g of games ?? []) addPair((g as any).home_team_abbrev, (g as any).away_team_abbrev)
+      for (const g of games ?? []) addPair((g as any).bdl_game_id, (g as any).home_team_abbrev, (g as any).away_team_abbrev)
       if (!oppMap.size) {
         const { data: sched } = await sb.from('schedule_games').select('home_team,away_team').eq('date', date)
-        for (const g of sched ?? []) addPair((g as any).home_team, (g as any).away_team)
+        for (const g of sched ?? []) addPair(null, (g as any).home_team, (g as any).away_team)
       }
 
       const statIds = [...new Set(batters.map((b) => b.playerId).filter(Boolean))]
@@ -680,6 +690,38 @@ export function registerPitchArsenalSlateRoute(app: Express) {
             })),
         }
       })
+      // Supplement each pitcher's batter list with any lineup players who didn't have
+      // Statcast arsenal data (so the Pitchers tab always shows all 9 opposing batters)
+      for (const pitcher of pitchers) {
+        const batterTeamCanon = pitcher.batter_team ? canonTeam(pitcher.batter_team) : null
+        if (!batterTeamCanon) continue
+        const gameSide = teamToLineupSide.get(batterTeamCanon)
+        if (!gameSide) continue
+        const lu = (lineupsByGame as Record<string, any>)[gameSide.gidStr]
+        if (!lu) continue
+        const sideArr: any[] = gameSide.side === 'home' ? (lu.home ?? []) : (lu.away ?? [])
+        const existingIds = new Set(pitcher.batters.map((b: any) => b.player_id))
+        for (const p of sideArr) {
+          if (!p.batting_order || p.batting_order <= 0) continue
+          const pos = String(p.position ?? '').toUpperCase()
+          if (pos === 'P' || pos.startsWith('P')) continue
+          const sid = String(p.stat_player_id ?? '').trim()
+          if (!sid || existingIds.has(sid)) continue
+          pitcher.batters.push({
+            player_id: sid,
+            batter_name: p.full_name ?? 'Unknown',
+            team: batterTeamCanon,
+            hr_probability: hrAvgMap.get(sid) ?? null,
+            arsenal_grade: null,
+            grade_letter: '—',
+            pitches: [],
+          })
+          existingIds.add(sid)
+        }
+        // Re-sort: batters with HR data first, then alphabetical for unknowns
+        pitcher.batters.sort((a: any, b: any) => ((b.hr_probability ?? -1) - (a.hr_probability ?? -1)))
+      }
+
       // Sort pitchers: lowest grade first (worst matchup for pitcher = most interesting)
       pitchers.sort((a, b) => (a.pitcher_grade ?? 50) - (b.pitcher_grade ?? 50))
 
