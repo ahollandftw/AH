@@ -371,7 +371,7 @@ export default function DugoutPage() {
   const [games, setGames] = useState<ScheduleGame[]>([])
   const [availableDates, setAvailableDates] = useState<string[]>([])
   const [displayDate, setDisplayDate] = useState(getAppDisplayDateIso())
-  const [expandedGameId, setExpandedGameId] = useState<string | null>(null)
+  const [expandedGameIds, setExpandedGameIds] = useState<Set<string>>(() => new Set())
   const [pickState, setPickState] = useState<Record<string, boolean | null>>({})
   const [pickBusy, setPickBusy] = useState<string | null>(null)
   const [pickMsg, setPickMsg] = useState('')
@@ -424,6 +424,7 @@ export default function DugoutPage() {
       .then(([proj, sched, live]) => {
         setRows(proj)
         setGames(sched)
+        setExpandedGameIds(new Set(sched.map((g) => g.gameId)))
         const raw = (live.data ?? []) as any[]
         const dayIso = displayDate
         setLiveGames(raw.filter((lg) => bdlRowMatchesCalendarDay(lg, dayIso)))
@@ -1050,7 +1051,7 @@ export default function DugoutPage() {
                   const homeTop = topByTeam.get(homeKey)
                   const awayPalette = paletteForTeam(awayTop?.team ?? g.awayTeam)
                   const homePalette = paletteForTeam(homeTop?.team ?? g.homeTeam)
-                  const isExpanded = expandedGameId === g.gameId
+                  const isExpanded = expandedGameIds.has(g.gameId)
                   const homeNorm = normalizeTeamCode(g.homeTeam) ?? g.homeTeam
                   const weatherDisplay = getWeatherDisplay(weatherByHome[homeNorm], homeNorm)
                   const lineupCacheKey = /^\d+$/.test(String(g.gameId))
@@ -1378,11 +1379,15 @@ export default function DugoutPage() {
                         type="button"
                         className="pg-expandBtn"
                         onClick={() => {
-                          const nextExpanded = isExpanded ? null : g.gameId
-                          setExpandedGameId(nextExpanded)
+                          setExpandedGameIds((prev) => {
+                            const next = new Set(prev)
+                            if (next.has(g.gameId)) next.delete(g.gameId)
+                            else next.add(g.gameId)
+                            return next
+                          })
                         }}
                       >
-                        {isExpanded ? 'Hide details' : 'Expand details'}
+                        {isExpanded ? 'Hide details' : 'Show details'}
                       </button>
 
                       {isExpanded ? (

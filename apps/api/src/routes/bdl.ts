@@ -232,6 +232,27 @@ export function registerBdlRoutes(app: Express) {
     }
   })
 
+  app.post('/bdl/sync/props-today', async (req, res) => {
+    try {
+      const sb = getServiceClient()
+      const date = typeof req.body?.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.body.date)
+        ? req.body.date
+        : todayETDate()
+      const { data: todayGames } = await sb
+        .from('bdl_games')
+        .select('bdl_game_id')
+        .eq('date', date)
+      let propsTotal = 0
+      for (const g of todayGames ?? []) {
+        const r = await syncPlayerProps(g.bdl_game_id, req.body?.vendors)
+        propsTotal += r.synced
+      }
+      res.json({ ok: true, date, synced: propsTotal })
+    } catch (e) {
+      res.status(500).json({ error: String(e) })
+    }
+  })
+
   app.post('/bdl/sync/matchups-today', async (_req, res) => {
     try {
       const result = await syncMatchupsForTodayGames()

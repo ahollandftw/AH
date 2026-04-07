@@ -2,18 +2,20 @@ name: Daily BDL Sync
 
 on:
   schedule:
-    # ~8:00 AM Eastern (13:00 UTC during EDT; adjust if you need exact EST winter time)
+    # ~8:00 AM Eastern (13:00 UTC during EDT)
     - cron: '0 13 * * *'
   workflow_dispatch: {}
 
 jobs:
-  sync:
+  validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
-    env:
-      API_BASE_URL: ${{ vars.API_BASE_URL || secrets.API_BASE_URL }}
+    outputs:
+      api_url: ${{ steps.set.outputs.api_url }}
     steps:
-      - name: Validate API base URL
+      - name: Validate and export API_BASE_URL
+        id: set
+        env:
+          API_BASE_URL: ${{ vars.API_BASE_URL || secrets.API_BASE_URL }}
         run: |
           if [ -z "$API_BASE_URL" ]; then
             echo "API_BASE_URL is not configured in GitHub Actions vars or secrets."
@@ -26,14 +28,94 @@ jobs:
               exit 1
               ;;
           esac
-      - name: Trigger daily sync
-        run: |
-          curl -sf -X POST "$API_BASE_URL/bdl/sync/daily" \
-            -H "Content-Type: application/json" \
-            --max-time 3600
+          echo "api_url=$API_BASE_URL" >> "$GITHUB_OUTPUT"
 
+  # Phase 1: Sync players, games, season stats (fast BDL fetches)
+  phase1-players-games-stats:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      API_BASE_URL: ${{ needs.validate.outputs.api_url }}
+    steps:
+      - name: Sync active players
+        run: |
+          curl -sf -X POST "$API_BASE_URL/bdl/sync/players" \
+            -H "Content-Type: application/json" \
+            --max-time 300
+      - name: Sync games for today
+        run: |
+          TODAY=$(TZ=America/New_York date +%Y-%m-%d)
+          curl -sf -X POST "$API_BASE_URL/bdl/sync/games" \
+            -H "Content-Type: application/json" \
+            -d "{\"date\":\"$TODAY\"}" \
+            --max-time 120
+      - name: Sync season stats
+        run: |
+          curl -sf -X POST "$API_BASE_URL/bdl/sync/season-stats" \
+            -H "Content-Type: application/json" \
+            -d '{"season":2026}' \
+            --max-time 300
+
+  # Phase 2: Sync player props for today's games (one call per game)
+  phase2-props:
+    needs: phase1-players-games-stats
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      API_BASE_URL: ${{ needs.validate.outputs.api_url }}
+    steps:
+      - name: Sync player props for today
+        run: |
+          TODAY=$(TZ=America/New_York date +%Y-%m-%d)
+          curl -sf -X POST "$API_BASE_URL/bdl/sync/props-today" \
+            -H "Content-Type: application/json" \
+            -d "{\"date\":\"$TODAY\"}" \
+            --max-time 300
+
+  # Phase 3: Bulk batter-vs-pitcher matchup sync (one BDL call per batter)
+  phase3-matchups:
+    needs: phase2-props
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      API_BASE_URL: ${{ needs.validate.outputs.api_url }}
+    steps:
+      - name: Sync BvP matchups for today
+        run: |
+          curl -sf -X POST "$API_BASE_URL/bdl/sync/matchups-today" \
+            -H "Content-Type: application/json" \
+            --max-time 600
+
+  # Phase 4: Run HR projections for today (pure computation, no BDL calls)
+  phase4-projections:
+    needs: phase3-matchups
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      API_BASE_URL: ${{ needs.validate.outputs.api_url }}
+    steps:
+      - name: Run HR projections for today
+        run: |
+          TODAY=$(TZ=America/New_York date +%Y-%m-%d)
+          curl -sf -X POST "$API_BASE_URL/bdl/sync/projections" \
+            -H "Content-Type: application/json" \
+            -d "{\"date\":\"$TODAY\"}" \
+            --max-time 300
+      - name: Run HR projections for tomorrow
+        run: |
+          TOMORROW=$(TZ=America/New_York date -d "+1 day" +%Y-%m-%d)
+          curl -sf -X POST "$API_BASE_URL/bdl/sync/projections" \
+            -H "Content-Type: application/json" \
+            -d "{\"date\":\"$TOMORROW\"}" \
+            --max-time 300 || echo "No games tomorrow or projections skipped"
+
+  notify-failure:
+    needs: [phase1-players-games-stats, phase2-props, phase3-matchups, phase4-projections]
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
       - name: Notify on failure
-        if: failure()
         run: |
           if [ -n "$SLACK_WEBHOOK_URL" ]; then
             curl -sf -X POST "$SLACK_WEBHOOK_URL" \
