@@ -73,31 +73,63 @@ jobs:
             -d "{\"date\":\"$TODAY\"}" \
             --max-time 300
 
-  # Phase 3: Run HR projections for today (pure computation, no BDL calls)
-  phase3-projections:
+  # Phase 3a: Default model projections (matchup-based, most coverage)
+  phase3a-projections-default:
     needs: phase2-props
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
       API_BASE_URL: ${{ needs.validate.outputs.api_url }}
     steps:
-      - name: Run HR projections for today
+      - name: Run default projections for today
         run: |
           TODAY=$(TZ=America/New_York date +%Y-%m-%d)
           curl -sf -X POST "$API_BASE_URL/bdl/sync/projections" \
             -H "Content-Type: application/json" \
-            -d "{\"date\":\"$TODAY\"}" \
+            -d "{\"date\":\"$TODAY\",\"model_variant\":\"default\"}" \
             --max-time 300
-      - name: Run HR projections for tomorrow
+      - name: Run default projections for tomorrow
         run: |
           TOMORROW=$(TZ=America/New_York date -d "+1 day" +%Y-%m-%d)
           curl -sf -X POST "$API_BASE_URL/bdl/sync/projections" \
             -H "Content-Type: application/json" \
-            -d "{\"date\":\"$TOMORROW\"}" \
-            --max-time 300 || echo "No games tomorrow or projections skipped"
+            -d "{\"date\":\"$TOMORROW\",\"model_variant\":\"default\"}" \
+            --max-time 300 || echo "No games tomorrow, skipped"
+
+  # Phase 3b: Weighted pitch arsenal model
+  phase3b-projections-weighted:
+    needs: phase3a-projections-default
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      API_BASE_URL: ${{ needs.validate.outputs.api_url }}
+    steps:
+      - name: Run weighted_pitch_arsenal projections for today
+        run: |
+          TODAY=$(TZ=America/New_York date +%Y-%m-%d)
+          curl -sf -X POST "$API_BASE_URL/bdl/sync/projections" \
+            -H "Content-Type: application/json" \
+            -d "{\"date\":\"$TODAY\",\"model_variant\":\"weighted_pitch_arsenal\"}" \
+            --max-time 300
+
+  # Phase 3c: Contact quality model (Statcast-heavy, requires lineup data)
+  phase3c-projections-contact:
+    needs: phase3b-projections-weighted
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      API_BASE_URL: ${{ needs.validate.outputs.api_url }}
+    steps:
+      - name: Run contact_quality projections for today
+        run: |
+          TODAY=$(TZ=America/New_York date +%Y-%m-%d)
+          curl -sf -X POST "$API_BASE_URL/bdl/sync/projections" \
+            -H "Content-Type: application/json" \
+            -d "{\"date\":\"$TODAY\",\"model_variant\":\"contact_quality\"}" \
+            --max-time 300
 
   notify-failure:
-    needs: [phase1-players-games-stats, phase2-props, phase3-projections]
+    needs: [phase1-players-games-stats, phase2-props, phase3a-projections-default, phase3b-projections-weighted, phase3c-projections-contact]
     if: failure()
     runs-on: ubuntu-latest
     steps:

@@ -349,9 +349,24 @@ export function registerPitchArsenalSlateRoute(app: Express) {
         hrAvgMap.set(id, vals.reduce((a, b) => a + b, 0) / vals.length)
       }
 
+      // Build the set of stat_player_ids confirmed in today's starting lineup (batting_order 1–9).
+      // This prevents bench players, injured players, or yesterday's lineup remnants from appearing.
+      const lineupStarterIds = new Set<string>()
+      for (const lu of Object.values(lineupsByGame as Record<string, any>)) {
+        for (const side of [lu.home ?? [], lu.away ?? []] as any[][]) {
+          for (const p of side) {
+            if (p.stat_player_id && p.batting_order != null && p.batting_order >= 1 && p.batting_order <= 9) {
+              lineupStarterIds.add(String(p.stat_player_id))
+            }
+          }
+        }
+      }
+
       let batters = projDefault.filter((p) => {
         const pos = String(p.position ?? '').toUpperCase()
         if (pos === 'P' || pos.startsWith('P')) return false
+        // Only show players confirmed in today's starting lineup
+        if (lineupStarterIds.size > 0 && !lineupStarterIds.has(p.playerId)) return false
         return true
       })
       let batterSource: 'projections' | 'lineups' = 'projections'
@@ -751,8 +766,9 @@ export function registerPitchArsenalSlateRoute(app: Express) {
           })
           existingIds.add(sid)
         }
-        // Re-sort: batters with HR data first, then alphabetical for unknowns
+        // Re-sort: batters with HR data first, then alphabetical for unknowns; cap at 9 (one full batting order)
         pitcher.batters.sort((a: any, b: any) => ((b.hr_probability ?? -1) - (a.hr_probability ?? -1)))
+        pitcher.batters = pitcher.batters.slice(0, 9)
       }
 
       // Sort pitchers: lowest grade first (worst matchup for pitcher = most interesting)

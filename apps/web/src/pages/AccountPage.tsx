@@ -1,4 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+
+const PROJ_MODEL_KEY = 'kineticProjectionModel'
+type ModelPref = 'default' | 'weighted_pitch_arsenal' | 'contact_quality'
+
+function readProjectionModel(): ModelPref {
+  try {
+    const v = localStorage.getItem(PROJ_MODEL_KEY) as ModelPref | null
+    if (v === 'weighted_pitch_arsenal' || v === 'contact_quality') return v
+  } catch { /* ignore */ }
+  return 'default'
+}
+
+export { PROJ_MODEL_KEY, type ModelPref, readProjectionModel }
 import { useNavigate } from 'react-router-dom'
 import {
   addToWatchlistByPlayerKey,
@@ -57,6 +70,7 @@ export default function AccountPage() {
   const [searchResults, setSearchResults] = useState<PlayerOption[]>([])
   const [recommended, setRecommended] = useState<PlayerOption[]>([])
   const [busy, setBusy] = useState(false)
+  const [projModel, setProjModel] = useState<ModelPref>(readProjectionModel)
   const [displayName, setDisplayName] = useState('')
   const [avatarUrl, setAvatarUrl] = useState('')
   const [visibility, setVisibility] = useState<ProfileVisibility>('private')
@@ -559,6 +573,25 @@ export default function AccountPage() {
                     {code}
                   </option>
                 ))}
+              </select>
+            </div>
+            <div className="acc-teamRow">
+              <label className="pg-label" htmlFor="proj-model">
+                Scoreboard HR% model
+              </label>
+              <select
+                id="proj-model"
+                className="acc-select"
+                value={projModel}
+                onChange={(e) => {
+                  const v = e.target.value as ModelPref
+                  setProjModel(v)
+                  try { localStorage.setItem(PROJ_MODEL_KEY, v) } catch { /* ignore */ }
+                }}
+              >
+                <option value="default">Default (matchup + park + weather)</option>
+                <option value="weighted_pitch_arsenal">Weighted Pitch Arsenal</option>
+                <option value="contact_quality">Contact Quality (Statcast)</option>
               </select>
             </div>
             {!hasSubscription ? (

@@ -1250,11 +1250,14 @@ export async function runDailyProjections(
 /* ─── Persist to daily_hr_projections ────────────────────────────── */
 
 /**
- * Computes and stores **all** model variants for the slate date (default, weighted arsenal, contact quality).
- * Intended for daily cron (~8am ET) and for manual/lineup-triggered full reruns.
- * Per-game incremental recompute can call this with the same date (full day is still acceptable vs on-demand API).
+ * Computes and stores model variant projections for the slate date.
+ * Pass `modelVariantFilter` to run only one variant (e.g. when called from separate cron steps).
+ * Omit to run all three variants in one call (legacy behavior).
  */
-export async function runAndSaveProjections(dateOverride?: string): Promise<{ computed: number; saved: number }> {
+export async function runAndSaveProjections(
+  dateOverride?: string,
+  modelVariantFilter?: ProjectionModelVariant,
+): Promise<{ computed: number; saved: number }> {
   const date = dateOverride ?? todayET()
   const sb = getServiceClient()
 
@@ -1271,7 +1274,8 @@ export async function runAndSaveProjections(dateOverride?: string): Promise<{ co
 
   const probablePitchers = await fetchBdlProbablePitchers(sb, date)
   const lineups = await getBestLineupsForDate(sb, date)
-  for (const modelVariant of ALL_MODEL_VARIANTS) {
+  const variantsToRun = modelVariantFilter ? [modelVariantFilter] : ALL_MODEL_VARIANTS
+  for (const modelVariant of variantsToRun) {
     const projections = await runDailyProjections(date, modelVariant, { probablePitchers, lineups })
     for (const p of projections) {
       allRows.push({
@@ -1287,18 +1291,24 @@ export async function runAndSaveProjections(dateOverride?: string): Promise<{ co
     }
   }
 
-  const byVariant = ALL_MODEL_VARIANTS.map((v) => ({
+  const byVariant = variantsToRun.map((v) => ({
     variant: v,
     n: allRows.filter((r) => r.model_variant === v).length,
   }))
   console.log(`[hr-engine] Persist ${date}: ${byVariant.map((x) => `${x.variant}=${x.n}`).join(', ')}`)
 
   if (!allRows.length) {
-    await sb.from('daily_hr_projections').delete().eq('date', date)
+    // Scoped delete: only clear the variant(s) we attempted to compute
+    let delQ = sb.from('daily_hr_projections').delete().eq('date', date)
+    if (modelVariantFilter) delQ = (delQ as any).eq('model_variant', modelVariantFilter)
+    await delQ
     return { computed: 0, saved: 0 }
   }
 
-  await sb.from('daily_hr_projections').delete().eq('date', date)
+  // Scoped delete: only clear the variant(s) we're about to replace
+  let delQ = sb.from('daily_hr_projections').delete().eq('date', date)
+  if (modelVariantFilter) delQ = (delQ as any).eq('model_variant', modelVariantFilter)
+  await delQ
 
   const BATCH = 200
   let saved = 0

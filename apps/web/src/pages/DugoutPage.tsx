@@ -8,8 +8,18 @@ import {
   getScheduleDates,
   listDailyHrProjections,
   type DailyProjection,
+  type ProjectionModelVariant,
   type ScheduleGame,
 } from '@kinetic/shared'
+import { PROJ_MODEL_KEY } from './AccountPage.tsx'
+
+function readScoreboardModel(): ProjectionModelVariant {
+  try {
+    const v = localStorage.getItem(PROJ_MODEL_KEY) as ProjectionModelVariant | null
+    if (v === 'weighted_pitch_arsenal' || v === 'contact_quality') return v
+  } catch { /* ignore */ }
+  return 'default'
+}
 import { useWebAuth } from '../auth/WebAuthProvider.tsx'
 import { normalizeTeamCode, paletteForTeam, teamAbbrevContrastStyle } from '../theme/teamPalette'
 import { bdlRowMatchesCalendarDay } from '../utils/bdlCalendarDay'
@@ -438,7 +448,7 @@ export default function DugoutPage() {
     const prevDate = shiftIsoDate(displayDate, -1)
     const nextDate = shiftIsoDate(displayDate, 1)
     void Promise.all([
-      listDailyHrProjections(supabase, displayDate),
+      listDailyHrProjections(supabase, displayDate, { modelVariant: readScoreboardModel() }),
       getGamesForDate(supabase, displayDate),
       supabase
         .from('bdl_games')

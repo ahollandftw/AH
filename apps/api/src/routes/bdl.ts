@@ -267,7 +267,10 @@ export function registerBdlRoutes(app: Express) {
     try {
       const { runAndSaveProjections } = await import('../hrEngine.js')
       const date = typeof req.body?.date === 'string' ? req.body.date : undefined
-      const result = await runAndSaveProjections(date)
+      const mv = typeof req.body?.model_variant === 'string' ? req.body.model_variant : undefined
+      const validVariants = ['default', 'weighted_pitch_arsenal', 'contact_quality']
+      const modelVariant = validVariants.includes(mv) ? mv as import('../hrEngine.js').ProjectionModelVariant : undefined
+      const result = await runAndSaveProjections(date, modelVariant)
       res.json({ ok: true, ...result })
     } catch (e) {
       console.error('[bdl/sync/projections] failed:', e)
