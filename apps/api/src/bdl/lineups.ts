@@ -380,18 +380,85 @@ export async function getResolvedGamesForDate(
   return fetchGamesAroundDate(sb, dateIso)
 }
 
+/** How long DB-cached lineups are considered fresh. */
+const LINEUP_CACHE_TTL_MS = 3 * 60 * 60 * 1000 // 3 hours
+
+/** Build a GameLineupResult from a raw bdl_lineup_cache row. */
+function resultFromCacheRow(
+  gameId: number,
+  row: {
+    home_lineup: unknown
+    away_lineup: unknown
+    home_pitcher: unknown
+    away_pitcher: unknown
+    home_source: unknown
+    away_source: unknown
+  },
+): GameLineupResult {
+  return {
+    game_id: gameId,
+    home: (row.home_lineup as TeamLineupPlayer[]) ?? [],
+    away: (row.away_lineup as TeamLineupPlayer[]) ?? [],
+    home_pitcher: (row.home_pitcher as TeamPitcherInfo | null) ?? null,
+    away_pitcher: (row.away_pitcher as TeamPitcherInfo | null) ?? null,
+    home_source: (row.home_source as TeamLineupSource) ?? 'none',
+    away_source: (row.away_source as TeamLineupSource) ?? 'none',
+  }
+}
+
 export async function getBestLineupsForDate(
   sb: SupabaseClient,
   dateIso: string,
 ): Promise<Record<string, GameLineupResult>> {
   const games = await fetchGamesAroundDate(sb, dateIso)
-  const officialMap = await fetchOfficialLineupsForGames(sb, games)
+  if (!games.length) return {}
+
+  const gameIds = games.map((g) => g.bdl_game_id)
+
+  // ── 1. Try DB cache (fast Supabase read, no BDL call) ────────────────
+  const { data: cacheRows } = await sb
+    .from('bdl_lineup_cache')
+    .select('game_id,home_lineup,away_lineup,home_pitcher,away_pitcher,home_source,away_source,fetched_at')
+    .in('game_id', gameIds)
+
+  type CacheRow = { game_id: number; home_lineup: unknown; away_lineup: unknown; home_pitcher: unknown; away_pitcher: unknown; home_source: unknown; away_source: unknown; fetched_at: unknown }
+  const cacheMap = new Map<number, CacheRow>()
+  const now = Date.now()
+  for (const row of cacheRows ?? []) {
+    const gid = Number(row.game_id)
+    const age = now - new Date((row as any).fetched_at).getTime()
+    if (age < LINEUP_CACHE_TTL_MS) cacheMap.set(gid, row as any)
+  }
+
+  if (games.every((g) => cacheMap.has(g.bdl_game_id))) {
+    const out: Record<string, GameLineupResult> = {}
+    for (const game of games) out[String(game.bdl_game_id)] = resultFromCacheRow(game.bdl_game_id, cacheMap.get(game.bdl_game_id)!)
+    return out
+  }
+
+  // ── 2. Fetch from BDL for games missing from cache ───────────────────
+  const uncachedGames = games.filter((g) => !cacheMap.has(g.bdl_game_id))
+  const officialMap = await fetchOfficialLineupsForGames(sb, uncachedGames)
+
   const out: Record<string, GameLineupResult> = {}
+  const toCache: Array<{
+    game_id: number; date: string
+    home_lineup: TeamLineupPlayer[]; away_lineup: TeamLineupPlayer[]
+    home_pitcher: TeamPitcherInfo | null; away_pitcher: TeamPitcherInfo | null
+    home_source: TeamLineupSource; away_source: TeamLineupSource
+    fetched_at: string
+  }> = []
 
   for (const game of games) {
+    if (cacheMap.has(game.bdl_game_id)) {
+      out[String(game.bdl_game_id)] = resultFromCacheRow(game.bdl_game_id, cacheMap.get(game.bdl_game_id)!)
+      continue
+    }
+
     const official = officialMap.get(game.bdl_game_id) ?? null
     const homeOfficial = official?.home ?? []
     const awayOfficial = official?.away ?? []
+
     const home =
       batterCount(homeOfficial) >= 9
         ? homeOfficial
@@ -401,15 +468,27 @@ export async function getBestLineupsForDate(
         ? awayOfficial
         : await findRecentTeamLineup(sb, game.away_team_abbrev, game.start_time_utc ?? null)
 
-    out[String(game.bdl_game_id)] = {
-      game_id: game.bdl_game_id,
-      home,
-      away,
-      home_pitcher: firstPitcher(homeOfficial) ?? firstPitcher(home),
-      away_pitcher: firstPitcher(awayOfficial) ?? firstPitcher(away),
-      home_source: batterCount(homeOfficial) >= 9 ? 'official' : home.length ? 'previous_game' : 'none',
-      away_source: batterCount(awayOfficial) >= 9 ? 'official' : away.length ? 'previous_game' : 'none',
-    }
+    const homePitcher = firstPitcher(homeOfficial) ?? firstPitcher(home)
+    const awayPitcher = firstPitcher(awayOfficial) ?? firstPitcher(away)
+    const homeSource: TeamLineupSource = batterCount(homeOfficial) >= 9 ? 'official' : home.length ? 'previous_game' : 'none'
+    const awaySource: TeamLineupSource = batterCount(awayOfficial) >= 9 ? 'official' : away.length ? 'previous_game' : 'none'
+
+    out[String(game.bdl_game_id)] = { game_id: game.bdl_game_id, home, away, home_pitcher: homePitcher, away_pitcher: awayPitcher, home_source: homeSource, away_source: awaySource }
+
+    toCache.push({
+      game_id: game.bdl_game_id, date: dateIso,
+      home_lineup: home, away_lineup: away,
+      home_pitcher: homePitcher, away_pitcher: awayPitcher,
+      home_source: homeSource, away_source: awaySource,
+      fetched_at: new Date().toISOString(),
+    })
+  }
+
+  // ── 3. Write back to DB cache (fire-and-forget) ───────────────────────
+  if (toCache.length) {
+    sb.from('bdl_lineup_cache').upsert(toCache, { onConflict: 'game_id' }).then(({ error }) => {
+      if (error) console.warn('[lineups] cache write failed:', error.message)
+    })
   }
 
   return out

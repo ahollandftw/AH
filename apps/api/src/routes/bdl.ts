@@ -22,12 +22,13 @@ function todayETDate(): string {
 }
 
 export function registerBdlRoutes(app: Express) {
-  /** Short TTL: fewer BDL round-trips, faster page loads; data refreshes within minutes. */
   const routeCacheTtlMs = 5 * 60 * 1000
+  /** Extended TTL for data that rarely changes within a slate day (lineups, probable pitchers). */
+  const routeCacheLongTtlMs = 30 * 60 * 1000
   const routeCache = new Map<string, { at: number; body: unknown }>()
-  const routeCacheGet = <T>(key: string): T | null => {
+  const routeCacheGet = <T>(key: string, ttlMs = routeCacheTtlMs): T | null => {
     const e = routeCache.get(key)
-    if (!e || Date.now() - e.at > routeCacheTtlMs) return null
+    if (!e || Date.now() - e.at > ttlMs) return null
     return e.body as T
   }
   const routeCacheSet = (key: string, body: unknown) => {
@@ -1079,7 +1080,7 @@ export function registerBdlRoutes(app: Express) {
       if (!date) { res.status(400).json({ error: 'date required' }); return }
 
       const cacheKey = `probable-pitchers:${date}`
-      const cached = routeCacheGet<{ data: Record<number, { home: string | null; away: string | null }> }>(cacheKey)
+      const cached = routeCacheGet<{ data: Record<number, { home: string | null; away: string | null }> }>(cacheKey, routeCacheLongTtlMs)
       if (cached) {
         res.json(cached)
         return
@@ -1100,6 +1101,32 @@ export function registerBdlRoutes(app: Express) {
         return
       }
 
+      // ── Fast path: serve from lineup cache (DB read, no BDL calls) ──
+      const { data: lineupCacheRows } = await sb
+        .from('bdl_lineup_cache')
+        .select('game_id,home_pitcher,away_pitcher,fetched_at')
+        .in('game_id', [...validGameIds])
+      const CACHE_TTL_MS = 3 * 60 * 60 * 1000
+      const now = Date.now()
+      const lineupPitcherMap = new Map<number, { home: string | null; away: string | null }>()
+      for (const row of lineupCacheRows ?? []) {
+        const age = now - new Date((row as any).fetched_at).getTime()
+        if (age < CACHE_TTL_MS) {
+          lineupPitcherMap.set(Number(row.game_id), {
+            home: (row.home_pitcher as any)?.full_name ?? null,
+            away: (row.away_pitcher as any)?.full_name ?? null,
+          })
+        }
+      }
+
+      if (lineupPitcherMap.size >= validGameIds.size) {
+        const payload = { data: Object.fromEntries(lineupPitcherMap) }
+        routeCacheSet(cacheKey, payload)
+        res.json(payload)
+        return
+      }
+
+      // ── Slow path: fetch from BDL for games not yet in lineup cache ──
       let entries: BdlProbablePitcherEntry[] = []
       for (const d of [date, shiftIsoDate(date, -1), shiftIsoDate(date, 1)]) {
         try {
@@ -1111,11 +1138,14 @@ export function registerBdlRoutes(app: Express) {
       }
 
       const out: Record<number, { home: string | null; away: string | null }> = {}
+      // Seed with lineup cache data
+      for (const [gid, info] of lineupPitcherMap) out[gid] = info
+      // Overlay BDL results (may have data not yet in lineup cache)
       for (const e of entries) {
         if (!validGameIds.has(Number(e.game_id))) continue
         out[e.game_id] = {
-          home: e.home_probable_pitcher?.full_name ?? null,
-          away: e.away_probable_pitcher?.full_name ?? null,
+          home: e.home_probable_pitcher?.full_name ?? out[e.game_id]?.home ?? null,
+          away: e.away_probable_pitcher?.full_name ?? out[e.game_id]?.away ?? null,
         }
       }
       const payload = { data: out }
@@ -1182,7 +1212,7 @@ export function registerBdlRoutes(app: Express) {
         return
       }
       const cacheKey = `lineups-slate:${date}`
-      const cached = routeCacheGet<{ data: Awaited<ReturnType<typeof getBestLineupsForDate>> }>(cacheKey)
+      const cached = routeCacheGet<{ data: Awaited<ReturnType<typeof getBestLineupsForDate>> }>(cacheKey, routeCacheLongTtlMs)
       if (cached) {
         res.json(cached)
         return

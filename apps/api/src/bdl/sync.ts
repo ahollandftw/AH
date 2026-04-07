@@ -8,6 +8,7 @@ import {
   type BdlSeasonStats,
   type BdlMatchup,
 } from './client.js'
+import { getBestLineupsForDate } from './lineups.js'
 
 const supabase = () => getServiceClient()
 
@@ -584,6 +585,17 @@ export async function runDailySync(): Promise<Record<string, unknown>> {
     }
   } catch (e) {
     console.error('[daily-sync] HR projection engine failed:', e)
+  }
+
+  // Pre-warm lineup cache for today so first user page load is instant
+  try {
+    const dates = await projectionSlateDates(sb, today)
+    for (const d of dates.slice(0, 3)) {
+      await getBestLineupsForDate(sb, d)
+    }
+    console.log('[daily-sync] lineup cache pre-warmed')
+  } catch (e) {
+    console.warn('[daily-sync] lineup cache pre-warm failed:', e)
   }
 
   return { players, games, seasonStats, propsTotal, matchups, projections }

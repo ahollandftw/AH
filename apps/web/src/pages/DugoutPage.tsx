@@ -626,14 +626,6 @@ export default function DugoutPage() {
 
   useEffect(() => {
     const base = resolveApiBaseUrl()
-    const gameIds = visibleGames
-      .map((g) => String(g.gameId ?? ''))
-      .filter((id) => /^\d+$/.test(id))
-    if (!gameIds.length) {
-      setLineupsLoading(false)
-      setLineupByGame({})
-      return
-    }
     const ac = new AbortController()
     setLineupsLoading(true)
     void fetch(`${base}/bdl/lineups/slate?date=${encodeURIComponent(displayDate)}`, {
@@ -661,7 +653,7 @@ export default function DugoutPage() {
       ac.abort()
       setLineupsLoading(false)
     }
-  }, [displayDate, visibleGames])
+  }, [displayDate])
 
   useEffect(() => {
     if (!supabase) return
