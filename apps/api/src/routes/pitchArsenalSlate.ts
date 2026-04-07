@@ -6,9 +6,9 @@ import { getBestLineupsForDate } from '../bdl/lineups.js'
 import { getServiceClient } from '../supabase.js'
 import { listDailyHrProjectionsFromTable, type DailyProjection } from '../hrModelCalc.js'
 
-/** Short TTL: slate is expensive; repeat visits within the window are instant. */
+/** 5-minute TTL: all data is DB-backed (no BDL calls), so longer cache is safe and faster. */
 const slateCache = new Map<string, { at: number; body: unknown }>()
-const SLATE_CACHE_MS = 90 * 1000
+const SLATE_CACHE_MS = 5 * 60 * 1000
 
 async function buildBattersFromLineups(
   sb: ReturnType<typeof getServiceClient>,
@@ -323,8 +323,29 @@ export function registerPitchArsenalSlateRoute(app: Express) {
       }
 
       const sb = getServiceClient()
-      const projections = await listDailyHrProjectionsFromTable(sb, date, 'default')
-      let batters = projections.filter((p) => {
+
+      // Fetch all 3 model variants in parallel — no extra latency vs fetching one
+      const [projDefault, projWeighted, projContact] = await Promise.all([
+        listDailyHrProjectionsFromTable(sb, date, 'default'),
+        listDailyHrProjectionsFromTable(sb, date, 'weighted_pitch_arsenal'),
+        listDailyHrProjectionsFromTable(sb, date, 'contact_quality'),
+      ])
+
+      // Build per-player avg HR% across all available model variants
+      const hrProbsByPlayer = new Map<string, number[]>()
+      for (const list of [projDefault, projWeighted, projContact]) {
+        for (const p of list) {
+          if (!p.playerId || p.hrProbability == null) continue
+          if (!hrProbsByPlayer.has(p.playerId)) hrProbsByPlayer.set(p.playerId, [])
+          hrProbsByPlayer.get(p.playerId)!.push(p.hrProbability)
+        }
+      }
+      const hrAvgMap = new Map<string, number>()
+      for (const [id, vals] of hrProbsByPlayer) {
+        hrAvgMap.set(id, vals.reduce((a, b) => a + b, 0) / vals.length)
+      }
+
+      let batters = projDefault.filter((p) => {
         const pos = String(p.position ?? '').toUpperCase()
         if (pos === 'P' || pos.startsWith('P')) return false
         return true
@@ -548,21 +569,124 @@ export function registerPitchArsenalSlateRoute(app: Express) {
         const pitches = pRows.length && bRows.length ? mergePitchArsenal(pRows, bRows) : []
         const edge = weightedWobaEdge(pitches)
         const arsenal_grade = gradeFromWobaEdge(edge)
+        // hr_probability = avg of all 3 models (falls back to default-only if others missing)
+        const hr_probability = hrAvgMap.get(proj.playerId) ?? proj.hrProbability
         out.push({
           player_id: proj.playerId,
           batter_name: proj.name,
           team: proj.team,
           opponent_team: opponentTeam,
           pitcher_name: pick?.pitcher_name ?? proj.opponentPitcher ?? null,
-          hr_probability: proj.hrProbability,
+          hr_probability,
           tier: proj.tier,
           arsenal_grade,
           grade_letter: letterFromGrade(arsenal_grade),
           pitches,
+          pitcher_stat_id: pitStat ?? null,
         })
       }
 
-      const body = { ok: true, date, season, rows: out, source: batterSource }
+      // ── Pitcher aggregation (pure JS, no extra DB calls) ──────────────
+      type PitcherGroup = {
+        pitcher_name: string
+        pitcher_team: string
+        batter_team: string
+        pitcher_stat_id: string | null
+        batters: typeof out
+      }
+      const pitcherGroupMap = new Map<string, PitcherGroup>()
+      for (const row of out) {
+        if (!row.pitcher_name || !row.opponent_team) continue
+        const key = `${row.pitcher_name}|${row.opponent_team}`
+        if (!pitcherGroupMap.has(key)) {
+          pitcherGroupMap.set(key, {
+            pitcher_name: row.pitcher_name,
+            pitcher_team: row.opponent_team,
+            batter_team: row.team ?? '',
+            pitcher_stat_id: row.pitcher_stat_id,
+            batters: [],
+          })
+        }
+        pitcherGroupMap.get(key)!.batters.push(row)
+      }
+
+      const pitchers = [...pitcherGroupMap.values()].map((group) => {
+        const validGrades = group.batters
+          .map((b: any) => b.arsenal_grade)
+          .filter((g: any): g is number => typeof g === 'number' && !Number.isNaN(g))
+        const validHrProbs = group.batters
+          .map((b: any) => b.hr_probability)
+          .filter((p: any): p is number => typeof p === 'number' && !Number.isNaN(p))
+
+        const avgArsenalGrade =
+          validGrades.length ? validGrades.reduce((a: number, b: number) => a + b, 0) / validGrades.length : null
+        const avgBatterHrProb =
+          validHrProbs.length ? validHrProbs.reduce((a: number, b: number) => a + b, 0) / validHrProbs.length : null
+
+        // Pitcher quality: weighted avg of wOBA/hard-hit allowed across their full arsenal
+        let pitcherQuality: number | null = null
+        if (group.pitcher_stat_id) {
+          const pRows = latestSeasonRows(pitchRows, group.pitcher_stat_id)
+          if (pRows.length) {
+            let wobaNumer = 0, wobaW = 0, hhNumer = 0, hhW = 0
+            for (const p of pRows) {
+              const u = Number(p.pitch_usage ?? 0) / 100
+              if (u <= 0) continue
+              const w = Number(p.woba ?? 0)
+              if (w > 0) { wobaNumer += w * u; wobaW += u }
+              const hh = Number(p.hard_hit_percent ?? 0)
+              if (hh > 0) { hhNumer += hh * u; hhW += u }
+            }
+            const pitcherWoba = wobaW > 0 ? wobaNumer / wobaW : null
+            const pitcherHardHit = hhW > 0 ? hhNumer / hhW : null
+            // League averages: wOBA ~0.340 allowed, hard hit% ~37%
+            const wobaAdj = pitcherWoba != null ? ((0.340 - pitcherWoba) / 0.060) * 35 : 0
+            const hhAdj = pitcherHardHit != null ? ((37 - pitcherHardHit) / 8) * 15 : 0
+            pitcherQuality = Math.min(95, Math.max(5, 50 + wobaAdj + hhAdj))
+          }
+        }
+        // Fallback: invert the batter-favorable avg grade when no Statcast data
+        if (pitcherQuality == null && avgArsenalGrade != null) {
+          pitcherQuality = 100 - avgArsenalGrade
+        }
+
+        // Adjust grade down for tough opposing lineups, up for weak ones
+        let grade = pitcherQuality
+        if (grade != null && avgBatterHrProb != null) {
+          const opponentAdj = ((avgBatterHrProb - 0.05) / 0.03) * 10
+          grade = Math.min(95, Math.max(5, grade - opponentAdj))
+        }
+        const pitcher_grade = grade != null ? Math.round(grade) : null
+
+        return {
+          pitcher_name: group.pitcher_name,
+          pitcher_team: group.pitcher_team,
+          batter_team: group.batter_team,
+          avg_batter_hr_prob: avgBatterHrProb,
+          avg_arsenal_grade: avgArsenalGrade != null ? Math.round(avgArsenalGrade) : null,
+          pitcher_grade,
+          pitcher_grade_letter: letterFromGrade(pitcher_grade),
+          batters: group.batters
+            .slice()
+            .sort((a: any, b: any) => ((b.hr_probability ?? -1) - (a.hr_probability ?? -1)))
+            .map((b: any) => ({
+              player_id: b.player_id,
+              batter_name: b.batter_name,
+              team: b.team,
+              hr_probability: b.hr_probability,
+              arsenal_grade: b.arsenal_grade,
+              grade_letter: b.grade_letter,
+              pitches: b.pitches,
+            })),
+        }
+      })
+      // Sort pitchers: lowest grade first (worst matchup for pitcher = most interesting)
+      pitchers.sort((a, b) => (a.pitcher_grade ?? 50) - (b.pitcher_grade ?? 50))
+
+      // Strip pitcher_stat_id from public response (internal field)
+      const rows = out.map(({ pitcher_stat_id: _s, ...r }: any) => r)
+
+      const body = { ok: true, date, season, rows, pitchers, source: batterSource }
       slateCache.set(cacheKey, { at: Date.now(), body })
       res.json(body)
     } catch (e) {

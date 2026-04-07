@@ -624,6 +624,66 @@
   cursor: help;
 }
 
+/* Pitches page — tab selector */
+.pitch-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 60%, transparent);
+  padding-bottom: 0;
+}
+
+.pitch-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 18px 10px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--color-muted);
+  font: inherit;
+  font-weight: 700;
+  font-size: 0.9rem;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  margin-bottom: -1px;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.pitch-tab:hover {
+  color: var(--color-text);
+}
+
+.pitch-tab--active {
+  color: var(--color-secondary);
+  border-bottom-color: var(--color-secondary);
+}
+
+.pitch-tab-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--color-secondary) 18%, transparent);
+  color: var(--color-secondary);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.pitch-batter-count {
+  color: var(--color-muted);
+  font-size: 0.85rem;
+}
+
+.pitch-nested--batters {
+  font-size: 0.85rem;
+  width: 100%;
+}
+
 /* Pitches page — arsenal vs opposing pitcher */
 .pitch-slate-table .pitch-sort {
   background: none;

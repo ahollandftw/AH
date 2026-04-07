@@ -2414,6 +2414,77 @@ body,
   flex: 1;
 }
 
+.pg-lineupName--pitcherBtn {
+  color: var(--color-secondary);
+  font-size: 0.82rem;
+  font-weight: 700;
+  padding: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  flex: 1;
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+
+.pg-lineupName--pitcherBtn:hover {
+  color: var(--color-primary);
+  text-decoration-style: solid;
+}
+
+/* Pitcher BvP panel */
+.pitcher-bvp-summary {
+  display: flex;
+  gap: 24px;
+  padding: 16px 0 20px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-border) 50%, transparent);
+  flex-wrap: wrap;
+}
+
+.pitcher-bvp-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 90px;
+}
+
+.pitcher-bvp-label {
+  font-size: 0.7rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-muted);
+}
+
+.pitcher-bvp-grade {
+  font-size: 2rem !important;
+  min-width: unset !important;
+}
+
+.pitcher-bvp-score {
+  font-size: 0.78rem;
+  color: var(--color-muted);
+  font-weight: 600;
+}
+
+.pitcher-bvp-value {
+  font-size: 1.3rem;
+  font-weight: 800;
+  color: var(--color-text);
+}
+
+.pitcher-bvp-tableWrap {
+  margin-top: 16px;
+  overflow-x: auto;
+}
+
+.pitcher-bvp-table {
+  width: 100%;
+  font-size: 0.88rem;
+}
+
 .pg-lineupRow--pitcher {
   opacity: 0.7;
   border-top: 1px solid color-mix(in srgb, var(--color-primary) 14%, transparent);

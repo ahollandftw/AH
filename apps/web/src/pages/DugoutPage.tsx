@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   formatProbability,
@@ -63,6 +63,26 @@ type GameLineup = {
   away_pitcher?: TeamPitcherInfo | null
   home_source?: 'official' | 'previous_game' | 'none'
   away_source?: 'official' | 'previous_game' | 'none'
+}
+
+type PitcherBatterBvp = {
+  player_id: string
+  batter_name: string
+  team: string | null
+  hr_probability: number | null
+  arsenal_grade: number | null
+  grade_letter: string
+}
+
+type PitcherBvpData = {
+  pitcher_name: string
+  pitcher_team: string
+  batter_team: string
+  avg_batter_hr_prob: number | null
+  avg_arsenal_grade: number | null
+  pitcher_grade: number | null
+  pitcher_grade_letter: string
+  batters: PitcherBatterBvp[]
 }
 
 function sportsbookLabel(vendor: string): string {
@@ -392,6 +412,11 @@ export default function DugoutPage() {
   // { [statPlayerId]: americanOdds number }
   const [playerOdds, setPlayerOdds] = useState<Record<string, PlayerBookOdds | null>>({})
   const [playerOddsByName, setPlayerOddsByName] = useState<Record<string, PlayerBookOdds | null>>({})
+
+  // Pitcher BvP panel — lazy fetch from pitch-arsenal/slate (cached per date)
+  const [pitcherBvpFor, setPitcherBvpFor] = useState<PitcherBvpData | null>(null)
+  const [pitcherBvpLoading, setPitcherBvpLoading] = useState(false)
+  const pitcherSlateCache = useRef<Map<string, { pitchers: PitcherBvpData[] }>>(new Map())
 
   useEffect(() => {
     if (!supabase) return
@@ -857,6 +882,40 @@ export default function DugoutPage() {
       setPlayerInputs(null)
     } finally {
       setMatchupLoading(false)
+    }
+  }
+
+  async function openPitcherPanel(pitcherName: string, battingTeam: string) {
+    if (!pitcherName) return
+    setPitcherBvpLoading(true)
+    setPitcherBvpFor(null)
+    try {
+      const cacheKey = `${displayDate}|${selectedYear}`
+      let cached = pitcherSlateCache.current.get(cacheKey)
+      if (!cached) {
+        const base = resolveApiBaseUrl()
+        const q = new URLSearchParams({ date: displayDate, season: String(selectedYear) })
+        const res = await fetch(`${base}/bdl/pitch-arsenal/slate?${q.toString()}`)
+        if (res.ok) {
+          const json = (await res.json()) as { pitchers?: PitcherBvpData[] }
+          cached = { pitchers: json.pitchers ?? [] }
+          pitcherSlateCache.current.set(cacheKey, cached)
+        }
+      }
+      if (!cached) return
+      // Match by pitcher name; use batting team as tie-breaker
+      const nameLower = pitcherName.toLowerCase()
+      const found =
+        cached.pitchers.find(
+          (p) => p.pitcher_name.toLowerCase() === nameLower && p.batter_team === battingTeam,
+        ) ??
+        cached.pitchers.find((p) => p.pitcher_name.toLowerCase() === nameLower) ??
+        null
+      setPitcherBvpFor(found)
+    } catch {
+      setPitcherBvpFor(null)
+    } finally {
+      setPitcherBvpLoading(false)
     }
   }
 
@@ -1442,7 +1501,17 @@ export default function DugoutPage() {
                                       <div className="pg-lineupPitcherRow pg-lineupRow pg-lineupRow--pitcher">
                                         <span className="pg-lineupOrder">SP</span>
                                         <span className="pg-lineupPos">P</span>
-                                        <span className="pg-lineupName pg-lineupName--plain">{teamPitcher ?? '—'}</span>
+                                        {teamPitcher ? (
+                                          <button
+                                            type="button"
+                                            className="pg-lineupName pg-lineupName--pitcherBtn"
+                                            onClick={() => void openPitcherPanel(teamPitcher, teamCode)}
+                                          >
+                                            {teamPitcher}
+                                          </button>
+                                        ) : (
+                                          <span className="pg-lineupName pg-lineupName--plain">—</span>
+                                        )}
                                         <span className="pg-lineupProj">Pitcher</span>
                                         <span style={{ width: 32 }} />
                                       </div>
@@ -1531,7 +1600,17 @@ export default function DugoutPage() {
                                   <div className="pg-lineupPitcherRow pg-lineupRow pg-lineupRow--pitcher">
                                     <span className="pg-lineupOrder">SP</span>
                                     <span className="pg-lineupPos">P</span>
-                                    <span className="pg-lineupName pg-lineupName--plain">{teamPitcher ?? '—'}</span>
+                                    {teamPitcher ? (
+                                      <button
+                                        type="button"
+                                        className="pg-lineupName pg-lineupName--pitcherBtn"
+                                        onClick={() => void openPitcherPanel(teamPitcher, teamCode)}
+                                      >
+                                        {teamPitcher}
+                                      </button>
+                                    ) : (
+                                      <span className="pg-lineupName pg-lineupName--plain">—</span>
+                                    )}
                                     <span className="pg-lineupProj">Pitcher</span>
                                     <span style={{ width: 32 }} />
                                   </div>
@@ -1863,6 +1942,116 @@ export default function DugoutPage() {
                   <p className="pg-sub" style={{ marginTop: 16, textAlign: 'center' }}>No stats found for this player. Try a different year.</p>
                 )}
               </div>
+            )}
+          </div>
+        </div>
+      ) : null}
+
+      {/* Pitcher BvP panel — lazy loaded from pitch-arsenal/slate cache */}
+      {(pitcherBvpFor || pitcherBvpLoading) ? (
+        <div className="pg-modalBackdrop" onClick={() => { setPitcherBvpFor(null); setPitcherBvpLoading(false) }}>
+          <div className="pg-modal pg-modal--matchup" onClick={(e) => e.stopPropagation()}>
+            <div className="pg-modalHead">
+              <h3 className="pg-modalTitle">
+                {pitcherBvpFor?.pitcher_name ?? 'Pitcher Matchup'}
+                <span className="pg-modalVs"> vs </span>
+                {pitcherBvpFor?.batter_team ?? '…'}
+              </h3>
+              <button
+                type="button"
+                className="pg-clearBtn"
+                onClick={() => { setPitcherBvpFor(null); setPitcherBvpLoading(false) }}
+              >
+                ✕ Close
+              </button>
+            </div>
+
+            {pitcherBvpLoading && !pitcherBvpFor ? (
+              <p className="pg-sub" style={{ padding: '24px 0', textAlign: 'center' }}>Loading BvP data…</p>
+            ) : pitcherBvpFor ? (
+              <div className="pg-matchupBody">
+                {/* Pitcher summary bar */}
+                <div className="pitcher-bvp-summary">
+                  <div className="pitcher-bvp-stat">
+                    <span className="pitcher-bvp-label">Matchup Grade</span>
+                    <span
+                      className={`pitch-grade pitch-grade--${
+                        pitcherBvpFor.pitcher_grade_letter === '—'
+                          ? 'na'
+                          : pitcherBvpFor.pitcher_grade_letter.startsWith('A')
+                            ? 'A'
+                            : pitcherBvpFor.pitcher_grade_letter.charAt(0)
+                      } pitcher-bvp-grade`}
+                    >
+                      {pitcherBvpFor.pitcher_grade_letter}
+                    </span>
+                    <span className="pitcher-bvp-score">{pitcherBvpFor.pitcher_grade ?? '—'}/100</span>
+                  </div>
+                  <div className="pitcher-bvp-stat">
+                    <span className="pitcher-bvp-label">Opp Avg HR%</span>
+                    <span className="pitcher-bvp-value">
+                      {pitcherBvpFor.avg_batter_hr_prob != null
+                        ? `${(pitcherBvpFor.avg_batter_hr_prob * 100).toFixed(1)}%`
+                        : '—'}
+                    </span>
+                  </div>
+                  <div className="pitcher-bvp-stat">
+                    <span className="pitcher-bvp-label">Opp Avg Score</span>
+                    <span className="pitcher-bvp-value">{pitcherBvpFor.avg_arsenal_grade ?? '—'}</span>
+                  </div>
+                </div>
+
+                {/* Opposing batters */}
+                <div className="pitcher-bvp-tableWrap">
+                  <table className="lb-table pitcher-bvp-table">
+                    <thead>
+                      <tr>
+                        <th>Batter</th>
+                        <th>HR%</th>
+                        <th>Grade</th>
+                        <th>Score</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pitcherBvpFor.batters.map((b) => (
+                        <tr key={b.player_id}>
+                          <td>{b.batter_name}</td>
+                          <td>
+                            {b.hr_probability != null
+                              ? `${(b.hr_probability * 100).toFixed(1)}%`
+                              : '—'}
+                          </td>
+                          <td>
+                            <span
+                              className={`pitch-grade pitch-grade--${
+                                b.grade_letter === '—'
+                                  ? 'na'
+                                  : b.grade_letter.startsWith('A')
+                                    ? 'A'
+                                    : b.grade_letter.charAt(0)
+                              }`}
+                            >
+                              {b.grade_letter}
+                            </span>
+                          </td>
+                          <td>{b.arsenal_grade ?? '—'}</td>
+                        </tr>
+                      ))}
+                      {pitcherBvpFor.batters.length === 0 && (
+                        <tr>
+                          <td colSpan={4} style={{ textAlign: 'center', color: 'var(--color-muted)' }}>
+                            No pitch arsenal data found for this matchup.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : (
+              <p className="pg-sub" style={{ padding: '24px 0', textAlign: 'center' }}>
+                No matchup data found for this pitcher today. Run projections or check back after lineups post.
+              </p>
             )}
           </div>
         </div>
