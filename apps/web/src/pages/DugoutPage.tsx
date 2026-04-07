@@ -622,12 +622,14 @@ export default function DugoutPage() {
 
   useEffect(() => {
     const base = resolveApiBaseUrl()
-    if (visibleGames.length === 0) {
+    if (!games.length) {
       setWeatherByHome({})
       return
     }
+    // Use all scheduled games (not visibleGames) so weather starts fetching as soon
+    // as the schedule loads, without waiting for subscription status to resolve.
     const homes = [
-      ...new Set(visibleGames.map((g) => normalizeTeamCode(g.homeTeam) ?? g.homeTeam)),
+      ...new Set(games.map((g) => normalizeTeamCode(g.homeTeam) ?? g.homeTeam)),
     ]
     const ac = new AbortController()
     void fetch(`${base}/bdl/weather/slate?date=${encodeURIComponent(displayDate)}&homes=${encodeURIComponent(homes.join(','))}`, {
@@ -647,38 +649,70 @@ export default function DugoutPage() {
       })
       .catch(() => {})
     return () => ac.abort()
-  }, [displayDate, visibleGames])
+  }, [displayDate, games])
 
   useEffect(() => {
-    const base = resolveApiBaseUrl()
-    const ac = new AbortController()
+    if (!supabase) return
+    let cancelled = false
     setLineupsLoading(true)
-    void fetch(`${base}/bdl/lineups/slate?date=${encodeURIComponent(displayDate)}`, {
-      signal: ac.signal,
-    })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((json: { data?: Record<string, GameLineup | null> } | null) => {
-        if (!json?.data) {
-          setLineupByGame({})
+
+    void (async () => {
+      try {
+        // Query the lineup cache directly from Supabase — bypasses Railway entirely
+        // so lineups appear as fast as any other Supabase query (~50–100 ms vs 500–2000 ms).
+        const { data } = await supabase
+          .from('bdl_lineup_cache')
+          .select('game_id,home_lineup,away_lineup,home_pitcher,away_pitcher,home_source,away_source')
+          .eq('date', displayDate)
+          .limit(20)
+
+        if (cancelled) return
+
+        if (data?.length) {
+          const next: Record<string, GameLineup | null> = {}
+          const pitchersMap: Record<string, { home: string | null; away: string | null }> = {}
+          for (const row of data as any[]) {
+            next[`game:${row.game_id}`] = {
+              home: row.home_lineup ?? [],
+              away: row.away_lineup ?? [],
+              home_pitcher: row.home_pitcher ?? null,
+              away_pitcher: row.away_pitcher ?? null,
+              home_source: row.home_source ?? 'none',
+              away_source: row.away_source ?? 'none',
+            }
+            pitchersMap[String(row.game_id)] = {
+              home: (row.home_pitcher as any)?.full_name ?? null,
+              away: (row.away_pitcher as any)?.full_name ?? null,
+            }
+          }
+          setLineupByGame(next)
+          setProbablePitchers(pitchersMap)
+          if (!cancelled) setLineupsLoading(false)
           return
         }
+
+        // Cache miss — fall back to Railway API
+        const base = resolveApiBaseUrl()
+        const json = await fetch(`${base}/bdl/lineups/slate?date=${encodeURIComponent(displayDate)}`)
+          .then((r) => (r.ok ? r.json() : null))
+          .catch(() => null) as { data?: Record<string, GameLineup | null> } | null
+
+        if (cancelled) return
+        if (!json?.data) { setLineupByGame({}); setLineupsLoading(false); return }
+
         const next: Record<string, GameLineup | null> = {}
         for (const [gameId, lineup] of Object.entries(json.data)) {
           next[`game:${gameId}`] = lineup
         }
         setLineupByGame(next)
-      })
-      .catch(() => {
-        setLineupByGame({})
-      })
-      .finally(() => {
-        if (!ac.signal.aborted) setLineupsLoading(false)
-      })
-    return () => {
-      ac.abort()
-      setLineupsLoading(false)
-    }
-  }, [displayDate])
+        if (!cancelled) setLineupsLoading(false)
+      } catch {
+        if (!cancelled) { setLineupByGame({}); setLineupsLoading(false) }
+      }
+    })()
+
+    return () => { cancelled = true; setLineupsLoading(false) }
+  }, [supabase, displayDate])
 
   useEffect(() => {
     if (!supabase) return

@@ -471,8 +471,25 @@ export function registerPitchArsenalSlateRoute(app: Express) {
 
       for (let i = 0; i < pitcherPicks.length; i++) {
         const row = pitcherPicks[i]
-        if (row.pick || !row.opponentTeam || !String(row.proj.opponentPitcher ?? '').trim()) continue
-        const fb = await resolvePitcherPickFromProbableName(sb, row.opponentTeam, String(row.proj.opponentPitcher))
+        if (row.pick || !row.opponentTeam) continue
+
+        // Prefer the name from the projection; fall back to lineup cache
+        let pitcherNameHint = String(row.proj.opponentPitcher ?? '').trim()
+        if (!pitcherNameHint) {
+          const batterTeamCanon = row.proj.team ? canonTeam(row.proj.team) : null
+          const batterSide = batterTeamCanon ? teamToLineupSide.get(batterTeamCanon) : null
+          if (batterSide) {
+            const lu = (lineupsByGame as Record<string, any>)[batterSide.gidStr]
+            if (lu) {
+              // Away batters face the home pitcher; home batters face the away pitcher
+              const pitcherInfo = batterSide.side === 'away' ? lu.home_pitcher : lu.away_pitcher
+              pitcherNameHint = String((pitcherInfo as any)?.full_name ?? '').trim()
+            }
+          }
+        }
+
+        if (!pitcherNameHint) continue
+        const fb = await resolvePitcherPickFromProbableName(sb, row.opponentTeam, pitcherNameHint)
         if (fb) pitcherPicks[i] = { ...row, pick: fb }
       }
 
@@ -633,40 +650,38 @@ export function registerPitchArsenalSlateRoute(app: Express) {
         const avgBatterHrProb =
           validHrProbs.length ? validHrProbs.reduce((a: number, b: number) => a + b, 0) / validHrProbs.length : null
 
-        // Pitcher quality: weighted avg of wOBA/hard-hit allowed across their full arsenal
-        let pitcherQuality: number | null = null
+        // Pitcher grade: primary signal is the inversion of the avg batter-edge grade.
+        // Lower avg batter grade = pitcher has more edge = higher pitcher grade.
+        const arsenal_pitcher_grade = avgArsenalGrade != null ? 100 - avgArsenalGrade : null
+
+        // Secondary adjustment (±10 pts max) from K% and hard-hit% allowed.
+        // Using these instead of raw wOBA avoids pitch-type baseline variance issues.
+        let statsAdj = 0
         if (group.pitcher_stat_id) {
           const pRows = latestSeasonRows(pitchRows, group.pitcher_stat_id)
           if (pRows.length) {
-            let wobaNumer = 0, wobaW = 0, hhNumer = 0, hhW = 0
+            let kNumer = 0, kW = 0, hhNumer = 0, hhW = 0
             for (const p of pRows) {
               const u = Number(p.pitch_usage ?? 0) / 100
               if (u <= 0) continue
-              const w = Number(p.woba ?? 0)
-              if (w > 0) { wobaNumer += w * u; wobaW += u }
+              const k = Number(p.k_percent ?? 0)
+              if (k > 0) { kNumer += k * u; kW += u }
               const hh = Number(p.hard_hit_percent ?? 0)
               if (hh > 0) { hhNumer += hh * u; hhW += u }
             }
-            const pitcherWoba = wobaW > 0 ? wobaNumer / wobaW : null
-            const pitcherHardHit = hhW > 0 ? hhNumer / hhW : null
-            // League averages: wOBA ~0.340 allowed, hard hit% ~37%
-            const wobaAdj = pitcherWoba != null ? ((0.340 - pitcherWoba) / 0.060) * 35 : 0
-            const hhAdj = pitcherHardHit != null ? ((37 - pitcherHardHit) / 8) * 15 : 0
-            pitcherQuality = Math.min(95, Math.max(5, 50 + wobaAdj + hhAdj))
+            const avgK = kW > 0 ? kNumer / kW : null
+            const avgHardHit = hhW > 0 ? hhNumer / hhW : null
+            // League avg: K% ~22%, hard hit% ~38%
+            const kAdj = avgK != null ? ((avgK - 22) / 4) * 4 : 0
+            const hhAdj = avgHardHit != null ? ((38 - avgHardHit) / 4) * 4 : 0
+            statsAdj = Math.min(10, Math.max(-10, kAdj + hhAdj))
           }
         }
-        // Fallback: invert the batter-favorable avg grade when no Statcast data
-        if (pitcherQuality == null && avgArsenalGrade != null) {
-          pitcherQuality = 100 - avgArsenalGrade
-        }
 
-        // Adjust grade down for tough opposing lineups, up for weak ones
-        let grade = pitcherQuality
-        if (grade != null && avgBatterHrProb != null) {
-          const opponentAdj = ((avgBatterHrProb - 0.05) / 0.03) * 10
-          grade = Math.min(95, Math.max(5, grade - opponentAdj))
-        }
-        const pitcher_grade = grade != null ? Math.round(grade) : null
+        const pitcher_grade =
+          arsenal_pitcher_grade != null
+            ? Math.min(95, Math.max(5, Math.round(arsenal_pitcher_grade + statsAdj)))
+            : null
 
         return {
           pitcher_name: group.pitcher_name,
@@ -690,6 +705,24 @@ export function registerPitchArsenalSlateRoute(app: Express) {
             })),
         }
       })
+      // Slate-relative grade: 100 = best pitcher on slate, 0 = worst (normalized across all starters)
+      {
+        const slateGradeValues = pitchers.map((p) => p.pitcher_grade).filter((g): g is number => g != null)
+        const slateMin = slateGradeValues.length ? Math.min(...slateGradeValues) : 0
+        const slateMax = slateGradeValues.length ? Math.max(...slateGradeValues) : 100
+        const slateRange = slateMax - slateMin
+        for (const p of pitchers) {
+          const sg =
+            p.pitcher_grade == null
+              ? null
+              : slateRange === 0
+                ? 50
+                : Math.round(((p.pitcher_grade - slateMin) / slateRange) * 100)
+          ;(p as any).slate_grade = sg
+          ;(p as any).slate_grade_letter = sg != null ? letterFromGrade(sg) : '—'
+        }
+      }
+
       // Supplement each pitcher's batter list with any lineup players who didn't have
       // Statcast arsenal data (so the Pitchers tab always shows all 9 opposing batters)
       for (const pitcher of pitchers) {

@@ -47,6 +47,8 @@ type SlatePitcher = {
   avg_arsenal_grade: number | null
   pitcher_grade: number | null
   pitcher_grade_letter: string
+  slate_grade: number | null
+  slate_grade_letter: string
   batters: PitcherBatter[]
 }
 
@@ -60,7 +62,7 @@ type BatterSortKey =
   | 'arsenal_grade'
   | 'grade_letter'
 
-type PitcherSortKey = 'pitcher_name' | 'pitcher_team' | 'batter_team' | 'avg_batter_hr_prob' | 'pitcher_grade' | 'pitcher_grade_letter'
+type PitcherSortKey = 'pitcher_name' | 'pitcher_team' | 'batter_team' | 'avg_batter_hr_prob' | 'pitcher_grade' | 'pitcher_grade_letter' | 'slate_grade'
 
 function fmtPct(p: number | null | undefined): string {
   if (p == null || Number.isNaN(p)) return '—'
@@ -407,6 +409,11 @@ export default function PitchesPage() {
                   </button>
                 </th>
                 <th scope="col">
+                  <button type="button" className="pitch-sort" onClick={() => togglePitcherSort('slate_grade')}>
+                    Slate{sortArrow(pitcherSort === 'slate_grade', pitcherDir)}
+                  </button>
+                </th>
+                <th scope="col">
                   <button type="button" className="pitch-sort" onClick={() => togglePitcherSort('avg_batter_hr_prob')}>
                     Opp HR%{sortArrow(pitcherSort === 'avg_batter_hr_prob', pitcherDir)}
                   </button>
@@ -433,12 +440,18 @@ export default function PitchesPage() {
                         </span>
                       </td>
                       <td>{p.pitcher_grade ?? '—'}</td>
+                      <td>
+                        <span className={`pitch-grade pitch-grade--${gradeClass(p.slate_grade_letter ?? '—').replace('pitch-grade--', '')}`}>
+                          {p.slate_grade_letter ?? '—'}
+                        </span>
+                        {p.slate_grade != null && <span style={{ marginLeft: 4, fontSize: '0.75em', opacity: 0.7 }}>{p.slate_grade}</span>}
+                      </td>
                       <td>{fmtPct(p.avg_batter_hr_prob)}</td>
                       <td className="pitch-batter-count">{p.batters.length}</td>
                     </tr>
                     {isExpanded ? (
                       <tr key={`${key}-detail`} className="pitch-detail-row">
-                        <td colSpan={7}>
+                        <td colSpan={8}>
                           <div className="pitch-detail-wrap">
                             <table className="lb-table pitch-nested pitch-nested--batters">
                               <thead>
