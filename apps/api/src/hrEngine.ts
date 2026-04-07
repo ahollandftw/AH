@@ -10,7 +10,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { getServiceClient } from './supabase.js'
 import { config } from './config.js'
 import { bdlFetch } from './bdl/client.js'
-import { getBestLineupForGame, getResolvedGamesForDate } from './bdl/lineups.js'
+import { getBestLineupsForDate, getBestLineupForGame, getResolvedGamesForDate, type GameLineupResult } from './bdl/lineups.js'
 import { listCachedWeatherForDate, syncWeatherForDate } from './weather/cache.js'
 import {
   getBallparkForHomeTeam,
@@ -525,6 +525,7 @@ export async function runDailyProjections(
   modelVariant: ProjectionModelVariant = 'default',
   options?: {
     probablePitchers?: Map<number, { home: number | null; away: number | null }>
+    lineups?: Record<string, GameLineupResult>
   },
 ): Promise<EngineProjection[]> {
   const date = dateOverride ?? todayET()
@@ -556,6 +557,7 @@ export async function runDailyProjections(
   console.log(`[hr-engine] ${games.length} games, ${standardBattingRows.length} batting standard rows, ${standardPitchingRows.length} pitching standard rows`)
 
   const probPitchers = options?.probablePitchers ?? await fetchBdlProbablePitchers(sb, date)
+  const allLineupsForDate = options?.lineups ?? await getBestLineupsForDate(sb, date)
 
   const weatherByGameId = new Map<number, ReturnType<typeof weatherToInput>>()
   if (config.openWeatherApiKey()) {
@@ -715,12 +717,9 @@ export async function runDailyProjections(
     const home = canon(g.home_team_abbrev)!
     const away = canon(g.away_team_abbrev)!
     const pp = probPitchers.get(g.bdl_game_id)
-    const bestLineup = await getBestLineupForGame(sb, {
-      dateIso: date,
-      gameId: g.bdl_game_id || null,
-      homeTeam: home,
-      awayTeam: away,
-    })
+    // Use pre-fetched bulk lineup (DB-cached), fall back to per-game BDL call only if missing
+    const bestLineup = allLineupsForDate[String(g.bdl_game_id)]
+      ?? await getBestLineupForGame(sb, { dateIso: date, gameId: g.bdl_game_id || null, homeTeam: home, awayTeam: away })
 
     const lineupHome = new Map<string, number>()
     const lineupAway = new Map<string, number>()
@@ -1271,8 +1270,9 @@ export async function runAndSaveProjections(dateOverride?: string): Promise<{ co
   }> = []
 
   const probablePitchers = await fetchBdlProbablePitchers(sb, date)
+  const lineups = await getBestLineupsForDate(sb, date)
   for (const modelVariant of ALL_MODEL_VARIANTS) {
-    const projections = await runDailyProjections(date, modelVariant, { probablePitchers })
+    const projections = await runDailyProjections(date, modelVariant, { probablePitchers, lineups })
     for (const p of projections) {
       allRows.push({
         date,
