@@ -620,8 +620,10 @@ export default function DugoutPage() {
     const sorted = [...games].sort((a, b) => {
       const ga = pickLive(a)
       const gb = pickLive(b)
-      const ta = ga?.start_time_utc ? new Date(ga.start_time_utc).getTime() : Number.MAX_SAFE_INTEGER
-      const tb = gb?.start_time_utc ? new Date(gb.start_time_utc).getTime() : Number.MAX_SAFE_INTEGER
+      const ua = ga?.start_time_utc || a.startTimeUtc || null
+      const ub = gb?.start_time_utc || b.startTimeUtc || null
+      const ta = ua ? new Date(ua).getTime() : Number.MAX_SAFE_INTEGER
+      const tb = ub ? new Date(ub).getTime() : Number.MAX_SAFE_INTEGER
       return ta - tb
     })
     if (hasSubscription || sorted.length <= 1) return sorted
@@ -1171,7 +1173,10 @@ export default function DugoutPage() {
                           </div>
                           <div className="pg-gameMetaCenter">
                             <div className="pg-weather pg-weather--status">
-                              {formatGameStatus(live) || (live?.start_time_utc ? `${formatEtTime(live.start_time_utc)} ET` : 'TBD')}
+                              {formatGameStatus(live) ||
+                                (live?.start_time_utc || g.startTimeUtc
+                                  ? `${formatEtTime(live?.start_time_utc || g.startTimeUtc)} ET`
+                                  : 'TBD')}
                             </div>
                             {weatherDisplay ? (
                               <div

@@ -13,7 +13,8 @@ create table if not exists public.schedule_games (
   away_league text,
   interleague boolean default false,
   neutral_site boolean default false,
-  doubleheader boolean default false
+  doubleheader boolean default false,
+  start_time_utc timestamptz
 );
 
 create index if not exists idx_schedule_games_date on public.schedule_games (date);

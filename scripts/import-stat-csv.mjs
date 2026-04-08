@@ -247,21 +247,27 @@ async function importPitchArsenal(file, role, season) {
 async function importSchedule(file) {
   const raw = readCsvUtf8(file)
   const rows = parse(raw, csvParseOpts)
-  const batch = rows.map((r) => ({
-    game_id: r.game_id,
-    slate_id: r.slate_id ?? null,
-    date: r.date,
-    day_of_week: r.day_of_week ?? null,
-    slate_type: r.slate_type ?? null,
-    games_on_date: int(r.games_on_date),
-    home_team: r.home_team,
-    away_team: r.away_team,
-    home_league: r.home_league ?? null,
-    away_league: r.away_league ?? null,
-    interleague: r.interleague === 'True',
-    neutral_site: r.neutral_site === 'True',
-    doubleheader: r.doubleheader === 'True',
-  }))
+  const batch = rows.map((r) => {
+    const st = r.start_time_utc != null && String(r.start_time_utc).trim() !== ''
+      ? String(r.start_time_utc).trim()
+      : null
+    return {
+      game_id: r.game_id,
+      slate_id: r.slate_id ?? null,
+      date: r.date,
+      day_of_week: r.day_of_week ?? null,
+      slate_type: r.slate_type ?? null,
+      games_on_date: int(r.games_on_date),
+      home_team: r.home_team,
+      away_team: r.away_team,
+      home_league: r.home_league ?? null,
+      away_league: r.away_league ?? null,
+      interleague: r.interleague === 'True',
+      neutral_site: r.neutral_site === 'True',
+      doubleheader: r.doubleheader === 'True',
+      start_time_utc: st,
+    }
+  })
   const chunkSize = 200
   for (let i = 0; i < batch.length; i += chunkSize) {
     const part = batch.slice(i, i + chunkSize)

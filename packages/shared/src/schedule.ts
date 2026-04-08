@@ -7,6 +7,8 @@ export type ScheduleGame = {
   awayTeam: string
   slateType: string | null
   gamesOnDate: number | null
+  /** First pitch UTC: BDL when present, else schedule CSV `start_time_utc` */
+  startTimeUtc: string | null
 }
 
 /**
@@ -76,10 +78,18 @@ export async function getGamesForDate(
       .order('bdl_game_id'),
     supabase
       .from('schedule_games')
-      .select('game_id,date,home_team,away_team,slate_type,games_on_date')
+      .select('game_id,date,home_team,away_team,slate_type,games_on_date,start_time_utc')
       .eq('date', dateIso)
       .order('game_id'),
   ])
+
+  const schedRows = (schedRes.data ?? []) as any[]
+  const schedByPair = new Map<string, { start_time_utc: string | null }>()
+  for (const r of schedRows) {
+    schedByPair.set(teamPairKey(r.home_team, r.away_team), {
+      start_time_utc: r.start_time_utc != null ? String(r.start_time_utc) : null,
+    })
+  }
 
   const merged: ScheduleGame[] = []
   const coveredPairs = new Set<string>()
@@ -92,6 +102,8 @@ export async function getGamesForDate(
       if (etDate && etDate !== dateIso) continue // wrong calendar day — skip
     }
     const key = teamPairKey(r.home_team_abbrev, r.away_team_abbrev)
+    const schedStart = schedByPair.get(key)?.start_time_utc ?? null
+    const startTimeUtc = utc ?? schedStart
     coveredPairs.add(key)
     merged.push({
       gameId: String(r.bdl_game_id),
@@ -100,14 +112,16 @@ export async function getGamesForDate(
       awayTeam: r.away_team_abbrev,
       slateType: null,
       gamesOnDate: 0, // filled in below
+      startTimeUtc,
     })
   }
 
   // Supplement with schedule_games for matchups not yet in bdl_games
-  for (const r of ((schedRes.data ?? []) as any[])) {
+  for (const r of schedRows) {
     const key = teamPairKey(r.home_team, r.away_team)
     if (coveredPairs.has(key)) continue // BDL already covers this matchup
     coveredPairs.add(key)
+    const st = r.start_time_utc != null ? String(r.start_time_utc) : null
     merged.push({
       gameId: r.game_id,
       date: r.date,
@@ -115,6 +129,7 @@ export async function getGamesForDate(
       awayTeam: r.away_team,
       slateType: r.slate_type ?? null,
       gamesOnDate: r.games_on_date ?? null,
+      startTimeUtc: st,
     })
   }
 
