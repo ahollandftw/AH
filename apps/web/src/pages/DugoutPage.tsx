@@ -473,7 +473,7 @@ export default function DugoutPage() {
     void fetch(`${base}/bdl/probable-pitchers?date=${displayDate}`)
       .then((r) => r.ok ? r.json() : null)
       .then((json: { data?: Record<string, { home: string | null; away: string | null }> } | null) => {
-        if (json?.data) setProbablePitchers(json.data)
+        if (json?.data) setProbablePitchers((prev) => ({ ...prev, ...json.data }))
       })
       .catch(() => {})
   }, [displayDate])
@@ -615,8 +615,13 @@ export default function DugoutPage() {
       if (id) liveById.set(id, g)
       byPair.set(pairKey(g.home_team_abbrev, g.away_team_abbrev), g)
     }
-    const pickLive = (game: ScheduleGame) =>
-      liveById.get(game.gameId) ?? byPair.get(pairKey(game.homeTeam, game.awayTeam)) ?? null
+    const pickLive = (game: ScheduleGame) => {
+      if (game.bdlGameId != null) {
+        const byId = liveById.get(String(game.bdlGameId))
+        if (byId) return byId
+      }
+      return liveById.get(game.gameId) ?? byPair.get(pairKey(game.homeTeam, game.awayTeam)) ?? null
+    }
     const sorted = [...games].sort((a, b) => {
       const ga = pickLive(a)
       const gb = pickLive(b)
@@ -670,53 +675,58 @@ export default function DugoutPage() {
 
     void (async () => {
       try {
-        // Query the lineup cache directly from Supabase — bypasses Railway entirely
-        // so lineups appear as fast as any other Supabase query (~50–100 ms vs 500–2000 ms).
+        const next: Record<string, GameLineup | null> = {}
+        const pitchersMap: Record<string, { home: string | null; away: string | null }> = {}
+
+        // Warm from DB cache (numeric BDL game_ids only)
         const { data } = await supabase
           .from('bdl_lineup_cache')
           .select('game_id,home_lineup,away_lineup,home_pitcher,away_pitcher,home_source,away_source')
           .eq('date', displayDate)
-          .limit(20)
+          .limit(30)
 
         if (cancelled) return
 
-        if (data?.length) {
-          const next: Record<string, GameLineup | null> = {}
-          const pitchersMap: Record<string, { home: string | null; away: string | null }> = {}
-          for (const row of data as any[]) {
-            next[`game:${row.game_id}`] = {
-              home: row.home_lineup ?? [],
-              away: row.away_lineup ?? [],
-              home_pitcher: row.home_pitcher ?? null,
-              away_pitcher: row.away_pitcher ?? null,
-              home_source: row.home_source ?? 'none',
-              away_source: row.away_source ?? 'none',
-            }
-            pitchersMap[String(row.game_id)] = {
-              home: (row.home_pitcher as any)?.full_name ?? null,
-              away: (row.away_pitcher as any)?.full_name ?? null,
-            }
+        for (const row of data ?? []) {
+          const r = row as any
+          next[`game:${r.game_id}`] = {
+            home: r.home_lineup ?? [],
+            away: r.away_lineup ?? [],
+            home_pitcher: r.home_pitcher ?? null,
+            away_pitcher: r.away_pitcher ?? null,
+            home_source: r.home_source ?? 'none',
+            away_source: r.away_source ?? 'none',
           }
-          setLineupByGame(next)
-          setProbablePitchers(pitchersMap)
-          if (!cancelled) setLineupsLoading(false)
-          return
+          pitchersMap[String(r.game_id)] = {
+            home: r.home_pitcher?.full_name ?? null,
+            away: r.away_pitcher?.full_name ?? null,
+          }
         }
 
-        // Cache miss — fall back to Railway API
+        // Always merge API slate: adds CSV-keyed games + schedule-only lineups when BDL cache is partial
         const base = resolveApiBaseUrl()
         const json = await fetch(`${base}/bdl/lineups/slate?date=${encodeURIComponent(displayDate)}`)
           .then((r) => (r.ok ? r.json() : null))
           .catch(() => null) as { data?: Record<string, GameLineup | null> } | null
 
         if (cancelled) return
-        if (!json?.data) { setLineupByGame({}); setLineupsLoading(false); return }
 
-        const next: Record<string, GameLineup | null> = {}
-        for (const [gameId, lineup] of Object.entries(json.data)) {
-          next[`game:${gameId}`] = lineup
+        if (json?.data) {
+          for (const [gameId, lineup] of Object.entries(json.data)) {
+            const k = `game:${gameId}`
+            if (next[k] == null) next[k] = lineup
+            const lu = lineup as GameLineup | null
+            if (lu && !pitchersMap[gameId]) {
+              pitchersMap[gameId] = {
+                home: lu.home_pitcher?.full_name ?? null,
+                away: lu.away_pitcher?.full_name ?? null,
+              }
+            }
+          }
         }
+
         setLineupByGame(next)
+        setProbablePitchers((prev) => ({ ...prev, ...pitchersMap }))
         if (!cancelled) setLineupsLoading(false)
       } catch {
         if (!cancelled) { setLineupByGame({}); setLineupsLoading(false) }
@@ -1151,9 +1161,7 @@ export default function DugoutPage() {
                   const isExpanded = expandedGameIds.has(g.gameId)
                   const homeNorm = normalizeTeamCode(g.homeTeam) ?? g.homeTeam
                   const weatherDisplay = getWeatherDisplay(weatherByHome[homeNorm], homeNorm)
-                  const lineupCacheKey = /^\d+$/.test(String(g.gameId))
-                    ? `game:${g.gameId}`
-                    : `pair:${displayDate}:${awayKey}:${homeKey}`
+                  const lineupCacheKey = `game:${g.gameId}`
                   const homerHitters = extractHomerHitters(live?.scoring_summary)
                   return (
                     <div
@@ -1495,10 +1503,11 @@ export default function DugoutPage() {
                           <div className="pg-gameRows">
                             {/* Probable pitchers — show each team's OWN pitcher */}
                             {(() => {
-                              const lineupPitchers = /^\d+$/.test(String(g.gameId))
-                                ? lineupByGame[`game:${g.gameId}`] ?? null
-                                : null
-                              const bdlPitchers = live?.bdl_game_id ? probablePitchers[String(live.bdl_game_id)] : null
+                              const lineupPitchers = lineupByGame[`game:${g.gameId}`] ?? null
+                              const bdlPitchers =
+                                live?.bdl_game_id != null
+                                  ? probablePitchers[String(live.bdl_game_id)]
+                                  : probablePitchers[String(g.gameId)] ?? null
                               // Own pitcher = the pitcher that team sends to the mound
                               const awayOwnPitcher =
                                 bdlPitchers?.away ?? lineupPitchers?.away_pitcher?.full_name ?? homeTop?.opponentPitcher ?? null
@@ -1521,7 +1530,10 @@ export default function DugoutPage() {
                             {/* Lineup — shared two-column CSS grid for perfectly aligned rows */}
                             {(() => {
                               const bdlLineup = lineupByGame[lineupCacheKey]
-                              const bdlPitchers = live?.bdl_game_id ? probablePitchers[String(live.bdl_game_id)] : null
+                              const bdlPitchers =
+                                live?.bdl_game_id != null
+                                  ? probablePitchers[String(live.bdl_game_id)]
+                                  : probablePitchers[String(g.gameId)] ?? null
                               const isLoadingLineup = lineupsLoading && bdlLineup === undefined
 
                               const ordinal = (n: number) =>
@@ -1531,9 +1543,7 @@ export default function DugoutPage() {
                                 return <div className="pg-sub" style={{ marginTop: 12 }}>Loading lineup…</div>
                               }
 
-                              const lineupPitchers = /^\d+$/.test(String(g.gameId))
-                                ? lineupByGame[`game:${g.gameId}`] ?? null
-                                : null
+                              const lineupPitchers = lineupByGame[`game:${g.gameId}`] ?? null
 
                               // Own pitchers for each team (what they send to the mound)
                               const awayOwnPitcher =

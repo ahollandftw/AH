@@ -86,6 +86,13 @@ function canonTeam(team: string | null | undefined): string | null {
   return TEAM_ALIASES[key] ?? key
 }
 
+/** Order-independent key so CSV home/away matches BDL abbrev aliases. */
+function teamPairKey(a: string, b: string): string {
+  const ca = canonTeam(a) ?? a.trim().toUpperCase()
+  const cb = canonTeam(b) ?? b.trim().toUpperCase()
+  return [ca, cb].sort().join('|')
+}
+
 function shiftIsoDate(dateIso: string, days: number): string {
   const d = new Date(`${dateIso}T12:00:00Z`)
   d.setUTCDate(d.getUTCDate() + days)
@@ -410,85 +417,113 @@ export async function getBestLineupsForDate(
   sb: SupabaseClient,
   dateIso: string,
 ): Promise<Record<string, GameLineupResult>> {
-  const games = await fetchGamesAroundDate(sb, dateIso)
-  if (!games.length) return {}
-
-  const gameIds = games.map((g) => g.bdl_game_id)
-
-  // ── 1. Try DB cache (fast Supabase read, no BDL call) ────────────────
-  const { data: cacheRows } = await sb
-    .from('bdl_lineup_cache')
-    .select('game_id,home_lineup,away_lineup,home_pitcher,away_pitcher,home_source,away_source,fetched_at')
-    .in('game_id', gameIds)
-
-  type CacheRow = { game_id: number; home_lineup: unknown; away_lineup: unknown; home_pitcher: unknown; away_pitcher: unknown; home_source: unknown; away_source: unknown; fetched_at: unknown }
-  const cacheMap = new Map<number, CacheRow>()
-  const now = Date.now()
-  for (const row of cacheRows ?? []) {
-    const gid = Number(row.game_id)
-    const age = now - new Date((row as any).fetched_at).getTime()
-    if (age < LINEUP_CACHE_TTL_MS) cacheMap.set(gid, row as any)
-  }
-
-  if (games.every((g) => cacheMap.has(g.bdl_game_id))) {
-    const out: Record<string, GameLineupResult> = {}
-    for (const game of games) out[String(game.bdl_game_id)] = resultFromCacheRow(game.bdl_game_id, cacheMap.get(game.bdl_game_id)!)
-    return out
-  }
-
-  // ── 2. Fetch from BDL for games missing from cache ───────────────────
-  const uncachedGames = games.filter((g) => !cacheMap.has(g.bdl_game_id))
-  const officialMap = await fetchOfficialLineupsForGames(sb, uncachedGames)
+  const [games, schedRes] = await Promise.all([
+    fetchGamesAroundDate(sb, dateIso),
+    sb.from('schedule_games').select('game_id,home_team,away_team').eq('date', dateIso),
+  ])
+  const schedList = (schedRes.data ?? []) as Array<{ game_id: string; home_team: string; away_team: string }>
 
   const out: Record<string, GameLineupResult> = {}
-  const toCache: Array<{
-    game_id: number; date: string
-    home_lineup: TeamLineupPlayer[]; away_lineup: TeamLineupPlayer[]
-    home_pitcher: TeamPitcherInfo | null; away_pitcher: TeamPitcherInfo | null
-    home_source: TeamLineupSource; away_source: TeamLineupSource
-    fetched_at: string
-  }> = []
+  const bdlPairKeys = new Set(games.map((g) => teamPairKey(g.home_team_abbrev, g.away_team_abbrev)))
 
-  for (const game of games) {
-    if (cacheMap.has(game.bdl_game_id)) {
-      out[String(game.bdl_game_id)] = resultFromCacheRow(game.bdl_game_id, cacheMap.get(game.bdl_game_id)!)
-      continue
+  if (games.length) {
+    const gameIds = games.map((g) => g.bdl_game_id)
+
+    const { data: cacheRows } = await sb
+      .from('bdl_lineup_cache')
+      .select('game_id,home_lineup,away_lineup,home_pitcher,away_pitcher,home_source,away_source,fetched_at')
+      .in('game_id', gameIds)
+
+    type CacheRow = { game_id: number; home_lineup: unknown; away_lineup: unknown; home_pitcher: unknown; away_pitcher: unknown; home_source: unknown; away_source: unknown; fetched_at: unknown }
+    const cacheMap = new Map<number, CacheRow>()
+    const now = Date.now()
+    for (const row of cacheRows ?? []) {
+      const gid = Number(row.game_id)
+      const age = now - new Date((row as any).fetched_at).getTime()
+      if (age < LINEUP_CACHE_TTL_MS) cacheMap.set(gid, row as any)
     }
 
-    const official = officialMap.get(game.bdl_game_id) ?? null
-    const homeOfficial = official?.home ?? []
-    const awayOfficial = official?.away ?? []
+    if (games.every((g) => cacheMap.has(g.bdl_game_id))) {
+      for (const game of games) {
+        out[String(game.bdl_game_id)] = resultFromCacheRow(game.bdl_game_id, cacheMap.get(game.bdl_game_id)!)
+      }
+    } else {
+      const uncachedGames = games.filter((g) => !cacheMap.has(g.bdl_game_id))
+      const officialMap = await fetchOfficialLineupsForGames(sb, uncachedGames)
 
-    const home =
-      batterCount(homeOfficial) >= 9
-        ? homeOfficial
-        : await findRecentTeamLineup(sb, game.home_team_abbrev, game.start_time_utc ?? null)
-    const away =
-      batterCount(awayOfficial) >= 9
-        ? awayOfficial
-        : await findRecentTeamLineup(sb, game.away_team_abbrev, game.start_time_utc ?? null)
+      const toCache: Array<{
+        game_id: number; date: string
+        home_lineup: TeamLineupPlayer[]; away_lineup: TeamLineupPlayer[]
+        home_pitcher: TeamPitcherInfo | null; away_pitcher: TeamPitcherInfo | null
+        home_source: TeamLineupSource; away_source: TeamLineupSource
+        fetched_at: string
+      }> = []
 
-    const homePitcher = firstPitcher(homeOfficial) ?? firstPitcher(home)
-    const awayPitcher = firstPitcher(awayOfficial) ?? firstPitcher(away)
-    const homeSource: TeamLineupSource = batterCount(homeOfficial) >= 9 ? 'official' : home.length ? 'previous_game' : 'none'
-    const awaySource: TeamLineupSource = batterCount(awayOfficial) >= 9 ? 'official' : away.length ? 'previous_game' : 'none'
+      for (const game of games) {
+        if (cacheMap.has(game.bdl_game_id)) {
+          out[String(game.bdl_game_id)] = resultFromCacheRow(game.bdl_game_id, cacheMap.get(game.bdl_game_id)!)
+          continue
+        }
 
-    out[String(game.bdl_game_id)] = { game_id: game.bdl_game_id, home, away, home_pitcher: homePitcher, away_pitcher: awayPitcher, home_source: homeSource, away_source: awaySource }
+        const official = officialMap.get(game.bdl_game_id) ?? null
+        const homeOfficial = official?.home ?? []
+        const awayOfficial = official?.away ?? []
 
-    toCache.push({
-      game_id: game.bdl_game_id, date: dateIso,
-      home_lineup: home, away_lineup: away,
-      home_pitcher: homePitcher, away_pitcher: awayPitcher,
-      home_source: homeSource, away_source: awaySource,
-      fetched_at: new Date().toISOString(),
-    })
+        const home =
+          batterCount(homeOfficial) >= 9
+            ? homeOfficial
+            : await findRecentTeamLineup(sb, game.home_team_abbrev, game.start_time_utc ?? null)
+        const away =
+          batterCount(awayOfficial) >= 9
+            ? awayOfficial
+            : await findRecentTeamLineup(sb, game.away_team_abbrev, game.start_time_utc ?? null)
+
+        const homePitcher = firstPitcher(homeOfficial) ?? firstPitcher(home)
+        const awayPitcher = firstPitcher(awayOfficial) ?? firstPitcher(away)
+        const homeSource: TeamLineupSource = batterCount(homeOfficial) >= 9 ? 'official' : home.length ? 'previous_game' : 'none'
+        const awaySource: TeamLineupSource = batterCount(awayOfficial) >= 9 ? 'official' : away.length ? 'previous_game' : 'none'
+
+        out[String(game.bdl_game_id)] = {
+          game_id: game.bdl_game_id,
+          home,
+          away,
+          home_pitcher: homePitcher,
+          away_pitcher: awayPitcher,
+          home_source: homeSource,
+          away_source: awaySource,
+        }
+
+        toCache.push({
+          game_id: game.bdl_game_id,
+          date: dateIso,
+          home_lineup: home,
+          away_lineup: away,
+          home_pitcher: homePitcher,
+          away_pitcher: awayPitcher,
+          home_source: homeSource,
+          away_source: awaySource,
+          fetched_at: new Date().toISOString(),
+        })
+      }
+
+      if (toCache.length) {
+        sb.from('bdl_lineup_cache').upsert(toCache, { onConflict: 'game_id' }).then(({ error }) => {
+          if (error) console.warn('[lineups] cache write failed:', error.message)
+        })
+      }
+    }
   }
 
-  // ── 3. Write back to DB cache (fire-and-forget) ───────────────────────
-  if (toCache.length) {
-    sb.from('bdl_lineup_cache').upsert(toCache, { onConflict: 'game_id' }).then(({ error }) => {
-      if (error) console.warn('[lineups] cache write failed:', error.message)
+  for (const r of schedList) {
+    const pk = teamPairKey(r.home_team, r.away_team)
+    if (bdlPairKeys.has(pk)) continue
+    const best = await getBestLineupForGame(sb, {
+      dateIso,
+      homeTeam: r.home_team,
+      awayTeam: r.away_team,
+      gameId: null,
     })
+    out[String(r.game_id)] = best
   }
 
   return out

@@ -9,6 +9,8 @@ export type ScheduleGame = {
   gamesOnDate: number | null
   /** First pitch UTC: BDL when present, else schedule CSV `start_time_utc` */
   startTimeUtc: string | null
+  /** BallDontLie game id when this row is linked to API data; null for CSV-only rows */
+  bdlGameId: number | null
 }
 
 /**
@@ -65,10 +67,8 @@ export async function getGamesForDate(
   supabase: SupabaseClient,
   dateIso: string,
 ): Promise<ScheduleGame[]> {
-  // Fetch both sources in parallel so we can merge them.
-  // BDL has live scores/status, schedule_games has the full slate from the CSV.
-  // We prefer BDL rows when a matchup exists in both, and supplement with
-  // schedule_games for any matchups not yet synced to bdl_games.
+  // Schedule CSV (`schedule_games`) is the source of truth for WHICH games exist on a date.
+  // BDL (`bdl_games`) enriches: numeric game id, live status, scores, start_time when present.
   const [bdlRes, schedRes] = await Promise.all([
     supabase
       .from('bdl_games')
@@ -84,6 +84,24 @@ export async function getGamesForDate(
   ])
 
   const schedRows = (schedRes.data ?? []) as any[]
+
+  const bdlByPair = new Map<string, any>()
+  for (const r of (bdlRes.data ?? []) as any[]) {
+    const utc: string | null = r.start_time_utc ?? null
+    const etDate = utc ? utcToETDateIso(utc) : null
+    if (utc && etDate && etDate !== dateIso) continue
+    const rowDate = String(r.date ?? '').slice(0, 10)
+    if (!utc && rowDate !== dateIso) continue
+    const key = teamPairKey(r.home_team_abbrev, r.away_team_abbrev)
+    const prev = bdlByPair.get(key)
+    if (!prev) bdlByPair.set(key, r)
+    else {
+      const curMatch = rowDate === dateIso
+      const prevMatch = String(prev.date ?? '').slice(0, 10) === dateIso
+      if (curMatch && !prevMatch) bdlByPair.set(key, r)
+    }
+  }
+
   const schedByPair = new Map<string, { start_time_utc: string | null }>()
   for (const r of schedRows) {
     schedByPair.set(teamPairKey(r.home_team, r.away_team), {
@@ -92,44 +110,49 @@ export async function getGamesForDate(
   }
 
   const merged: ScheduleGame[] = []
-  const coveredPairs = new Set<string>()
 
-  // Add validated BDL games first (ET date check guards against sync-day bleed-over)
-  for (const r of ((bdlRes.data ?? []) as any[])) {
-    const utc: string | null = r.start_time_utc ?? null
-    const etDate = utc ? utcToETDateIso(utc) : null
-    if (utc) {
-      if (etDate && etDate !== dateIso) continue // wrong calendar day — skip
-    }
-    const key = teamPairKey(r.home_team_abbrev, r.away_team_abbrev)
-    const schedStart = schedByPair.get(key)?.start_time_utc ?? null
-    const startTimeUtc = utc ?? schedStart
-    coveredPairs.add(key)
-    merged.push({
-      gameId: String(r.bdl_game_id),
-      date: etDate ?? r.date,
-      homeTeam: r.home_team_abbrev,
-      awayTeam: r.away_team_abbrev,
-      slateType: null,
-      gamesOnDate: 0, // filled in below
-      startTimeUtc,
-    })
-  }
-
-  // Supplement with schedule_games for matchups not yet in bdl_games
   for (const r of schedRows) {
     const key = teamPairKey(r.home_team, r.away_team)
-    if (coveredPairs.has(key)) continue // BDL already covers this matchup
-    coveredPairs.add(key)
-    const st = r.start_time_utc != null ? String(r.start_time_utc) : null
+    const bdl = bdlByPair.get(key) ?? null
+    const utc = bdl?.start_time_utc ?? null
+    const schedStart = schedByPair.get(key)?.start_time_utc ?? null
+    const startTimeUtc = (utc ?? schedStart) || null
+    const bdlId = bdl?.bdl_game_id != null ? Number(bdl.bdl_game_id) : null
+    const dateStr = typeof r.date === 'string' ? r.date.slice(0, 10) : dateIso
+    const safeBdl =
+      bdlId != null && Number.isFinite(bdlId) && bdlId > 0 ? bdlId : null
     merged.push({
-      gameId: r.game_id,
-      date: r.date,
+      gameId: safeBdl != null ? String(safeBdl) : String(r.game_id),
+      date: dateStr,
       homeTeam: r.home_team,
       awayTeam: r.away_team,
       slateType: r.slate_type ?? null,
       gamesOnDate: r.games_on_date ?? null,
-      startTimeUtc: st,
+      startTimeUtc,
+      bdlGameId: safeBdl,
+    })
+  }
+
+  const coveredPairs = new Set(merged.map((g) => teamPairKey(g.homeTeam, g.awayTeam)))
+
+  for (const r of (bdlRes.data ?? []) as any[]) {
+    const key = teamPairKey(r.home_team_abbrev, r.away_team_abbrev)
+    if (coveredPairs.has(key)) continue
+    const utc: string | null = r.start_time_utc ?? null
+    const etDate = utc ? utcToETDateIso(utc) : null
+    if (utc && etDate && etDate !== dateIso) continue
+    if (!utc && String(r.date ?? '').slice(0, 10) !== dateIso) continue
+    coveredPairs.add(key)
+    const bid = Number(r.bdl_game_id)
+    merged.push({
+      gameId: String(r.bdl_game_id),
+      date: etDate ?? String(r.date ?? '').slice(0, 10),
+      homeTeam: r.home_team_abbrev,
+      awayTeam: r.away_team_abbrev,
+      slateType: null,
+      gamesOnDate: merged.length || null,
+      startTimeUtc: utc,
+      bdlGameId: Number.isFinite(bid) && bid > 0 ? bid : null,
     })
   }
 
